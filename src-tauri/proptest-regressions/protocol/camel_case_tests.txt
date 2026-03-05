@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5d4a5854b2f737eb1ab7e2bac7a624cf02746c09d05e5735dc5dcab4e6ef7f7e # shrinks to v = ExternalSandbox { network_access: Restricted }
+cc db762a32b454027678d20dc1ab58a151eebe749e899bf797c5950df376b5848f # shrinks to v = SessionConfigured(SessionConfiguredEvent { session_id: "", model: "", model_provider_id: "", approval_policy: UnlessTrusted, sandbox_policy: ReadOnly { access: Restricted { include_platform_defaults: false, readable_roots: [] } }, cwd: "0", history_log_id: 0, history_entry_count: 0 })
+cc 2e713b2aa20190260c0d6c5ee044648eb6a3d5e9a287493d1a74b2c3d65f2b4d # shrinks to v = Event { id: "", msg: SessionConfigured(SessionConfiguredEvent { session_id: "", model: "", model_provider_id: "", approval_policy: UnlessTrusted, sandbox_policy: ReadOnly { access: Restricted { include_platform_defaults: false, readable_roots: [] } }, cwd: "-", history_log_id: 0, history_entry_count: 0 }) }
+cc 4f12794ce52c065644cbcc96f2922b2d511413c18718e463ba52ff2bc1cf8aee # shrinks to v = Submission { id: "", op: UserTurn { items: [], cwd: "-", approval_policy: UnlessTrusted, sandbox_policy: ReadOnly { access: Restricted { include_platform_defaults: false, readable_roots: [] } }, model: "", effort: None, summary: None, service_tier: None, final_output_json_schema: None, collaboration_mode: None, personality: None } }
+cc 152dc6cef81e1230cf048c630664605164a981a4a3a540021e48454abea89733 # shrinks to v = UserTurn { items: [], cwd: "A", approval_policy: UnlessTrusted, sandbox_policy: ReadOnly { access: Restricted { include_platform_defaults: false, readable_roots: [] } }, model: "", effort: None, summary: None, service_tier: None, final_output_json_schema: None, collaboration_mode: None, personality: None }
