@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use super::types::{
     AskForApproval, CollaborationMode, ConversationAudioParams, ConversationStartParams,
     ConversationTextParams, DynamicToolResponse, Effort, ElicitationAction, McpServerRefreshConfig,
-    Personality, ReasoningSummary, ReviewDecision, SandboxPolicy, ServiceTier, UserInput,
+    Personality, ReasoningSummary, RemoteSkillHazelnutScope, RemoteSkillProductSurface,
+    ReviewDecision, ReviewRequest, SandboxPolicy, ServiceTier, UserInput,
 };
 
 /// Submission Queue Entry — requests from user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct Submission {
     pub id: String,
     pub op: Op,
@@ -17,33 +17,25 @@ pub struct Submission {
 
 /// All possible operations that can be submitted to the core engine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Op {
     // --- Core conversation ---
     UserTurn {
         items: Vec<UserInput>,
         cwd: PathBuf,
-        #[serde(rename = "approvalPolicy")]
         approval_policy: AskForApproval,
-        #[serde(rename = "sandboxPolicy")]
         sandbox_policy: SandboxPolicy,
         model: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         effort: Option<Effort>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummary>,
-        #[serde(
-            default,
-            rename = "serviceTier",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         service_tier: Option<ServiceTier>,
-        #[serde(
-            rename = "finalOutputJsonSchema",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<serde_json::Value>,
-        #[serde(rename = "collaborationMode", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         collaboration_mode: Option<CollaborationMode>,
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
@@ -52,13 +44,11 @@ pub enum Op {
     /// Legacy user input.
     UserInput {
         items: Vec<UserInput>,
-        #[serde(
-            rename = "finalOutputJsonSchema",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<serde_json::Value>,
     },
 
+    #[serde(rename = "user_input_answer", alias = "request_user_input_response")]
     UserInputAnswer {
         id: String,
         response: serde_json::Value,
@@ -70,7 +60,7 @@ pub enum Op {
     // --- Approval operations ---
     ExecApproval {
         id: String,
-        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
         decision: ReviewDecision,
     },
@@ -79,9 +69,7 @@ pub enum Op {
         decision: ReviewDecision,
     },
     ResolveElicitation {
-        #[serde(rename = "serverName")]
         server_name: String,
-        #[serde(rename = "requestId")]
         request_id: String,
         decision: ElicitationAction,
     },
@@ -90,9 +78,9 @@ pub enum Op {
     OverrideTurnContext {
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
-        #[serde(rename = "approvalPolicy", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         approval_policy: Option<AskForApproval>,
-        #[serde(rename = "sandboxPolicy", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
@@ -100,9 +88,9 @@ pub enum Op {
         effort: Option<Effort>,
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummary>,
-        #[serde(rename = "serviceTier", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         service_tier: Option<ServiceTier>,
-        #[serde(rename = "collaborationMode", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         collaboration_mode: Option<CollaborationMode>,
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
@@ -118,6 +106,10 @@ pub enum Op {
     AddToHistory {
         text: String,
     },
+    GetHistoryEntryRequest {
+        offset: usize,
+        log_id: u64,
+    },
 
     // --- MCP management ---
     ListMcpTools,
@@ -130,10 +122,19 @@ pub enum Op {
     ListSkills {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         cwds: Vec<PathBuf>,
-        #[serde(default, rename = "forceReload")]
+        #[serde(default)]
         force_reload: bool,
     },
     ListCustomPrompts,
+    ListRemoteSkills {
+        hazelnut_scope: RemoteSkillHazelnutScope,
+        product_surface: RemoteSkillProductSurface,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+    },
+    DownloadRemoteSkill {
+        hazelnut_id: String,
+    },
 
     // --- Realtime conversation ---
     RealtimeConversationStart(ConversationStartParams),
@@ -145,8 +146,12 @@ pub enum Op {
     Compact,
     Undo,
     ThreadRollback {
-        #[serde(rename = "numTurns")]
         num_turns: u32,
+    },
+
+    // --- Review ---
+    Review {
+        review_request: ReviewRequest,
     },
 
     // --- Misc ---

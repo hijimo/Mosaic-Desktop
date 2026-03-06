@@ -6,6 +6,7 @@ mod tests {
     use proptest::prelude::*;
     #[allow(unused_imports)]
     use std::path::PathBuf;
+    use std::time::Duration;
 
     // ── Leaf strategies ──────────────────────────────────────────────
 
@@ -28,6 +29,39 @@ mod tests {
 
     fn arb_safe_string() -> impl Strategy<Value = String> {
         "[a-zA-Z0-9 _-]{0,30}"
+    }
+
+    fn arb_duration() -> impl Strategy<Value = Duration> {
+        any::<u64>().prop_map(Duration::from_millis)
+    }
+
+    fn arb_exec_output_stream() -> impl Strategy<Value = ExecOutputStream> {
+        prop_oneof![
+            Just(ExecOutputStream::Stdout),
+            Just(ExecOutputStream::Stderr),
+        ]
+    }
+
+    fn arb_call_tool_result() -> impl Strategy<Value = Result<CallToolResult, String>> {
+        prop_oneof![
+            (prop::option::of(arb_json_object()), prop::option::of(any::<bool>()))
+                .prop_map(|(content, is_error)| Ok(CallToolResult { content, is_error })),
+            arb_safe_string().prop_map(Err),
+        ]
+    }
+
+    fn arb_network_approval_context() -> impl Strategy<Value = NetworkApprovalContext> {
+        (arb_safe_string(), arb_network_approval_protocol())
+            .prop_map(|(host, protocol)| NetworkApprovalContext { host, protocol })
+    }
+
+    fn arb_network_approval_protocol() -> impl Strategy<Value = NetworkApprovalProtocol> {
+        prop_oneof![
+            Just(NetworkApprovalProtocol::Http),
+            Just(NetworkApprovalProtocol::Https),
+            Just(NetworkApprovalProtocol::Socks5Tcp),
+            Just(NetworkApprovalProtocol::Socks5Udp),
+        ]
     }
 
     // ── types.rs strategies ──────────────────────────────────────────
@@ -237,10 +271,21 @@ mod tests {
 
     fn arb_user_input() -> impl Strategy<Value = UserInput> {
         prop_oneof![
-            arb_safe_string().prop_map(|text| UserInput::Text { text }),
+            (arb_safe_string(), prop::collection::vec(arb_text_element(), 0..2))
+                .prop_map(|(text, text_elements)| UserInput::Text { text, text_elements }),
             arb_safe_string().prop_map(|image_url| UserInput::Image { image_url }),
             arb_pathbuf().prop_map(|path| UserInput::LocalImage { path }),
+            (arb_safe_string(), arb_pathbuf()).prop_map(|(name, path)| UserInput::Skill { name, path }),
+            (arb_safe_string(), arb_safe_string()).prop_map(|(name, path)| UserInput::Mention { name, path }),
         ]
+    }
+
+    fn arb_text_element() -> impl Strategy<Value = TextElement> {
+        (any::<usize>(), any::<usize>(), prop::option::of(arb_safe_string()))
+            .prop_map(|(start, end, placeholder)| TextElement {
+                byte_range: ByteRange { start, end },
+                placeholder,
+            })
     }
 
     fn arb_content_item() -> impl Strategy<Value = ContentItem> {
@@ -365,11 +410,15 @@ mod tests {
     }
 
     fn arb_parsed_command() -> impl Strategy<Value = ParsedCommand> {
-        (
-            arb_safe_string(),
-            prop::collection::vec(arb_safe_string(), 0..3),
-        )
-            .prop_map(|(program, args)| ParsedCommand { program, args })
+        prop_oneof![
+            (arb_safe_string(), arb_safe_string(), arb_pathbuf())
+                .prop_map(|(cmd, name, path)| ParsedCommand::Read { cmd, name, path }),
+            (arb_safe_string(), prop::option::of(arb_safe_string()))
+                .prop_map(|(cmd, path)| ParsedCommand::ListFiles { cmd, path }),
+            (arb_safe_string(), prop::option::of(arb_safe_string()), prop::option::of(arb_safe_string()))
+                .prop_map(|(cmd, query, path)| ParsedCommand::Search { cmd, query, path }),
+            arb_safe_string().prop_map(|cmd| ParsedCommand::Unknown { cmd }),
+        ]
     }
 
     fn arb_exec_command_source() -> impl Strategy<Value = ExecCommandSource> {
@@ -630,10 +679,12 @@ mod tests {
             // SessionConfigured
             (
                 arb_safe_string(),
+                prop::option::of(arb_safe_string()),
+                prop::option::of(arb_safe_string()),
                 arb_safe_string(),
                 arb_safe_string(),
-                arb_ask_for_approval(),
-                arb_sandbox_policy(),
+                prop::option::of(arb_ask_for_approval()),
+                prop::option::of(arb_sandbox_policy()),
                 arb_pathbuf(),
                 any::<u64>(),
                 any::<usize>(),
@@ -641,6 +692,8 @@ mod tests {
                 .prop_map(
                     |(
                         session_id,
+                        forked_from_id,
+                        thread_name,
                         model,
                         model_provider_id,
                         approval_policy,
@@ -651,6 +704,8 @@ mod tests {
                     )| {
                         EventMsg::SessionConfigured(SessionConfiguredEvent {
                             session_id,
+                            forked_from_id,
+                            thread_name,
                             model,
                             model_provider_id,
                             approval_policy,
@@ -705,68 +760,74 @@ mod tests {
             // ExecCommandBegin
             (
                 arb_safe_string(),
+                prop::option::of(arb_safe_string()),
                 arb_safe_string(),
                 prop::collection::vec(arb_safe_string(), 0..3),
                 arb_pathbuf(),
                 prop::collection::vec(arb_parsed_command(), 0..2),
                 arb_exec_command_source(),
+                prop::option::of(arb_safe_string()),
             )
-                .prop_map(|(call_id, turn_id, command, cwd, parsed_cmd, source)| {
+                .prop_map(|(call_id, process_id, turn_id, command, cwd, parsed_cmd, source, interaction_input)| {
                     EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                         call_id,
+                        process_id,
                         turn_id,
                         command,
                         cwd,
                         parsed_cmd,
                         source,
+                        interaction_input,
                     })
                 }),
             // ExecCommandEnd
             (
                 arb_safe_string(),
+                prop::option::of(arb_safe_string()),
                 arb_safe_string(),
                 prop::collection::vec(arb_safe_string(), 0..3),
                 arb_pathbuf(),
                 prop::collection::vec(arb_parsed_command(), 0..2),
                 arb_exec_command_source(),
+                prop::option::of(arb_safe_string()),
                 arb_safe_string(),
                 arb_safe_string(),
-                any::<i32>(),
-                arb_safe_string(),
-                arb_exec_command_status(),
             )
                 .prop_map(
                     |(
                         call_id,
+                        process_id,
                         turn_id,
                         command,
                         cwd,
                         parsed_cmd,
                         source,
+                        interaction_input,
                         stdout,
                         stderr,
-                        exit_code,
-                        formatted_output,
-                        status,
                     )| {
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
+                            process_id,
                             turn_id,
                             command,
                             cwd,
                             parsed_cmd,
                             source,
+                            interaction_input,
                             stdout,
                             stderr,
-                            exit_code,
-                            formatted_output,
-                            status,
+                            aggregated_output: "aggregated".to_string(),
+                            exit_code: 0,
+                            duration: Duration::from_millis(100),
+                            formatted_output: "formatted".to_string(),
+                            status: ExecCommandStatus::Completed,
                         })
                     }
                 ),
             // ExecCommandOutputDelta
-            (arb_safe_string(), arb_safe_string()).prop_map(|(call_id, delta)| {
-                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent { call_id, delta })
+            (arb_safe_string(), arb_safe_string(), prop::option::of(arb_exec_output_stream())).prop_map(|(call_id, delta, stream)| {
+                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent { call_id, delta, stream })
             }),
             // McpToolCallBegin
             (arb_safe_string(), arb_mcp_invocation()).prop_map(|(call_id, invocation)| {
@@ -776,11 +837,12 @@ mod tests {
                 })
             }),
             // McpToolCallEnd
-            (arb_safe_string(), arb_mcp_invocation(), arb_json_object()).prop_map(
-                |(call_id, invocation, result)| {
+            (arb_safe_string(), arb_mcp_invocation(), arb_duration(), arb_call_tool_result()).prop_map(
+                |(call_id, invocation, duration, result)| {
                     EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                         call_id,
                         invocation,
+                        duration,
                         result,
                     })
                 }
@@ -891,22 +953,22 @@ mod tests {
                     })
                 }),
             // ItemStarted
-            (arb_safe_string(), arb_safe_string(), arb_safe_string()).prop_map(
-                |(turn_id, item_id, item_type)| {
+            (arb_safe_string(), arb_safe_string(), arb_json_object()).prop_map(
+                |(thread_id, turn_id, item)| {
                     EventMsg::ItemStarted(ItemStartedEvent {
+                        thread_id,
                         turn_id,
-                        item_id,
-                        item_type,
+                        item,
                     })
                 }
             ),
             // ItemCompleted
-            (arb_safe_string(), arb_safe_string(), arb_safe_string()).prop_map(
-                |(turn_id, item_id, item_type)| {
+            (arb_safe_string(), arb_safe_string(), arb_json_object()).prop_map(
+                |(thread_id, turn_id, item)| {
                     EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
                         turn_id,
-                        item_id,
-                        item_type,
+                        item,
                     })
                 }
             ),
@@ -916,17 +978,26 @@ mod tests {
             // ExecApprovalRequest
             (
                 arb_safe_string(),
+                prop::option::of(arb_safe_string()),
                 arb_safe_string(),
                 prop::collection::vec(arb_safe_string(), 0..3),
                 arb_pathbuf(),
+                prop::option::of(arb_safe_string()),
                 prop::collection::vec(arb_parsed_command(), 0..2),
             )
-                .prop_map(|(call_id, turn_id, command, cwd, parsed_cmd)| {
+                .prop_map(|(call_id, approval_id, turn_id, command, cwd, reason, parsed_cmd)| {
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                         call_id,
+                        approval_id,
                         turn_id,
                         command,
                         cwd,
+                        reason,
+                        network_approval_context: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        additional_permissions: None,
+                        available_decisions: None,
                         parsed_cmd,
                     })
                 }),
@@ -934,13 +1005,17 @@ mod tests {
             (
                 arb_safe_string(),
                 arb_safe_string(),
-                prop::collection::hash_map(arb_pathbuf(), arb_file_change(), 0..2)
+                prop::collection::hash_map(arb_pathbuf(), arb_file_change(), 0..2),
+                prop::option::of(arb_safe_string()),
+                prop::option::of(arb_pathbuf()),
             )
-                .prop_map(|(call_id, turn_id, changes)| {
+                .prop_map(|(call_id, turn_id, changes, reason, grant_root)| {
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id,
                         changes,
+                        reason,
+                        grant_root,
                     })
                 }),
             // ElicitationRequest
@@ -1007,9 +1082,10 @@ mod tests {
                 prop::collection::vec(arb_dynamic_tool_call_output_content_item(), 0..2),
                 any::<bool>(),
                 prop::option::of(arb_safe_string()),
+                prop::option::of(arb_duration()),
             )
                 .prop_map(
-                    |(call_id, turn_id, tool, arguments, content_items, success, error)| {
+                    |(call_id, turn_id, tool, arguments, content_items, success, error, duration)| {
                         EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
                             call_id,
                             turn_id,
@@ -1018,6 +1094,7 @@ mod tests {
                             content_items,
                             success,
                             error,
+                            duration,
                         })
                     }
                 ),

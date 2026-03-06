@@ -87,48 +87,48 @@
     - 使用正则表达式检查 JSON key 不包含 snake_case
     - **Validates: Requirements 1.5**
 
-- [ ] 3. 检查点 — 协议层完成
+- [x] 3. 检查点 — 协议层完成
   - 确保所有测试通过，如有问题请向用户确认。
 
-- [ ] 4. Shell 命令解析模块（mosaic_shell_command）
-  - [ ] 4.1 实现 parse_command 函数（shell_command/mod.rs）
+- [x] 4. Shell 命令解析模块（mosaic_shell_command）
+  - [x] 4.1 实现 parse_command 函数（shell_command/mod.rs）
     - 实现 shell 命令字符串解析为 token 列表
     - 支持引号、转义字符、空格分隔
     - 有效输入返回 Ok(Vec<String>)，无效输入返回 CodexError
     - _Requirements: 22.1, 22.2, 22.3_
 
-  - [ ]* 4.2 编写 shell 命令解析 round-trip 属性测试
+  - [x]* 4.2 编写 shell 命令解析 round-trip 属性测试
     - **Property 43: Shell command parsing round-trip**
     - 验证非空 token 组成的命令字符串解析后用空格连接可重构等价命令
     - **Validates: Requirements 22.4**
 
-- [ ] 5. 执行策略引擎（mosaic_execpolicy）
-  - [ ] 5.1 实现 PrefixPattern 和 PrefixRule（execpolicy/prefix_rule.rs）
+- [x] 5. 执行策略引擎（mosaic_execpolicy）
+  - [x] 5.1 实现 PrefixPattern 和 PrefixRule（execpolicy/prefix_rule.rs）
     - 定义 PolicyDecision 枚举（Allow, Prompt, Forbidden { reason }）
     - 定义 PrefixPattern 结构体（segments, is_wildcard）
     - 定义 PrefixRule 结构体（pattern, decision）
     - 实现前缀匹配逻辑
     - _Requirements: 10.1, 10.2_
 
-  - [ ] 5.2 实现 NetworkRule（execpolicy/network_rule.rs）
+  - [x] 5.2 实现 NetworkRule（execpolicy/network_rule.rs）
     - 定义 NetworkRule 结构体（domain_pattern, decision）
     - 实现域名模式匹配逻辑
     - _Requirements: 10.3_
 
-  - [ ] 5.3 实现 PolicyParser（execpolicy/parser.rs）
+  - [x] 5.3 实现 PolicyParser（execpolicy/parser.rs）
     - 实现 .codexpolicy 格式解析器
     - parse 方法解析命令规则，parse_network_rules 方法解析网络规则
     - 实现 Pretty_Printer 将规则格式化回 .codexpolicy 文件内容
     - _Requirements: 10.4, 10.5_
 
-  - [ ] 5.4 实现 ExecPolicyEngine（execpolicy/mod.rs）
+  - [x] 5.4 实现 ExecPolicyEngine（execpolicy/mod.rs）
     - 实现 evaluate 方法评估命令决策
     - 实现 evaluate_network 方法评估域名访问决策
     - 实现 load_from_file 方法从文件加载策略
     - Forbidden 规则阻止执行并返回原因，Prompt 规则发出审批信号，无匹配时应用默认策略
     - _Requirements: 10.7, 10.8, 10.9, 10.10, 10.11_
 
-  - [ ]* 5.5 编写执行策略决策映射属性测试
+  - [x]* 5.5 编写执行策略决策映射属性测试
     - **Property 17: Execution policy decision mapping**
     - 验证 PrefixRule 匹配逻辑：Allow/Forbidden/Prompt 规则正确映射，无匹配时返回默认策略
     - **Validates: Requirements 10.1, 10.3, 10.4, 10.5**
@@ -138,53 +138,53 @@
     - 验证解析后打印再解析产生等价规则列表
     - **Validates: Requirements 10.6**
 
-- [ ] 6. 分层配置系统（mosaic_config）
-  - [ ] 6.1 实现 ConfigToml 和 MCP 配置类型（config/toml_types.rs）
+- [x] 6. 分层配置系统（mosaic_config）
+  - [x] 6.1 实现 ConfigToml 和 MCP 配置类型（config/toml_types.rs）
     - 定义 ConfigToml 结构体，使用 kebab-case 命名
     - 定义 McpServerTransportConfig 枚举（Stdio, Http, OAuth）
     - 定义 McpServerConfig 结构体（transport, disabled, disabled_reason, tool_filter）
     - 定义 McpToolFilter 结构体（enabled, disabled）
     - _Requirements: 11.1, 12.1, 12.2, 12.3_
 
-  - [ ] 6.2 实现 ConfigLayerStack（config/layer_stack.rs）
+  - [x] 6.2 实现 ConfigLayerStack（config/layer_stack.rs）
     - 定义 ConfigLayer 枚举（Mdm, System, User, Project, Session）
     - 实现 ConfigLayerStack 的 merge 方法，按优先级合并配置
     - MDM > System > User > Project > Session 优先级
     - 支持 profile 覆盖基础配置
     - _Requirements: 11.2, 11.3, 11.4, 11.5_
 
-  - [ ] 6.3 实现 ConfigEdit 构建器（config/edit.rs）
+  - [x] 6.3 实现 ConfigEdit 构建器（config/edit.rs）
     - 实现构建器模式用于原子配置修改
     - _Requirements: 11.6_
 
-  - [ ] 6.4 实现 config/mod.rs 模块导出和 TOML 序列化支持
+  - [x] 6.4 实现 config/mod.rs 模块导出和 TOML 序列化支持
     - 支持 ConfigToml 序列化回 TOML 格式
     - 无效 TOML 返回描述性解析错误
     - _Requirements: 11.7, 11.8_
 
-  - [ ]* 6.5 编写 ConfigToml TOML round-trip 属性测试
+  - [x]* 6.5 编写 ConfigToml TOML round-trip 属性测试
     - **Property 3: ConfigToml TOML round-trip**
     - 为 ConfigToml, McpServerConfig, McpServerTransportConfig, McpToolFilter 实现 Arbitrary
     - 验证序列化为 TOML 后反序列化产生等价对象
     - **Validates: Requirements 11.9**
 
-  - [ ]* 6.6 编写配置层级优先级合并属性测试
+  - [x]* 6.6 编写配置层级优先级合并属性测试
     - **Property 18: Config layer priority merge**
     - 验证多层级定义相同字段时使用最高优先级层级的值
     - **Validates: Requirements 11.2, 11.3, 11.4**
 
-  - [ ]* 6.7 编写配置 profile 覆盖属性测试
+  - [x]* 6.7 编写配置 profile 覆盖属性测试
     - **Property 19: Config profile override**
     - 验证命名 profile 激活后覆盖基础配置值
     - **Validates: Requirements 11.5**
 
-  - [ ]* 6.8 编写无效 TOML 解析错误属性测试
+  - [x]* 6.8 编写无效 TOML 解析错误属性测试
     - **Property 20: Invalid TOML returns parse error**
     - 验证无效 TOML 字符串返回描述性错误，不 panic
     - **Validates: Requirements 11.7**
 
-- [ ] 7. 状态存储（mosaic_state）
-  - [ ] 7.1 实现 StateDb 和 SQLite 基础（state/db.rs）
+- [x] 7. 状态存储（mosaic_state）
+  - [x] 7.1 实现 StateDb 和 SQLite 基础（state/db.rs）
     - 定义 StateDb, StateRuntime, StateConfig, StateMetrics, LogDb 结构体
     - 实现 StateDb::open 方法初始化 SQLite 数据库
     - 实现 run_migrations 方法执行 18 个迁移脚本
@@ -192,19 +192,19 @@
     - 定义 SessionMeta, ThreadMetadata, AgentJob, AgentJobItem, AgentJobStatus, BackfillState 类型
     - _Requirements: 13.1, 13.2, 13.4, 13.5, 13.6, 13.7, 13.8, 13.10_
 
-  - [ ] 7.2 实现 Rollout 存储（state/rollout.rs）
+  - [x] 7.2 实现 Rollout 存储（state/rollout.rs）
     - 定义 Rollout 结构体（session_id, events, created_at）
     - 实现 save_rollout 和 load_rollout 方法
     - 使用事务确保数据完整性
     - _Requirements: 13.3_
 
-  - [ ] 7.3 实现 Memory 系统（state/memory.rs）
+  - [x] 7.3 实现 Memory 系统（state/memory.rs）
     - 定义 Memory 结构体（phase, content, timestamp, relevance_score）
     - 定义 MemoryPhase 枚举（Phase1, Phase2）
     - 实现 Memory 的 CRUD 操作
     - _Requirements: 13.9_
 
-  - [ ] 7.4 实现 state/mod.rs 模块导出
+  - [x] 7.4 实现 state/mod.rs 模块导出
     - 统一导出所有状态存储类型和方法
     - 数据库操作失败返回描述性错误，使用事务回滚保护已有数据
     - _Requirements: 13.11_
@@ -230,7 +230,7 @@
     - 验证失败操作不破坏已有数据
     - **Validates: Requirements 13.11**
 
-- [ ] 8. 检查点 — 基础设施层完成
+- [x] 8. 检查点 — 基础设施层完成
   - 确保所有测试通过，如有问题请向用户确认。
 
 - [ ] 9. 敏感信息管理（mosaic_secrets）

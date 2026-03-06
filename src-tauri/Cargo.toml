@@ -31,6 +31,13 @@ async-trait = "0.1"
 sha1 = "0.10"
 toml = "0.8"
 thiserror = "1"
+regex = "1"
+sha2 = "0.10"
+multimap = "0.10"
+starlark = "0.12"
+shlex = "1"
+fs2 = "0.4"
+anyhow = "1"
 
 [dev-dependencies]
 proptest = "1"

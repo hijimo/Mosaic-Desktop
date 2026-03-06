@@ -1,0 +1,9 @@
+# Example policy file using Starlark-like syntax
+prefix_rule(["git", "*"], decision="allow")
+prefix_rule(["npm", "install", "*"], decision="prompt")
+prefix_rule(["rm", "-rf", "/"], decision="forbidden")
+prefix_rule(["sudo", "*"], decision="prompt")
+
+# Network rules (not fully implemented yet)
+# network_rule(host="example.com", protocol="https", decision="allow")
+# network_rule(host="malicious.com", protocol="https", decision="forbidden")

@@ -5,25 +5,27 @@ use std::path::PathBuf;
 
 /// Whether outbound network access is available to the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum NetworkAccess {
     #[default]
     Restricted,
     Enabled,
 }
 
+impl NetworkAccess {
+    pub fn is_enabled(self) -> bool {
+        matches!(self, NetworkAccess::Enabled)
+    }
+}
+
 /// How read-only file access is granted inside a restricted sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ReadOnlyAccess {
     Restricted {
-        #[serde(default = "default_true", rename = "includePlatformDefaults")]
+        #[serde(default = "default_true")]
         include_platform_defaults: bool,
-        #[serde(
-            default,
-            rename = "readableRoots",
-            skip_serializing_if = "Vec::is_empty"
-        )]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         readable_roots: Vec<PathBuf>,
     },
     #[default]
@@ -34,63 +36,203 @@ fn default_true() -> bool {
     true
 }
 
+impl ReadOnlyAccess {
+    pub fn has_full_disk_read_access(&self) -> bool {
+        matches!(self, ReadOnlyAccess::FullAccess)
+    }
+
+    pub fn get_readable_roots_with_cwd(&self, cwd: &std::path::Path) -> Vec<PathBuf> {
+        match self {
+            ReadOnlyAccess::FullAccess => Vec::new(),
+            ReadOnlyAccess::Restricted { readable_roots, .. } => {
+                let mut roots = readable_roots.clone();
+                roots.push(cwd.to_path_buf());
+                roots.dedup();
+                roots
+            }
+        }
+    }
+}
+
 // ── Sandbox Policy ───────────────────────────────────────────────
 
+/// A writable root path with read-only subpaths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritableRoot {
+    pub root: PathBuf,
+    pub read_only_subpaths: Vec<PathBuf>,
+}
+
+impl WritableRoot {
+    pub fn is_path_writable(&self, path: &std::path::Path) -> bool {
+        if !path.starts_with(&self.root) {
+            return false;
+        }
+        for subpath in &self.read_only_subpaths {
+            if path.starts_with(subpath) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever.
+    #[serde(rename = "danger-full-access")]
     DangerFullAccess,
 
     /// Read-only access configuration.
+    #[serde(rename = "read-only")]
     ReadOnly {
-        #[serde(default)]
+        #[serde(
+            default,
+            skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
+        )]
         access: ReadOnlyAccess,
     },
 
     /// Process is already in an external sandbox.
+    #[serde(rename = "external-sandbox")]
     ExternalSandbox {
-        #[serde(default, rename = "networkAccess")]
+        #[serde(default)]
         network_access: NetworkAccess,
     },
 
     /// Read + write to workspace directories.
+    #[serde(rename = "workspace-write")]
     WorkspaceWrite {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        writable_roots: Vec<PathBuf>,
         #[serde(
             default,
-            rename = "writableRoots",
-            skip_serializing_if = "Vec::is_empty"
+            skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
         )]
-        writable_roots: Vec<PathBuf>,
-        #[serde(default, rename = "readOnlyAccess")]
         read_only_access: ReadOnlyAccess,
-        #[serde(default, rename = "networkAccess")]
+        #[serde(default)]
         network_access: bool,
-        #[serde(default, rename = "excludeTmpdirEnvVar")]
+        #[serde(default)]
         exclude_tmpdir_env_var: bool,
-        #[serde(default, rename = "excludeSlashTmp")]
+        #[serde(default)]
         exclude_slash_tmp: bool,
     },
+}
+
+impl SandboxPolicy {
+    pub fn new_read_only_policy() -> Self {
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        }
+    }
+
+    pub fn new_workspace_write_policy() -> Self {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }
+    }
+
+    pub fn has_full_disk_read_access(&self) -> bool {
+        match self {
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => true,
+            SandboxPolicy::ReadOnly { access } => access.has_full_disk_read_access(),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => read_only_access.has_full_disk_read_access(),
+        }
+    }
+
+    pub fn has_full_disk_write_access(&self) -> bool {
+        matches!(
+            self,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
+    }
+
+    pub fn has_full_network_access(&self) -> bool {
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
+            SandboxPolicy::ReadOnly { .. } => false,
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        }
+    }
+
+    pub fn get_readable_roots_with_cwd(&self, cwd: &std::path::Path) -> Vec<PathBuf> {
+        match self {
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
+            SandboxPolicy::ReadOnly { access } => access.get_readable_roots_with_cwd(cwd),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => {
+                let mut roots = read_only_access.get_readable_roots_with_cwd(cwd);
+                roots.extend(
+                    self.get_writable_roots_with_cwd(cwd)
+                        .into_iter()
+                        .map(|wr| wr.root),
+                );
+                roots.dedup();
+                roots
+            }
+        }
+    }
+
+    pub fn get_writable_roots_with_cwd(&self, cwd: &std::path::Path) -> Vec<WritableRoot> {
+        match self {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                let mut roots: Vec<WritableRoot> = writable_roots
+                    .iter()
+                    .map(|r| WritableRoot {
+                        root: r.clone(),
+                        read_only_subpaths: vec![],
+                    })
+                    .collect();
+                roots.push(WritableRoot {
+                    root: cwd.to_path_buf(),
+                    read_only_subpaths: vec![],
+                });
+                roots
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 // ── Approval Policy ──────────────────────────────────────────────
 
 /// Fine-grained rejection controls for approval prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RejectConfig {
     pub sandbox_approval: bool,
     pub rules: bool,
     pub mcp_elicitations: bool,
 }
 
+impl RejectConfig {
+    pub const fn rejects_sandbox_approval(self) -> bool {
+        self.sandbox_approval
+    }
+    pub const fn rejects_rules_approval(self) -> bool {
+        self.rules
+    }
+    pub const fn rejects_mcp_elicitations(self) -> bool {
+        self.mcp_elicitations
+    }
+}
+
 /// Determines the conditions under which the user is consulted to approve
 /// running the command proposed by the agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum AskForApproval {
     /// Only "known safe" read-only commands are auto-approved.
+    #[serde(rename = "untrusted")]
     UnlessTrusted,
     /// DEPRECATED: auto-approve in sandbox, escalate on failure.
     OnFailure,
@@ -114,7 +256,7 @@ pub struct ExecPolicyAmendment {
 
 /// Network policy rule action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkPolicyRuleAction {
     Allow,
     Deny,
@@ -122,7 +264,6 @@ pub enum NetworkPolicyRuleAction {
 
 /// Network policy amendment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyAmendment {
     pub host: String,
     pub action: NetworkPolicyRuleAction,
@@ -130,16 +271,14 @@ pub struct NetworkPolicyAmendment {
 
 /// User's decision in response to an approval request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     Approved,
     ApprovedExecpolicyAmendment {
-        #[serde(rename = "proposedExecpolicyAmendment")]
         proposed_execpolicy_amendment: ExecPolicyAmendment,
     },
     ApprovedForSession,
     NetworkPolicyAmendment {
-        #[serde(rename = "networkPolicyAmendment")]
         network_policy_amendment: NetworkPolicyAmendment,
     },
     #[default]
@@ -151,7 +290,7 @@ pub enum ReviewDecision {
 
 /// User's decision for an MCP elicitation request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum ElicitationAction {
     Accept,
     Decline,
@@ -162,7 +301,7 @@ pub enum ElicitationAction {
 
 /// Reason a turn was aborted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
@@ -173,7 +312,7 @@ pub enum TurnAbortReason {
 
 /// Model reasoning effort level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum Effort {
     Low,
     #[default]
@@ -183,7 +322,7 @@ pub enum Effort {
 
 /// Reasoning summary configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningSummary {
     #[default]
     Auto,
@@ -194,7 +333,7 @@ pub enum ReasoningSummary {
 
 /// Service tier selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ServiceTier {
     Fast,
 }
@@ -203,7 +342,7 @@ pub enum ServiceTier {
 
 /// Collaboration mode kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
     #[default]
@@ -212,7 +351,6 @@ pub enum ModeKind {
 
 /// Settings for a collaboration mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CollaborationModeSettings {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,7 +361,6 @@ pub struct CollaborationModeSettings {
 
 /// Collaboration mode for a session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CollaborationMode {
     pub mode: ModeKind,
     pub settings: CollaborationModeSettings,
@@ -233,7 +370,7 @@ pub struct CollaborationMode {
 
 /// Agent personality configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum Personality {
     None,
     Friendly,
@@ -244,7 +381,6 @@ pub enum Personality {
 
 /// Realtime conversation start parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConversationStartParams {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,7 +389,6 @@ pub struct ConversationStartParams {
 
 /// Realtime audio frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RealtimeAudioFrame {
     pub data: String,
     pub sample_rate: u32,
@@ -264,33 +399,58 @@ pub struct RealtimeAudioFrame {
 
 /// Realtime conversation audio parameters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConversationAudioParams {
     pub frame: RealtimeAudioFrame,
 }
 
 /// Realtime conversation text parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConversationTextParams {
     pub text: String,
 }
 
 // ── User Input ───────────────────────────────────────────────────
 
+/// Byte range within a text buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// UI-defined span within user input text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextElement {
+    pub byte_range: ByteRange,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+}
+
 /// User input item (tagged enum matching reference source).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum UserInput {
     Text {
         text: String,
+        #[serde(default)]
+        text_elements: Vec<TextElement>,
     },
     Image {
-        #[serde(rename = "imageUrl")]
         image_url: String,
     },
     LocalImage {
         path: PathBuf,
+    },
+    /// Skill selected by the user.
+    Skill {
+        name: String,
+        path: PathBuf,
+    },
+    /// Explicit mention selected by the user.
+    Mention {
+        name: String,
+        path: String,
     },
 }
 
@@ -298,20 +458,18 @@ pub enum UserInput {
 
 /// Items in the conversation history / model response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
     Message {
         role: String,
         content: String,
     },
     FunctionCall {
-        #[serde(rename = "callId")]
         call_id: String,
         name: String,
         arguments: String,
     },
     FunctionOutput {
-        #[serde(rename = "callId")]
         call_id: String,
         output: FunctionCallOutputPayload,
     },
@@ -319,14 +477,13 @@ pub enum ResponseInputItem {
 
 /// Payload for function call output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct FunctionCallOutputPayload {
     pub content: ContentOrItems,
 }
 
 /// Multi-modal content item for function outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
     Text { text: String },
     Image { url: String },
@@ -335,7 +492,7 @@ pub enum ContentItem {
 
 /// Either a plain string or a list of content items (untagged).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", untagged)]
+#[serde(untagged)]
 pub enum ContentOrItems {
     String(String),
     Items(Vec<ContentItem>),
@@ -345,7 +502,6 @@ pub enum ContentOrItems {
 
 /// Specification for a dynamically registered tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
@@ -354,7 +510,6 @@ pub struct DynamicToolSpec {
 
 /// Request to invoke a dynamic tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DynamicToolCallRequest {
     pub call_id: String,
     pub turn_id: String,
@@ -364,20 +519,14 @@ pub struct DynamicToolCallRequest {
 
 /// Output content item from a dynamic tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum DynamicToolCallOutputContentItem {
-    InputText {
-        text: String,
-    },
-    InputImage {
-        #[serde(rename = "imageUrl")]
-        image_url: String,
-    },
+    InputText { text: String },
+    InputImage { image_url: String },
 }
 
 /// Response from a dynamic tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DynamicToolResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
@@ -387,7 +536,7 @@ pub struct DynamicToolResponse {
 
 /// A file change in a patch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileChange {
     Add {
         content: String,
@@ -396,9 +545,7 @@ pub enum FileChange {
         content: String,
     },
     Update {
-        #[serde(rename = "unifiedDiff")]
         unified_diff: String,
-        #[serde(rename = "movePath", skip_serializing_if = "Option::is_none")]
         move_path: Option<PathBuf>,
     },
 }
@@ -407,7 +554,6 @@ pub enum FileChange {
 
 /// MCP tool invocation details.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct McpInvocation {
     pub server: String,
     pub tool: String,
@@ -415,9 +561,17 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
+/// MCP tool call result (simplified from reference).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CallToolResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
 /// MCP server refresh configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct McpServerRefreshConfig {
     pub mcp_servers: serde_json::Value,
     pub mcp_oauth_credentials_store_mode: serde_json::Value,
@@ -427,7 +581,6 @@ pub struct McpServerRefreshConfig {
 
 /// Overrides that can be applied to the current TurnContext.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TurnContextOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -447,9 +600,10 @@ pub struct TurnContextOverrides {
 
 /// Network approval protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkApprovalProtocol {
     Http,
+    #[serde(alias = "https_connect", alias = "http-connect")]
     Https,
     Socks5Tcp,
     Socks5Udp,
@@ -457,7 +611,6 @@ pub enum NetworkApprovalProtocol {
 
 /// Network approval context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NetworkApprovalContext {
     pub host: String,
     pub protocol: NetworkApprovalProtocol,
@@ -465,52 +618,61 @@ pub struct NetworkApprovalContext {
 
 // ── Parsed Command ───────────────────────────────────────────────
 
-/// A parsed command token.
+/// A parsed command with semantic type information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ParsedCommand {
-    pub program: String,
-    pub args: Vec<String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ParsedCommand {
+    Read {
+        cmd: String,
+        name: String,
+        path: PathBuf,
+    },
+    ListFiles {
+        cmd: String,
+        path: Option<String>,
+    },
+    Search {
+        cmd: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        cmd: String,
+    },
 }
 
 // ── Error Types ──────────────────────────────────────────────────
 
 /// Detailed error info for Codex errors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
-    HttpConnectionFailed {
-        #[serde(rename = "httpStatusCode")]
-        http_status_code: Option<u16>,
-    },
-    ResponseStreamConnectionFailed {
-        #[serde(rename = "httpStatusCode")]
-        http_status_code: Option<u16>,
-    },
+    HttpConnectionFailed { http_status_code: Option<u16> },
+    ResponseStreamConnectionFailed { http_status_code: Option<u16> },
     InternalServerError,
     Unauthorized,
     BadRequest,
     SandboxError,
-    ResponseStreamDisconnected {
-        #[serde(rename = "httpStatusCode")]
-        http_status_code: Option<u16>,
-    },
-    ResponseTooManyFailedAttempts {
-        #[serde(rename = "httpStatusCode")]
-        http_status_code: Option<u16>,
-    },
+    ResponseStreamDisconnected { http_status_code: Option<u16> },
+    ResponseTooManyFailedAttempts { http_status_code: Option<u16> },
     ThreadRollbackFailed,
     Other,
+}
+
+impl CodexErrorInfo {
+    pub fn affects_turn_status(&self) -> bool {
+        !matches!(self, Self::ThreadRollbackFailed)
+    }
 }
 
 // ── Exec Command Types ───────────────────────────────────────────
 
 /// Source of a command execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ExecCommandSource {
     #[default]
     Agent,
@@ -519,7 +681,7 @@ pub enum ExecCommandSource {
 
 /// Status of a completed command execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum ExecCommandStatus {
     Completed,
     Failed,
@@ -528,7 +690,7 @@ pub enum ExecCommandStatus {
 
 /// Status of a completed patch application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum PatchApplyStatus {
     Completed,
     Failed,
@@ -539,7 +701,6 @@ pub enum PatchApplyStatus {
 
 /// Token usage statistics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
@@ -550,7 +711,6 @@ pub struct TokenUsage {
 
 /// Token usage info with totals and context window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
@@ -561,7 +721,7 @@ pub struct TokenUsageInfo {
 
 /// MCP server startup status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "state")]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum McpStartupStatus {
     Starting,
     Ready,
@@ -571,8 +731,79 @@ pub enum McpStartupStatus {
 
 /// MCP startup failure info.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct McpStartupFailure {
     pub server: String,
     pub error: String,
+}
+
+// ── Exec Output Stream ───────────────────────────────────────────
+
+/// Which stream produced an output chunk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
+}
+
+// ── Agent Status ─────────────────────────────────────────────────
+
+/// Agent lifecycle status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    #[default]
+    PendingInit,
+    Running,
+    Completed(Option<String>),
+    Errored(String),
+    Shutdown,
+    NotFound,
+}
+
+// ── Review Request ───────────────────────────────────────────────
+
+/// Review request payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+// ── Remote Skills ────────────────────────────────────────────────
+
+/// Hazelnut scope for remote skills.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteSkillHazelnutScope {
+    User,
+    Organization,
+}
+
+/// Product surface for remote skills.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteSkillProductSurface {
+    Codex,
+    ChatGpt,
+}
+
+// ── Message Phase ────────────────────────────────────────────────
+
+/// Phase of an agent message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Planning,
+    Executing,
+    Summarizing,
+}
+
+// ── Model Reroute ────────────────────────────────────────────────
+
+/// Reason for model reroute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRerouteReason {
+    HighRiskCyberActivity,
 }
