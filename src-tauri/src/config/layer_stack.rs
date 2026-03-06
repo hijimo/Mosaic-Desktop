@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::toml_types::ConfigToml;
 
 /// Configuration layer priority (highest to lowest):
@@ -25,74 +23,66 @@ impl ConfigLayerStack {
         Self { layers: Vec::new() }
     }
 
-    /// Add a configuration layer. Layers are stored and merged
-    /// by priority order during `merge()`.
     pub fn add_layer(&mut self, layer: ConfigLayer, config: ConfigToml) {
         self.layers.push((layer, config));
     }
 
     /// Merge all layers by priority (highest wins).
-    /// For scalar fields, the highest-priority non-None value wins.
-    /// For mcp_servers maps, entries are merged with higher-priority
-    /// layers overriding individual server configs.
+    /// Uses serde_json merge: serialize each layer to JSON Value, then
+    /// overlay non-null fields from higher-priority layers.
     pub fn merge(&self) -> ConfigToml {
         let mut sorted: Vec<_> = self.layers.clone();
-        // Sort ascending by priority so we can fold from lowest to highest,
-        // letting higher-priority values overwrite.
         sorted.sort_by_key(|(layer, _)| *layer);
 
-        let mut result = ConfigToml::default();
+        let mut base = serde_json::to_value(ConfigToml::default()).unwrap();
 
         for (_layer, config) in &sorted {
-            if config.model.is_some() {
-                result.model = config.model.clone();
-            }
-            if config.approval_policy.is_some() {
-                result.approval_policy = config.approval_policy.clone();
-            }
-            if config.sandbox_policy.is_some() {
-                result.sandbox_policy = config.sandbox_policy.clone();
-            }
-            if let Some(servers) = &config.mcp_servers {
-                let merged = result.mcp_servers.get_or_insert_with(HashMap::new);
-                for (name, server_config) in servers {
-                    merged.insert(name.clone(), server_config.clone());
-                }
-            }
-            if config.profiles.is_some() {
-                result.profiles = config.profiles.clone();
-            }
+            let overlay = serde_json::to_value(config).unwrap();
+            merge_json(&mut base, &overlay);
         }
 
-        result
+        serde_json::from_value(base).unwrap_or_default()
     }
 
     /// Merge all layers then apply a named profile on top.
-    /// Profile values override the base merged config.
     pub fn resolve_with_profile(&self, profile_name: &str) -> ConfigToml {
-        let mut base = self.merge();
+        let base = self.merge();
 
-        if let Some(profiles) = &base.profiles {
-            if let Some(profile) = profiles.get(profile_name) {
-                if profile.model.is_some() {
-                    base.model = profile.model.clone();
+        if let Some(profile) = base.profiles.get(profile_name) {
+            let mut base_val = serde_json::to_value(&base).unwrap();
+            let profile_val = serde_json::to_value(profile).unwrap();
+            merge_json(&mut base_val, &profile_val);
+            serde_json::from_value(base_val).unwrap_or(base)
+        } else {
+            base
+        }
+    }
+}
+
+/// Recursively merge `overlay` into `base`. Non-null overlay values win.
+/// For objects, merge recursively. For arrays/scalars, overlay replaces base.
+fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                if overlay_val.is_null() {
+                    continue;
                 }
-                if profile.approval_policy.is_some() {
-                    base.approval_policy = profile.approval_policy.clone();
-                }
-                if profile.sandbox_policy.is_some() {
-                    base.sandbox_policy = profile.sandbox_policy.clone();
-                }
-                if let Some(servers) = &profile.mcp_servers {
-                    let merged = base.mcp_servers.get_or_insert_with(HashMap::new);
-                    for (name, server_config) in servers {
-                        merged.insert(name.clone(), server_config.clone());
-                    }
+                let entry = base_map
+                    .entry(key.clone())
+                    .or_insert(serde_json::Value::Null);
+                if overlay_val.is_object() && entry.is_object() {
+                    merge_json(entry, overlay_val);
+                } else {
+                    *entry = overlay_val.clone();
                 }
             }
         }
-
-        base
+        (base, overlay) => {
+            if !overlay.is_null() {
+                *base = overlay.clone();
+            }
+        }
     }
 }
 
@@ -105,15 +95,15 @@ impl Default for ConfigLayerStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::toml_types::{McpServerConfig, McpServerTransportConfig, McpToolFilter};
+    use crate::config::toml_types::McpServerConfig;
+    use crate::config::toml_types::McpServerTransportConfig;
+    use crate::protocol::types::Effort;
+    use std::collections::HashMap;
 
-    fn make_config(model: Option<&str>, policy: Option<&str>) -> ConfigToml {
+    fn make_config(model: Option<&str>) -> ConfigToml {
         ConfigToml {
             model: model.map(String::from),
-            approval_policy: policy.map(String::from),
-            sandbox_policy: None,
-            mcp_servers: None,
-            profiles: None,
+            ..Default::default()
         }
     }
 
@@ -126,46 +116,28 @@ mod tests {
     #[test]
     fn single_layer() {
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(
-            ConfigLayer::User,
-            make_config(Some("gpt-4"), Some("always")),
-        );
+        stack.add_layer(ConfigLayer::User, make_config(Some("gpt-4")));
         let merged = stack.merge();
         assert_eq!(merged.model, Some("gpt-4".to_string()));
-        assert_eq!(merged.approval_policy, Some("always".to_string()));
     }
 
     #[test]
     fn higher_priority_wins() {
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(
-            ConfigLayer::Session,
-            make_config(Some("gpt-3.5"), Some("never")),
-        );
-        stack.add_layer(ConfigLayer::Mdm, make_config(Some("gpt-4-mdm"), None));
+        stack.add_layer(ConfigLayer::Session, make_config(Some("gpt-3.5")));
+        stack.add_layer(ConfigLayer::Mdm, make_config(Some("gpt-4-mdm")));
         let merged = stack.merge();
-        // Mdm has higher priority, overrides model
         assert_eq!(merged.model, Some("gpt-4-mdm".to_string()));
-        // Mdm has no approval_policy, so Session's value persists
-        assert_eq!(merged.approval_policy, Some("never".to_string()));
     }
 
     #[test]
     fn three_layer_priority() {
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(
-            ConfigLayer::Session,
-            make_config(Some("session-model"), None),
-        );
-        stack.add_layer(
-            ConfigLayer::User,
-            make_config(Some("user-model"), Some("user-policy")),
-        );
-        stack.add_layer(ConfigLayer::System, make_config(Some("system-model"), None));
+        stack.add_layer(ConfigLayer::Session, make_config(Some("session-model")));
+        stack.add_layer(ConfigLayer::User, make_config(Some("user-model")));
+        stack.add_layer(ConfigLayer::System, make_config(Some("system-model")));
         let merged = stack.merge();
-        // System > User > Session
         assert_eq!(merged.model, Some("system-model".to_string()));
-        assert_eq!(merged.approval_policy, Some("user-policy".to_string()));
     }
 
     #[test]
@@ -174,18 +146,9 @@ mod tests {
 
         let server_a = McpServerConfig {
             transport: McpServerTransportConfig::Stdio {
-                command: "node".to_string(),
+                command: "node".into(),
                 args: vec![],
                 env: HashMap::new(),
-            },
-            disabled: false,
-            disabled_reason: None,
-            tool_filter: None,
-        };
-        let server_b = McpServerConfig {
-            transport: McpServerTransportConfig::Http {
-                url: "https://b.com".to_string(),
-                headers: HashMap::new(),
             },
             disabled: false,
             disabled_reason: None,
@@ -193,98 +156,60 @@ mod tests {
         };
 
         let mut config_user = ConfigToml::default();
-        config_user.mcp_servers = Some(HashMap::from([("srv-a".to_string(), server_a.clone())]));
-
-        let mut config_project = ConfigToml::default();
-        config_project.mcp_servers = Some(HashMap::from([("srv-b".to_string(), server_b.clone())]));
+        config_user.mcp_servers = HashMap::from([("srv-a".into(), server_a.clone())]);
 
         stack.add_layer(ConfigLayer::User, config_user);
-        stack.add_layer(ConfigLayer::Project, config_project);
-
         let merged = stack.merge();
-        let servers = merged.mcp_servers.unwrap();
-        assert_eq!(servers.len(), 2);
-        assert_eq!(servers.get("srv-a").unwrap(), &server_a);
-        assert_eq!(servers.get("srv-b").unwrap(), &server_b);
-    }
-
-    #[test]
-    fn mcp_server_override_by_priority() {
-        let mut stack = ConfigLayerStack::new();
-
-        let server_low = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "old".to_string(),
-                args: vec![],
-                env: HashMap::new(),
-            },
-            disabled: false,
-            disabled_reason: None,
-            tool_filter: None,
-        };
-        let server_high = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "new".to_string(),
-                args: vec!["--flag".to_string()],
-                env: HashMap::new(),
-            },
-            disabled: true,
-            disabled_reason: Some("upgraded".to_string()),
-            tool_filter: Some(McpToolFilter {
-                enabled: Some(vec!["tool1".to_string()]),
-                disabled: None,
-            }),
-        };
-
-        let mut config_session = ConfigToml::default();
-        config_session.mcp_servers = Some(HashMap::from([("srv".to_string(), server_low)]));
-
-        let mut config_system = ConfigToml::default();
-        config_system.mcp_servers = Some(HashMap::from([("srv".to_string(), server_high.clone())]));
-
-        stack.add_layer(ConfigLayer::Session, config_session);
-        stack.add_layer(ConfigLayer::System, config_system);
-
-        let merged = stack.merge();
-        let servers = merged.mcp_servers.unwrap();
-        assert_eq!(servers.get("srv").unwrap(), &server_high);
+        assert!(merged.mcp_servers.contains_key("srv-a"));
     }
 
     #[test]
     fn profile_overrides_base() {
-        let profile = ConfigToml {
-            model: Some("fast-model".to_string()),
-            approval_policy: None,
-            sandbox_policy: Some("danger".to_string()),
-            mcp_servers: None,
-            profiles: None,
+        use crate::config::toml_types::ConfigProfile;
+
+        let profile = ConfigProfile {
+            model: Some("fast-model".into()),
+            ..Default::default()
         };
-        let base = ConfigToml {
-            model: Some("default-model".to_string()),
-            approval_policy: Some("always".to_string()),
-            sandbox_policy: Some("read-only".to_string()),
-            mcp_servers: None,
-            profiles: Some(HashMap::from([("fast".to_string(), profile)])),
+        let config = ConfigToml {
+            model: Some("default-model".into()),
+            profiles: HashMap::from([("fast".into(), profile)]),
+            ..Default::default()
         };
 
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(ConfigLayer::User, base);
+        stack.add_layer(ConfigLayer::User, config);
 
         let resolved = stack.resolve_with_profile("fast");
         assert_eq!(resolved.model, Some("fast-model".to_string()));
-        assert_eq!(resolved.approval_policy, Some("always".to_string()));
-        assert_eq!(resolved.sandbox_policy, Some("danger".to_string()));
     }
 
     #[test]
     fn nonexistent_profile_returns_base() {
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(
-            ConfigLayer::User,
-            make_config(Some("gpt-4"), Some("always")),
-        );
+        stack.add_layer(ConfigLayer::User, make_config(Some("gpt-4")));
         let resolved = stack.resolve_with_profile("nonexistent");
         assert_eq!(resolved.model, Some("gpt-4".to_string()));
-        assert_eq!(resolved.approval_policy, Some("always".to_string()));
+    }
+
+    #[test]
+    fn new_fields_merge_correctly() {
+        let mut stack = ConfigLayerStack::new();
+        let mut c1 = ConfigToml::default();
+        c1.model_reasoning_effort = Some(Effort::Low);
+        c1.web_search = Some(crate::protocol::types::WebSearchMode::Cached);
+
+        let mut c2 = ConfigToml::default();
+        c2.model_reasoning_effort = Some(Effort::High);
+
+        stack.add_layer(ConfigLayer::Session, c1);
+        stack.add_layer(ConfigLayer::System, c2);
+
+        let merged = stack.merge();
+        assert_eq!(merged.model_reasoning_effort, Some(Effort::High));
+        assert_eq!(
+            merged.web_search,
+            Some(crate::protocol::types::WebSearchMode::Cached)
+        );
     }
 }

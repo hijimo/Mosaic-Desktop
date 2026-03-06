@@ -233,15 +233,15 @@
 - [x] 8. 检查点 — 基础设施层完成
   - 确保所有测试通过，如有问题请向用户确认。
 
-- [ ] 9. 敏感信息管理（mosaic_secrets）
-  - [ ] 9.1 实现 SecretName 和 SecretScope（secrets/mod.rs）
+- [x] 9. 敏感信息管理（mosaic_secrets）
+  - [x] 9.1 实现 SecretName 和 SecretScope（secrets/mod.rs）
     - 定义 SecretName newtype，带格式验证
     - 定义 SecretScope 枚举（Global, Environment(String)）
     - 实现 scan_for_secrets 函数，检测 API 密钥、bearer token、私钥等模式
     - 返回 Vec<SecretMatch>，每个匹配包含 kind, range, redacted
     - _Requirements: 23.1, 23.8_
 
-  - [ ] 9.2 实现 SecretsBackend trait 和 SecretsManager（secrets/manager.rs, secrets/backend.rs）
+  - [x] 9.2 实现 SecretsBackend trait 和 SecretsManager（secrets/manager.rs, secrets/backend.rs）
     - 定义 SecretsBackend async trait（get, set, delete, list）
     - 实现 SecretsManager 结构体
     - 实现 new_with_keyring 方法创建 keyring 集成实例
@@ -249,7 +249,7 @@
     - 实现内存后端用于测试
     - _Requirements: 23.2, 23.3, 23.4_
 
-  - [ ] 9.3 实现 redact_secrets 输出脱敏（secrets/sanitizer.rs）
+  - [x] 9.3 实现 redact_secrets 输出脱敏（secrets/sanitizer.rs）
     - 实现 redact_secrets 函数，将已知密钥值替换为脱敏占位符
     - 确保输出不包含任何原始密钥值
     - _Requirements: 23.10_
@@ -269,8 +269,8 @@
     - 验证 redact_secrets 输出不包含任何原始密钥值
     - **Validates: Requirements 23.9, 23.11**
 
-- [ ] 10. 命令执行沙箱（mosaic_exec）
-  - [ ] 10.1 实现 CommandExecutor（exec/sandbox.rs）
+- [x] 10. 命令执行沙箱（mosaic_exec）
+  - [x] 10.1 实现 CommandExecutor（exec/sandbox.rs）
     - 定义 CommandExecutor 结构体（sandbox_policy, approval_policy, allow_list, tx_event）
     - 定义 ExecResult 结构体（exit_code, stdout, stderr）
     - 实现 execute 方法，在执行前发送 ExecCommandBegin 事件，完成后发送 ExecCommandEnd 事件
@@ -278,14 +278,14 @@
     - 违反策略时终止进程并发送 Error 事件
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.11_
 
-  - [ ] 10.2 实现审批策略逻辑（exec/sandbox.rs）
+  - [x] 10.2 实现审批策略逻辑（exec/sandbox.rs）
     - Always：每个命令前暂停请求审批
     - Never：直接执行
     - OnFailure：非零退出码时请求审批
     - UnlessAllowListed：允许列表内直接执行，其他请求审批
     - _Requirements: 9.7, 9.8, 9.9, 9.10_
 
-  - [ ] 10.3 实现 exec/mod.rs 模块导出
+  - [x] 10.3 实现 exec/mod.rs 模块导出
     - 统一导出 CommandExecutor, ExecResult
     - _Requirements: 9.1_
 
@@ -304,8 +304,8 @@
     - 验证执行前发送 ExecCommandBegin，完成后发送 ExecCommandEnd
     - **Validates: Requirements 9.1, 9.2**
 
-- [ ] 11. 网络代理（mosaic_netproxy）
-  - [ ] 11.1 实现 NetworkPolicyDecider 和 NetworkProxy（netproxy/proxy.rs）
+- [x] 11. 网络代理（mosaic_netproxy）
+  - [x] 11.1 实现 NetworkPolicyDecider 和 NetworkProxy（netproxy/proxy.rs）
     - 定义 NetworkPolicyDecider 结构体（allow_rules, deny_rules）
     - 实现 evaluate 方法评估域名和端口访问决策
     - deny 规则优先于 allow 规则
@@ -316,7 +316,7 @@
     - 使用 tokio::sync::watch 通道支持运行时配置重载
     - _Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8_
 
-  - [ ] 11.2 实现 netproxy/mod.rs 模块导出
+  - [x] 11.2 实现 netproxy/mod.rs 模块导出
     - 统一导出网络代理类型
     - _Requirements: 21.1_
 
@@ -326,7 +326,7 @@
     - 验证 allow/deny 规则评估逻辑，deny 优先于 allow
     - **Validates: Requirements 21.3, 21.4, 21.5**
 
-- [ ] 12. 检查点 — 执行与安全层完成
+- [x] 12. 检查点 — 执行与安全层完成
   - 确保所有测试通过，如有问题请向用户确认。
 
 - [ ] 13. 核心引擎 — 会话与 TurnContext（mosaic_core）

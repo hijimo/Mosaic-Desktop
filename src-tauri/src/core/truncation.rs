@@ -1,1 +1,2 @@
-// Placeholder — implemented in task 20
+// Re-export from compact.rs
+pub use super::compact::TruncationStrategy;

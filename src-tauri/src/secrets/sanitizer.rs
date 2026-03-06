@@ -28,6 +28,20 @@ fn compile_regex(pattern: &str) -> Regex {
     }
 }
 
+/// Replace all occurrences of known secret values with a redaction placeholder.
+///
+/// This complements `redact_secrets` (pattern-based) by also removing any
+/// exact known secret values from the output, ensuring no raw secret leaks.
+pub fn redact_known_secrets(content: &str, known_secrets: &[String]) -> String {
+    let mut result = content.to_string();
+    for secret in known_secrets {
+        if !secret.is_empty() {
+            result = result.replace(secret.as_str(), "[REDACTED_SECRET]");
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +86,39 @@ mod tests {
         let input = "hello world, this is normal text".to_string();
         let result = redact_secrets(input.clone());
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn redact_known_secrets_replaces_values() {
+        let content = "connecting with token abc123secret to server";
+        let known = vec!["abc123secret".to_string()];
+        let result = redact_known_secrets(content, &known);
+        assert!(result.contains("[REDACTED_SECRET]"));
+        assert!(!result.contains("abc123secret"));
+    }
+
+    #[test]
+    fn redact_known_secrets_handles_multiple() {
+        let content = "key1=secret_one key2=secret_two";
+        let known = vec!["secret_one".to_string(), "secret_two".to_string()];
+        let result = redact_known_secrets(content, &known);
+        assert!(!result.contains("secret_one"));
+        assert!(!result.contains("secret_two"));
+    }
+
+    #[test]
+    fn redact_known_secrets_preserves_clean_text() {
+        let content = "nothing sensitive here";
+        let known = vec!["other_secret".to_string()];
+        let result = redact_known_secrets(content, &known);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn redact_known_secrets_ignores_empty_secrets() {
+        let content = "hello world";
+        let known = vec!["".to_string()];
+        let result = redact_known_secrets(content, &known);
+        assert_eq!(result, content);
     }
 }

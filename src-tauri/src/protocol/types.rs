@@ -338,6 +338,55 @@ pub enum ServiceTier {
     Fast,
 }
 
+/// Controls output length/detail on GPT-5 models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+/// Web search tool mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebSearchMode {
+    Disabled,
+    #[default]
+    Cached,
+    Live,
+}
+
+/// Sandbox mode for TOML config (simplified enum, distinct from SandboxPolicy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    #[serde(rename = "read-only")]
+    #[default]
+    ReadOnly,
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+}
+
+/// Login method restriction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForcedLoginMethod {
+    Chatgpt,
+    Api,
+}
+
+/// Trust level for a project directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustLevel {
+    Trusted,
+    Untrusted,
+}
+
 // ── Collaboration Mode ───────────────────────────────────────────
 
 /// Collaboration mode kind.
@@ -346,7 +395,19 @@ pub enum ServiceTier {
 pub enum ModeKind {
     Plan,
     #[default]
+    #[serde(
+        alias = "code",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
     Default,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    PairProgramming,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    Execute,
 }
 
 /// Settings for a collaboration mode.

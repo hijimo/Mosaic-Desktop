@@ -3,12 +3,16 @@ pub mod manager;
 pub mod sanitizer;
 
 use std::fmt;
+use std::ops::Range;
 use std::path::Path;
 
+use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 
 pub use backend::LocalSecretsBackend;
 pub use manager::SecretsManager;
+pub use sanitizer::redact_known_secrets;
 pub use sanitizer::redact_secrets;
 
 /// A validated secret name (uppercase ASCII + digits + underscore only).
@@ -88,6 +92,84 @@ pub trait SecretsBackend: Send + Sync {
     fn get(&self, scope: &SecretScope, name: &SecretName) -> Result<Option<String>, String>;
     fn delete(&self, scope: &SecretScope, name: &SecretName) -> Result<bool, String>;
     fn list(&self, scope_filter: Option<&SecretScope>) -> Result<Vec<SecretListEntry>, String>;
+}
+
+/// A match found by `scan_for_secrets`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretMatch {
+    /// Kind of secret detected (e.g. "openai_api_key", "aws_access_key", "bearer_token", "private_key", "secret_assignment").
+    pub kind: String,
+    /// Byte range in the original input where the secret was found.
+    pub range: Range<usize>,
+    /// Redacted representation of the matched secret.
+    pub redacted: String,
+}
+
+static SCAN_OPENAI_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"sk-[A-Za-z0-9]{20,}").unwrap());
+static SCAN_AWS_ACCESS_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap());
+static SCAN_BEARER_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}\b").unwrap());
+static SCAN_PRIVATE_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap());
+static SCAN_SECRET_ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b(api[_-]?key|token|secret|password)\b(\s*[:=]\s*)(["']?)([^\s"']{8,})"#)
+        .unwrap()
+});
+
+/// Scan content for embedded secrets and sensitive patterns.
+///
+/// Returns a `Vec<SecretMatch>` for each detected pattern, with the matched
+/// range and a redacted placeholder. Patterns detected include OpenAI API keys,
+/// AWS access key IDs, bearer tokens, private key headers, and common
+/// secret-assignment patterns.
+pub fn scan_for_secrets(content: &str) -> Vec<SecretMatch> {
+    let mut matches = Vec::new();
+
+    for m in SCAN_OPENAI_KEY.find_iter(content) {
+        matches.push(SecretMatch {
+            kind: "openai_api_key".to_string(),
+            range: m.start()..m.end(),
+            redacted: "[REDACTED_OPENAI_KEY]".to_string(),
+        });
+    }
+
+    for m in SCAN_AWS_ACCESS_KEY.find_iter(content) {
+        matches.push(SecretMatch {
+            kind: "aws_access_key".to_string(),
+            range: m.start()..m.end(),
+            redacted: "[REDACTED_AWS_KEY]".to_string(),
+        });
+    }
+
+    for m in SCAN_BEARER_TOKEN.find_iter(content) {
+        matches.push(SecretMatch {
+            kind: "bearer_token".to_string(),
+            range: m.start()..m.end(),
+            redacted: "Bearer [REDACTED_TOKEN]".to_string(),
+        });
+    }
+
+    for m in SCAN_PRIVATE_KEY.find_iter(content) {
+        matches.push(SecretMatch {
+            kind: "private_key".to_string(),
+            range: m.start()..m.end(),
+            redacted: "[REDACTED_PRIVATE_KEY]".to_string(),
+        });
+    }
+
+    for m in SCAN_SECRET_ASSIGNMENT.find_iter(content) {
+        matches.push(SecretMatch {
+            kind: "secret_assignment".to_string(),
+            range: m.start()..m.end(),
+            redacted: "[REDACTED_SECRET]".to_string(),
+        });
+    }
+
+    // Sort by start position for deterministic output
+    matches.sort_by_key(|m| m.range.start);
+    matches
 }
 
 /// Derive an environment ID from a working directory.
@@ -170,5 +252,75 @@ mod tests {
         let env_id = environment_id_from_cwd(dir.path());
         assert!(env_id.starts_with("cwd-"));
         assert!(env_id.len() > 4);
+    }
+
+    #[test]
+    fn scan_detects_openai_key() {
+        let input = "my key is sk-abcdefghijklmnopqrstuvwxyz here";
+        let matches = scan_for_secrets(input);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].kind, "openai_api_key");
+        assert!(!matches[0]
+            .redacted
+            .contains("sk-abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn scan_detects_aws_access_key() {
+        let input = "key AKIAIOSFODNN7EXAMPLE end";
+        let matches = scan_for_secrets(input);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].kind, "aws_access_key");
+    }
+
+    #[test]
+    fn scan_detects_bearer_token() {
+        let input = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test";
+        let matches = scan_for_secrets(input);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].kind, "bearer_token");
+    }
+
+    #[test]
+    fn scan_detects_private_key() {
+        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...";
+        let matches = scan_for_secrets(input);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].kind, "private_key");
+    }
+
+    #[test]
+    fn scan_detects_secret_assignment() {
+        let input = "api_key = 'my_super_secret_value_here'";
+        let matches = scan_for_secrets(input);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].kind, "secret_assignment");
+    }
+
+    #[test]
+    fn scan_returns_empty_for_clean_text() {
+        let input = "hello world, nothing secret here";
+        let matches = scan_for_secrets(input);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn scan_redacted_does_not_contain_original() {
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz";
+        let input = format!("key is {secret}");
+        let matches = scan_for_secrets(&input);
+        for m in &matches {
+            assert!(!m.redacted.contains(secret));
+        }
+    }
+
+    #[test]
+    fn scan_range_matches_input_slice() {
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz";
+        let input = format!("prefix {secret} suffix");
+        let matches = scan_for_secrets(&input);
+        assert!(!matches.is_empty());
+        let m = &matches[0];
+        assert_eq!(&input[m.range.clone()], secret);
     }
 }
