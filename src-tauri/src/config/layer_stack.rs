@@ -1,14 +1,15 @@
 use super::toml_types::ConfigToml;
 
-/// Configuration layer priority (highest to lowest):
-/// Mdm > System > User > Project > Session
+/// Configuration layer precedence (lowest to highest):
+/// Mdm < System < User < Project < Session
+/// Layers are merged in ascending order; higher-precedence layers override lower ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConfigLayer {
-    Session = 0,
-    Project = 1,
-    User = 2,
-    System = 3,
-    Mdm = 4,
+    Mdm = 0,
+    System = 10,
+    User = 20,
+    Project = 25,
+    Session = 30,
 }
 
 /// Layered configuration stack that merges multiple ConfigToml
@@ -122,12 +123,12 @@ mod tests {
     }
 
     #[test]
-    fn higher_priority_wins() {
+    fn session_overrides_mdm() {
         let mut stack = ConfigLayerStack::new();
-        stack.add_layer(ConfigLayer::Session, make_config(Some("gpt-3.5")));
-        stack.add_layer(ConfigLayer::Mdm, make_config(Some("gpt-4-mdm")));
+        stack.add_layer(ConfigLayer::Session, make_config(Some("session-model")));
+        stack.add_layer(ConfigLayer::Mdm, make_config(Some("mdm-model")));
         let merged = stack.merge();
-        assert_eq!(merged.model, Some("gpt-4-mdm".to_string()));
+        assert_eq!(merged.model, Some("session-model".to_string()));
     }
 
     #[test]
@@ -137,7 +138,8 @@ mod tests {
         stack.add_layer(ConfigLayer::User, make_config(Some("user-model")));
         stack.add_layer(ConfigLayer::System, make_config(Some("system-model")));
         let merged = stack.merge();
-        assert_eq!(merged.model, Some("system-model".to_string()));
+        // Session has highest precedence
+        assert_eq!(merged.model, Some("session-model".to_string()));
     }
 
     #[test]
@@ -202,11 +204,12 @@ mod tests {
         let mut c2 = ConfigToml::default();
         c2.model_reasoning_effort = Some(Effort::High);
 
-        stack.add_layer(ConfigLayer::Session, c1);
+        // Session (30) > System (10), so Session wins
         stack.add_layer(ConfigLayer::System, c2);
+        stack.add_layer(ConfigLayer::Session, c1);
 
         let merged = stack.merge();
-        assert_eq!(merged.model_reasoning_effort, Some(Effort::High));
+        assert_eq!(merged.model_reasoning_effort, Some(Effort::Low));
         assert_eq!(
             merged.web_search,
             Some(crate::protocol::types::WebSearchMode::Cached)

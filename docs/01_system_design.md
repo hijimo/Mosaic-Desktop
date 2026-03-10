@@ -81,10 +81,11 @@ struct TurnContext {
 ### 3.6 Config 分层配置系统
 
 ```
-MDM > System > User > Project > Session
+Session > Project > User > System > MDM
 ```
 
-配置优先级从高到低，支持配置继承和覆盖。
+配置优先级从高到低（Session 为运行时覆盖，优先级最高），支持配置继承和覆盖。
+合并时按升序排列后依次叠加，高优先级层覆盖低优先级层。
 
 ## 4. 数据流架构
 

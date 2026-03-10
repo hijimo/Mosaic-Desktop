@@ -5,6 +5,7 @@ pub mod exec;
 pub mod execpolicy;
 pub mod netproxy;
 pub mod protocol;
+pub mod provider;
 pub mod secrets;
 pub mod shell_command;
 pub mod state;
@@ -19,7 +20,17 @@ use config::ConfigLayerStack;
 pub fn run() {
     let (sq_tx, sq_rx) = async_channel::unbounded();
     let (eq_tx, eq_rx) = async_channel::unbounded();
-    let config = ConfigLayerStack::new();
+
+    // Load ~/.codex/config.toml as the User layer
+    let mut config = ConfigLayerStack::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = std::path::Path::new(&home).join(".codex/config.toml");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = config::deserialize_toml(&content) {
+                config.add_layer(config::ConfigLayer::User, parsed);
+            }
+        }
+    }
 
     let app_state = AppState {
         sq_tx,

@@ -329,8 +329,8 @@
 - [x] 12. 检查点 — 执行与安全层完成
   - 确保所有测试通过，如有问题请向用户确认。
 
-- [ ] 13. 核心引擎 — 会话与 TurnContext（mosaic_core）
-  - [ ] 13.1 实现 Session 和 SessionState（core/session.rs）
+- [x] 13. 核心引擎 — 会话与 TurnContext（mosaic_core）
+  - [x] 13.1 实现 Session 和 SessionState（core/session.rs）
     - 定义 Session 结构体（state: Mutex<SessionState>, config, tool_registry, mcp_manager, hooks, tx_event）
     - 定义 SessionState 结构体（history, turn_active, pending_approval, turn_context）
     - 定义 TurnContext 结构体（model_info, sandbox_policy, approval_policy, cwd）
@@ -341,7 +341,7 @@
     - 实现轮次活跃状态检查，拒绝并发 UserTurn
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ] 13.2 实现 Session 的 rollback 方法（core/session.rs）
+  - [x] 13.2 实现 Session 的 rollback 方法（core/session.rs）
     - 接受 steps 参数（usize），移除最后 n 条历史记录
     - 保持剩余条目顺序不变
     - _Requirements: 25.1, 25.2, 25.3_
@@ -371,14 +371,14 @@
     - 验证 rollback(n) 后历史长度为 L-n，剩余条目为前 L-n 条
     - **Validates: Requirements 25.2, 25.3**
 
-- [ ] 14. 核心引擎 — 工具处理器系统
-  - [ ] 14.1 实现 ToolHandler trait 和 ToolRegistry（core/tools/mod.rs）
+- [x] 14. 核心引擎 — 工具处理器系统
+  - [x] 14.1 实现 ToolHandler trait 和 ToolRegistry（core/tools/mod.rs）
     - 定义 ToolHandler async trait（matches_kind, kind, handle）
     - 定义 ToolKind 类型
     - 实现 ToolRegistry（register, dispatch 方法）
     - _Requirements: 7.1, 7.2, 7.6_
 
-  - [ ] 14.2 实现 ToolRouter（core/tools/router.rs）
+  - [x] 14.2 实现 ToolRouter（core/tools/router.rs）
     - 定义 ToolRouter 结构体（registry, mcp_manager, dynamic_tools）
     - 实现 route_tool_call 方法，按优先级路由：内置 → MCP → 动态
     - 未找到处理器返回 ToolExecutionFailed 错误
@@ -386,7 +386,7 @@
     - 实现 list_all_tools 方法
     - _Requirements: 8.1, 8.2, 8.3, 8.4_
 
-  - [ ] 14.3 实现动态工具处理器（core/tools/handlers/dynamic.rs）
+  - [x] 14.3 实现动态工具处理器（core/tools/handlers/dynamic.rs）
     - 实现 DynamicToolSpec 注册和调用逻辑
     - 调用时发送 DynamicToolCallRequest 事件，等待 DynamicToolResponse
     - _Requirements: 27.1, 27.2, 27.3, 27.4_
@@ -401,14 +401,14 @@
     - 验证路由优先级：内置 → MCP → 动态，未知工具返回错误
     - **Validates: Requirements 8.1, 8.2**
 
-- [ ] 15. 核心引擎 — Codex 结构体与 submission_loop
-  - [ ] 15.1 实现 Codex 结构体和 spawn 方法（core/codex.rs）
+- [x] 15. 核心引擎 — Codex 结构体与 submission_loop
+  - [x] 15.1 实现 Codex 结构体和 spawn 方法（core/codex.rs）
     - 定义 Codex 结构体（tx_sub: async_channel::Sender<Submission>, rx_event: async_channel::Receiver<Event>）
     - 实现 Codex::spawn 方法，接受 Config 参数，初始化 Session，启动 submission_loop
     - 使用 tokio::sync::Mutex 保护 Session 状态
     - _Requirements: 5.1, 5.2, 5.8_
 
-  - [ ] 15.2 实现 submission_loop 主循环（core/codex.rs）
+  - [x] 15.2 实现 submission_loop 主循环（core/codex.rs）
     - 从 SQ 接收 Submission，根据 Op 类型分发处理
     - Op::UserTurn → 调用 run_turn，发送 TurnStarted/TurnComplete bracket 事件
     - Op::Interrupt → 取消当前轮次，发送 TurnComplete
@@ -424,14 +424,14 @@
     - Op::CleanBackgroundTerminals → 清理后台终端
     - _Requirements: 5.3, 5.4, 5.5, 5.6, 5.7, 5.9, 5.10, 5.11_
 
-  - [ ] 15.3 实现 run_turn 函数（core/codex.rs）
+  - [x] 15.3 实现 run_turn 函数（core/codex.rs）
     - 创建 TurnContext，发送 TurnStarted 事件
     - 处理模型交互和工具调用
     - 工具调用时发送 McpToolCallBegin/McpToolCallEnd 或 Error 事件
     - 完成后发送 TurnComplete 事件
     - _Requirements: 5.9, 5.10, 5.11, 7.3, 7.4, 7.5_
 
-  - [ ] 15.4 实现 core/mod.rs 模块导出
+  - [x] 15.4 实现 core/mod.rs 模块导出
     - 统一导出 Codex, Session, TurnContext, ToolHandler, ToolRegistry, ToolRouter 等
     - _Requirements: 5.1_
 
@@ -461,7 +461,7 @@
     - 验证工具调用前发送 McpToolCallBegin，完成后发送 McpToolCallEnd 或 Error
     - **Validates: Requirements 7.3, 7.4, 7.5**
 
-- [ ] 16. 检查点 — 核心引擎完成
+- [x] 16. 检查点 — 核心引擎完成
   - 确保所有测试通过，如有问题请向用户确认。
 
 - [ ] 17. 钩子系统（Hooks System）

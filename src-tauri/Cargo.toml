@@ -38,6 +38,9 @@ starlark = "0.12"
 shlex = "1"
 fs2 = "0.4"
 anyhow = "1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+eventsource-stream = "0.2"
 
 [dev-dependencies]
 proptest = "1"

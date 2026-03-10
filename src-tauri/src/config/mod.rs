@@ -64,6 +64,6 @@ mod tests {
             ..Default::default()
         };
         let toml_str = serialize_toml(&config).unwrap();
-        assert!(toml_str.contains("model-reasoning-effort"));
+        assert!(toml_str.contains("model_reasoning_effort"));
     }
 }

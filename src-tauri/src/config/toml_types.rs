@@ -10,7 +10,7 @@ use crate::protocol::types::{
 
 /// Top-level TOML configuration structure matching reference `ConfigToml`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(default)]
 pub struct ConfigToml {
     // ── Model ────────────────────────────────────────────────────
     pub model: Option<String>,
@@ -59,7 +59,7 @@ pub struct ConfigToml {
 
     // ── Model providers ──────────────────────────────────────────
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub model_providers: HashMap<String, serde_json::Value>,
+    pub model_providers: HashMap<String, crate::provider::ModelProviderInfo>,
 
     // ── Auth ─────────────────────────────────────────────────────
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -130,7 +130,7 @@ pub struct ConfigToml {
 
 /// Subset of ConfigToml used as a named profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(default)]
 pub struct ConfigProfile {
     pub model: Option<String>,
     pub model_provider: Option<String>,
@@ -292,8 +292,8 @@ mod tests {
             ..Default::default()
         };
         let toml_str = toml::to_string(&config).unwrap();
-        assert!(toml_str.contains("model-reasoning-effort"));
-        assert!(toml_str.contains("sandbox-mode"));
+        assert!(toml_str.contains("model_reasoning_effort"));
+        assert!(toml_str.contains("sandbox_mode"));
     }
 
     #[test]
