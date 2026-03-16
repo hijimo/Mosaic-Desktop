@@ -78,7 +78,7 @@ mod tests {
         prop_oneof![
             any::<bool>().prop_map(serde_json::Value::Bool),
             any::<i64>().prop_map(|n| serde_json::Value::Number(n.into())),
-            "[a-zA-Z0-9 _-]{0,50}".prop_map(|s| serde_json::Value::String(s)),
+            "[a-zA-Z0-9 _-]{0,50}".prop_map(serde_json::Value::String),
         ]
     }
 

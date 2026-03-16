@@ -5,7 +5,7 @@ use async_channel::{Receiver, Sender};
 use tokio::sync::Mutex;
 
 use crate::config::ConfigLayerStack;
-use crate::protocol::error::CodexError;
+use crate::protocol::error::{CodexError, ErrorCode};
 use crate::protocol::event::{Event, EventMsg, SessionConfiguredEvent};
 use crate::protocol::submission::{Op, Submission};
 use crate::protocol::types::TurnContextOverrides;
@@ -39,7 +39,7 @@ pub struct Codex {
     /// Skill loader.
     skill_loader: Arc<Mutex<SkillLoader>>,
     /// Dynamic tool handler for managing dynamic tool lifecycle.
-    dynamic_tool_handler: Arc<Mutex<DynamicToolHandler>>,
+    dynamic_tool_handler: Arc<DynamicToolHandler>,
 }
 
 impl Codex {
@@ -59,7 +59,7 @@ impl Codex {
             cwd,
             running: Arc::new(Mutex::new(false)),
             skill_loader: Arc::new(Mutex::new(skill_loader)),
-            dynamic_tool_handler: Arc::new(Mutex::new(dynamic_tool_handler)),
+            dynamic_tool_handler: Arc::new(dynamic_tool_handler),
         }
     }
 
@@ -224,10 +224,21 @@ impl Codex {
                     self.run_turn(s, &turn_id, items).await;
                 }
             }
-            Op::ExecApproval { decision, .. } => {
+            Op::ExecApproval {
+                decision,
+                custom_instructions,
+                ..
+            } => {
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
-                    // Abort decision interrupts the current turn
+                    // Forward custom_instructions to session for next turn (Req 28.3)
+                    if let Some(instructions) = custom_instructions {
+                        if !instructions.is_empty() {
+                            s.set_custom_instructions(instructions).await;
+                        }
+                    }
+
+                    // Abort decision interrupts the current turn (Req 28.1)
                     if matches!(decision, crate::protocol::types::ReviewDecision::Abort) {
                         s.interrupt().await;
                         self.emit(EventMsg::TurnAborted(
@@ -237,26 +248,79 @@ impl Codex {
                             },
                         ))
                         .await;
+                    } else if matches!(decision, crate::protocol::types::ReviewDecision::Denied) {
+                        // Denied cancels the pending operation (Req 28.1)
+                        let _ = s.take_pending_approval().await;
                     } else if let Some(pending) = s.take_pending_approval().await {
-                        let approved = matches!(
-                            decision,
-                            crate::protocol::types::ReviewDecision::Approved
-                                | crate::protocol::types::ReviewDecision::ApprovedForSession
-                                | crate::protocol::types::ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        );
-                        if let super::session::PendingApproval::Exec { call_id, .. } = &pending {
-                            if approved {
+                        // Extract command prefix from the pending approval
+                        let command_prefix =
+                            if let crate::core::session::PendingApproval::Exec { command, .. } =
+                                &pending
+                            {
+                                Some(command.clone())
+                            } else {
+                                None
+                            };
+
+                        match &decision {
+                            crate::protocol::types::ReviewDecision::Approved => {
+                                // Simple approval — execute the command
                                 // TODO: execute the approved command via sandbox
-                                let _ = call_id;
                             }
-                            // Declined: the pending approval is consumed, turn continues
+                            crate::protocol::types::ReviewDecision::ApprovedForSession => {
+                                // Approve + add command to session allow list (Req 28.2)
+                                if let Some(prefix) = &command_prefix {
+                                    s.add_to_exec_allow_list(prefix.clone()).await;
+                                }
+                                // TODO: execute the approved command via sandbox
+                            }
+                            crate::protocol::types::ReviewDecision::ApprovedExecpolicyAmendment {
+                                proposed_execpolicy_amendment,
+                            } => {
+                                // Approve + persist prefix rule to .codexpolicy (Req 28.2)
+                                let policy_path = s.cwd().join(".codexpolicy");
+                                if let Err(e) =
+                                    crate::execpolicy::amend::blocking_append_allow_prefix_rule(
+                                        &policy_path,
+                                        &proposed_execpolicy_amendment.command,
+                                    )
+                                {
+                                    self.emit(EventMsg::Warning(
+                                        crate::protocol::event::WarningEvent {
+                                            message: format!(
+                                                "failed to amend execpolicy: {e}"
+                                            ),
+                                        },
+                                    ))
+                                    .await;
+                                }
+                                // Also add to session allow list for immediate effect
+                                s.add_to_exec_allow_list(
+                                    proposed_execpolicy_amendment.command.clone(),
+                                )
+                                .await;
+                                // TODO: execute the approved command via sandbox
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
-            Op::PatchApproval { decision, .. } => {
+            Op::PatchApproval {
+                decision,
+                custom_instructions,
+                ..
+            } => {
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
+                    // Forward custom_instructions to session for next turn (Req 28.3)
+                    if let Some(instructions) = custom_instructions {
+                        if !instructions.is_empty() {
+                            s.set_custom_instructions(instructions).await;
+                        }
+                    }
+
+                    // Abort decision interrupts the current turn (Req 28.1)
                     if matches!(decision, crate::protocol::types::ReviewDecision::Abort) {
                         s.interrupt().await;
                         self.emit(EventMsg::TurnAborted(
@@ -266,18 +330,46 @@ impl Codex {
                             },
                         ))
                         .await;
-                    } else if let Some(pending) = s.take_pending_approval().await {
-                        let approved = matches!(
-                            decision,
-                            crate::protocol::types::ReviewDecision::Approved
-                                | crate::protocol::types::ReviewDecision::ApprovedForSession
-                        );
-                        if let super::session::PendingApproval::Patch { call_id, .. } = &pending {
-                            if approved {
-                                // TODO: apply the approved patch
-                                let _ = call_id;
-                            }
+                    } else if matches!(decision, crate::protocol::types::ReviewDecision::Denied) {
+                        // Denied cancels the pending patch (Req 28.1)
+                        if let Some(crate::core::session::PendingApproval::Patch {
+                            call_id,
+                            turn_id,
+                            changes,
+                            ..
+                        }) = s.take_pending_approval().await
+                        {
+                            self.emit(EventMsg::PatchApplyEnd(
+                                crate::protocol::event::PatchApplyEndEvent {
+                                    call_id,
+                                    turn_id,
+                                    stdout: String::new(),
+                                    stderr: "patch declined by user".to_string(),
+                                    success: false,
+                                    changes,
+                                    status: crate::protocol::types::PatchApplyStatus::Declined,
+                                },
+                            ))
+                            .await;
                         }
+                    } else if let Some(crate::core::session::PendingApproval::Patch {
+                        call_id,
+                        turn_id,
+                        changes,
+                        cwd,
+                    }) = s.take_pending_approval().await
+                    {
+                        // Approved / ApprovedForSession — apply the patch
+                        let applicator = super::patch::PatchApplicator::new(
+                            s.resolved_config()
+                                .approval_policy
+                                .clone()
+                                .unwrap_or_default(),
+                            s.tx_event().clone(),
+                        );
+                        let _ = applicator
+                            .apply_approved(&changes, &cwd, &call_id, &turn_id)
+                            .await;
                     }
                 }
             }
@@ -361,11 +453,33 @@ impl Codex {
                 self.emit(EventMsg::EnteredReviewMode(review_request)).await;
             }
             Op::Compact => {
-                // TODO: invoke context compaction
-                self.emit(EventMsg::ContextCompacted(
-                    crate::protocol::event::ContextCompactedEvent,
-                ))
-                .await;
+                let session_guard = self.session.lock().await;
+                if let Some(s) = session_guard.as_ref() {
+                    let policy =
+                        crate::core::truncation::TruncationPolicy::KeepRecent { max_items: 50 };
+                    // Use KeepRecent as default compact strategy; AutoCompact would
+                    // require a model call which needs provider resolution.
+                    match s
+                        .compact_history::<fn(String) -> std::future::Ready<Result<String, crate::protocol::error::CodexError>>, _>(
+                            &policy, None,
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            self.emit(EventMsg::ContextCompacted(
+                                crate::protocol::event::ContextCompactedEvent,
+                            ))
+                            .await;
+                        }
+                        Err(e) => {
+                            self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
+                                message: format!("compact failed: {}", e.message),
+                                codex_error_info: None,
+                            }))
+                            .await;
+                        }
+                    }
+                }
             }
             Op::Undo => {
                 self.emit(EventMsg::UndoStarted(
@@ -397,11 +511,29 @@ impl Codex {
             Op::ListMcpTools => {
                 let session_guard = self.session.lock().await;
                 let tools = if let Some(s) = session_guard.as_ref() {
-                    let servers = s.mcp_manager().connected_servers().await;
-                    servers
-                        .into_iter()
-                        .map(|name| (name, serde_json::Value::Array(vec![])))
-                        .collect()
+                    let all_tools = s.mcp_manager().all_tools().await;
+                    let mut map: std::collections::HashMap<String, serde_json::Value> =
+                        std::collections::HashMap::new();
+                    for tool in all_tools {
+                        // Group tools by server name (extracted from qualified name mcp__{server}__{tool})
+                        let server = tool
+                            .qualified_name
+                            .strip_prefix("mcp__")
+                            .and_then(|s| s.split("__").next())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let entry = map
+                            .entry(server)
+                            .or_insert_with(|| serde_json::Value::Array(vec![]));
+                        if let serde_json::Value::Array(arr) = entry {
+                            arr.push(serde_json::json!({
+                                "name": tool.name,
+                                "qualifiedName": tool.qualified_name,
+                                "description": tool.description,
+                            }));
+                        }
+                    }
+                    map
                 } else {
                     std::collections::HashMap::new()
                 };
@@ -452,8 +584,7 @@ impl Codex {
                 .await;
             }
             Op::DynamicToolResponse { id, response } => {
-                let handler = self.dynamic_tool_handler.lock().await;
-                if let Err(e) = handler.resolve_call(&id, response).await {
+                if let Err(e) = self.dynamic_tool_handler.resolve_call(&id, response).await {
                     self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                         message: format!(
                             "failed to resolve dynamic tool call '{id}': {}",
@@ -464,15 +595,46 @@ impl Codex {
                     .await;
                 }
             }
-            Op::RefreshMcpServers { .. } => {
-                // Delegate to MCP manager — trigger reconnection of all configured servers
+            Op::RefreshMcpServers { config } => {
+                // Parse mcp_servers from the config payload and reconnect each server
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
-                    let servers = s.mcp_manager().connected_servers().await;
+                    let mcp_manager = s.mcp_manager();
+                    let mut ready = vec![];
+                    let mut failed: Vec<crate::protocol::types::McpStartupFailure> = vec![];
+
+                    if let Some(servers_map) = config.mcp_servers.as_object() {
+                        for (name, server_val) in servers_map {
+                            match serde_json::from_value::<crate::config::toml_types::McpServerConfig>(
+                                server_val.clone(),
+                            ) {
+                                Ok(server_config) => {
+                                    match mcp_manager.connect(name, &server_config).await {
+                                        Ok(()) => ready.push(name.clone()),
+                                        Err(e) => {
+                                            failed.push(
+                                                crate::protocol::types::McpStartupFailure {
+                                                    server: name.clone(),
+                                                    error: e.message,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    failed.push(crate::protocol::types::McpStartupFailure {
+                                        server: name.clone(),
+                                        error: format!("config parse error: {e}"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
                     self.emit(EventMsg::McpStartupComplete(
                         crate::protocol::event::McpStartupCompleteEvent {
-                            ready: servers,
-                            failed: vec![],
+                            ready,
+                            failed,
                             cancelled: vec![],
                         },
                     ))
@@ -686,12 +848,27 @@ impl Codex {
         let mut last_agent_message: Option<String> = None;
         let mut accumulated_text = String::new();
 
+        // Consume any custom instructions left by a ReviewDecision (Req 28.3)
+        let custom_instructions = session.take_custom_instructions().await;
+
+        // Build instructions: merge skill list (like source render.rs) + custom instructions
+        let instructions: Option<String> = {
+            let loader = self.skill_loader.lock().await;
+            let skills = loader.loaded_skills();
+            let skill_section = render_skills_section(skills);
+            match (skill_section, custom_instructions) {
+                (Some(s), Some(c)) => Some(format!("{s}\n\n{c}")),
+                (Some(s), None) => Some(s),
+                (None, Some(c)) => Some(c),
+                (None, None) => None,
+            }
+        };
         match crate::core::client::stream_response(
             &base_url,
             &api_key,
             &extra_headers,
             &model,
-            None, // instructions
+            instructions.as_deref(),
             api_input,
             None, // previous_response_id
         )
@@ -708,7 +885,10 @@ impl Codex {
                 use futures::StreamExt;
                 eprintln!("[run_turn] stream started, waiting for events");
                 while let Some(event_result) = stream.next().await {
-                    eprintln!("[run_turn] got event: {:?}", event_result.as_ref().map(|e| std::mem::discriminant(e)));
+                    eprintln!(
+                        "[run_turn] got event: {:?}",
+                        event_result.as_ref().map(std::mem::discriminant)
+                    );
                     match event_result {
                         Err(e) => {
                             self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
@@ -799,7 +979,6 @@ impl Codex {
                             }
                             break;
                         }
-                        Ok(crate::core::client::ResponseEvent::Skip) => {}
                         Ok(crate::core::client::ResponseEvent::Failed { code, message }) => {
                             self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                                 message: format!("API error [{code}]: {message}"),
@@ -829,12 +1008,16 @@ impl Codex {
 
     /// Dispatch a single tool call through the ToolRouter, emitting bracket events.
     ///
+    /// For dynamic tools, this initiates the DynamicToolCallRequest/DynamicToolResponse
+    /// protocol via the DynamicToolHandler. For built-in and MCP tools, it dispatches
+    /// directly through the ToolRouter.
+    ///
     /// Returns the tool result on success, or emits an Error event on failure.
     #[allow(dead_code)]
     async fn dispatch_tool_call(
         &self,
         session: &Session,
-        _turn_id: &str,
+        turn_id: &str,
         call_id: &str,
         tool_name: &str,
         arguments: serde_json::Value,
@@ -854,12 +1037,40 @@ impl Codex {
 
         let start = std::time::Instant::now();
 
-        // Route through ToolRouter
-        let result = session
+        // Route through ToolRouter — which distinguishes built-in/MCP vs dynamic
+        let route_result = session
             .tool_router()
             .await
-            .route_tool_call(tool_name, arguments)
+            .route_tool_call(tool_name, arguments.clone())
             .await;
+
+        let result = match route_result {
+            crate::core::tools::router::RouteResult::Handled(r) => r,
+            crate::core::tools::router::RouteResult::DynamicTool(_) => {
+                // Dynamic tool: invoke through DynamicToolHandler which sends
+                // DynamicToolCallRequest event and waits for DynamicToolResponse.
+                match self
+                    .dynamic_tool_handler
+                    .invoke(tool_name, turn_id, arguments.clone())
+                    .await
+                {
+                    Ok(response) => {
+                        // Send the response event for logging/UI
+                        let _ = self
+                            .dynamic_tool_handler
+                            .send_response_event(call_id, turn_id, tool_name, arguments, &response)
+                            .await;
+                        // Convert DynamicToolResponse to JSON value
+                        Ok(serde_json::to_value(&response).unwrap_or(serde_json::Value::Null))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            crate::core::tools::router::RouteResult::NotFound(name) => Err(CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("no handler found for tool: {name}"),
+            )),
+        };
 
         let duration = start.elapsed();
 
@@ -931,8 +1142,40 @@ impl Codex {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<crate::protocol::types::DynamicToolResponse, CodexError> {
-        let handler = self.dynamic_tool_handler.lock().await;
-        handler.invoke(tool_name, turn_id, arguments).await
+        self.dynamic_tool_handler
+            .invoke(tool_name, turn_id, arguments)
+            .await
+    }
+
+    /// Register a dynamic tool, making it available for routing and invocation.
+    ///
+    /// The tool is registered in both the ToolRouter (for discovery/routing) and
+    /// the DynamicToolHandler (for the request/response lifecycle).
+    #[allow(dead_code)]
+    pub async fn register_dynamic_tool(&self, spec: crate::protocol::types::DynamicToolSpec) {
+        // Register in DynamicToolHandler for invocation lifecycle
+        self.dynamic_tool_handler.register_tool(spec.clone());
+        // Register in ToolRouter for routing discovery
+        {
+            let session_guard = self.session.lock().await;
+            if let Some(s) = session_guard.as_ref() {
+                let mut router = s.tool_router().await;
+                router.register_dynamic_tool(spec);
+            }
+        }
+    }
+
+    /// Unregister a dynamic tool from both the router and handler.
+    #[allow(dead_code)]
+    pub async fn unregister_dynamic_tool(&self, name: &str) {
+        self.dynamic_tool_handler.unregister_tool(name);
+        {
+            let session_guard = self.session.lock().await;
+            if let Some(s) = session_guard.as_ref() {
+                let mut router = s.tool_router().await;
+                router.unregister_dynamic_tool(name);
+            }
+        }
     }
 
     async fn emit(&self, msg: EventMsg) {
@@ -946,6 +1189,28 @@ impl Codex {
     pub async fn is_running(&self) -> bool {
         *self.running.lock().await
     }
+}
+
+/// Render loaded skills into a system prompt section (mirrors source render.rs).
+fn render_skills_section(skills: &[crate::core::skills::SkillMetadata]) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "## Skills".to_string(),
+        "A skill is a set of local instructions stored in a SKILL.md file. Below is the list of available skills.".to_string(),
+        "### Available skills".to_string(),
+    ];
+    for skill in skills {
+        let path = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
+        lines.push(format!(
+            "- {}: {} (file: {path})",
+            skill.name, skill.description
+        ));
+    }
+    lines.push("### How to use skills".to_string());
+    lines.push("If the user names a skill with $SkillName or the task matches a skill description, use that skill. Open its SKILL.md for full instructions.".to_string());
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -1468,5 +1733,480 @@ mod tests {
                 .any(|e| matches!(&e.msg, EventMsg::TurnComplete(_))),
             "legacy UserInput should emit TurnComplete"
         );
+    }
+
+    // ── ReviewDecision semantics integration tests ───────────────
+
+    /// Helper: wait for SessionConfigured, then set pending approval on the live session.
+    async fn wait_session_and_set_pending(
+        codex: &Codex,
+        eq_rx: &async_channel::Receiver<Event>,
+        pending: crate::core::session::PendingApproval,
+    ) {
+        // Wait for SessionConfigured so the session is initialised inside run()
+        loop {
+            let ev = eq_rx.recv().await.unwrap();
+            if matches!(&ev.msg, EventMsg::SessionConfigured(_)) {
+                break;
+            }
+        }
+        // Now the session exists — set pending approval
+        let session_guard = codex.session.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            s.set_pending_approval(pending).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_approval_denied_cancels_pending() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        wait_session_and_set_pending(
+            &codex,
+            &eq_rx,
+            crate::core::session::PendingApproval::Exec {
+                call_id: "c1".into(),
+                command: vec!["rm".into(), "-rf".into()],
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+
+        sq_tx
+            .send(Submission {
+                id: "ea1".into(),
+                op: Op::ExecApproval {
+                    id: "c1".into(),
+                    turn_id: None,
+                    decision: crate::protocol::types::ReviewDecision::Denied,
+                    custom_instructions: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+
+        // Pending approval should be consumed
+        let session_guard = codex.session.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            assert!(s.take_pending_approval().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_approval_abort_interrupts_turn() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+
+        sq_tx
+            .send(Submission {
+                id: "ea1".into(),
+                op: Op::ExecApproval {
+                    id: "c1".into(),
+                    turn_id: None,
+                    decision: crate::protocol::types::ReviewDecision::Abort,
+                    custom_instructions: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        codex.run().await.unwrap();
+
+        let events = drain_events(&eq_rx);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.msg, EventMsg::TurnAborted(_))),
+            "Abort decision should emit TurnAborted"
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_for_session_adds_to_allow_list() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        wait_session_and_set_pending(
+            &codex,
+            &eq_rx,
+            crate::core::session::PendingApproval::Exec {
+                call_id: "c1".into(),
+                command: vec!["cargo".into(), "test".into()],
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+
+        sq_tx
+            .send(Submission {
+                id: "ea1".into(),
+                op: Op::ExecApproval {
+                    id: "c1".into(),
+                    turn_id: None,
+                    decision: crate::protocol::types::ReviewDecision::ApprovedForSession,
+                    custom_instructions: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+
+        // Verify the command was added to the session allow list
+        let session_guard = codex.session.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            assert!(
+                s.is_exec_allow_listed(&["cargo".into(), "test".into()])
+                    .await,
+                "ApprovedForSession should add command to allow list"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_approval_with_custom_instructions_stores_them() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        wait_session_and_set_pending(
+            &codex,
+            &eq_rx,
+            crate::core::session::PendingApproval::Exec {
+                call_id: "c1".into(),
+                command: vec!["echo".into()],
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+
+        sq_tx
+            .send(Submission {
+                id: "ea1".into(),
+                op: Op::ExecApproval {
+                    id: "c1".into(),
+                    turn_id: None,
+                    decision: crate::protocol::types::ReviewDecision::Approved,
+                    custom_instructions: Some("be more careful with file operations".into()),
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+
+        // Verify custom instructions were stored on the session
+        let session_guard = codex.session.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            let instructions = s.take_custom_instructions().await;
+            assert_eq!(
+                instructions.as_deref(),
+                Some("be more careful with file operations"),
+                "custom_instructions should be forwarded to session"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_approval_denied_emits_declined_event() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        wait_session_and_set_pending(
+            &codex,
+            &eq_rx,
+            crate::core::session::PendingApproval::Patch {
+                call_id: "p1".into(),
+                turn_id: "t1".into(),
+                changes: std::collections::HashMap::new(),
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+
+        sq_tx
+            .send(Submission {
+                id: "pa1".into(),
+                op: Op::PatchApproval {
+                    id: "p1".into(),
+                    decision: crate::protocol::types::ReviewDecision::Denied,
+                    custom_instructions: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+
+        let events = drain_events(&eq_rx);
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.msg,
+                EventMsg::PatchApplyEnd(ev) if !ev.success
+            )),
+            "Denied patch should emit PatchApplyEnd with success=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_approval_with_custom_instructions_stores_them() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        wait_session_and_set_pending(
+            &codex,
+            &eq_rx,
+            crate::core::session::PendingApproval::Patch {
+                call_id: "p1".into(),
+                turn_id: "t1".into(),
+                changes: std::collections::HashMap::new(),
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+        )
+        .await;
+
+        sq_tx
+            .send(Submission {
+                id: "pa1".into(),
+                op: Op::PatchApproval {
+                    id: "p1".into(),
+                    decision: crate::protocol::types::ReviewDecision::Approved,
+                    custom_instructions: Some("apply changes to staging only".into()),
+                },
+            })
+            .await
+            .unwrap();
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+
+        // Verify custom instructions were stored
+        let session_guard = codex.session.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            let instructions = s.take_custom_instructions().await;
+            assert_eq!(
+                instructions.as_deref(),
+                Some("apply changes to staging only"),
+                "PatchApproval custom_instructions should be forwarded to session"
+            );
+        }
+    }
+
+    // ── Dynamic tool lifecycle integration tests ───────────────
+
+    #[tokio::test]
+    async fn dynamic_tool_full_lifecycle() {
+        // Test the complete dynamic tool lifecycle:
+        // 1. Register dynamic tool on Codex
+        // 2. dispatch_tool_call detects it as dynamic
+        // 3. DynamicToolCallRequest event is sent on EQ
+        // 4. Op::DynamicToolResponse resolves the pending call
+        // 5. dispatch_tool_call returns the result
+
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        // Wait for SessionConfigured so the session is initialised
+        loop {
+            let ev = eq_rx.recv().await.unwrap();
+            if matches!(&ev.msg, EventMsg::SessionConfigured(_)) {
+                break;
+            }
+        }
+
+        // Register a dynamic tool
+        codex
+            .register_dynamic_tool(crate::protocol::types::DynamicToolSpec {
+                name: "test_dyn_tool".to_string(),
+                description: "a test dynamic tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            })
+            .await;
+
+        // Verify the tool is registered in both handler and router
+        assert!(
+            codex.dynamic_tool_handler.has_tool("test_dyn_tool"),
+            "tool should be registered in DynamicToolHandler"
+        );
+        {
+            let session_guard = codex.session.lock().await;
+            if let Some(s) = session_guard.as_ref() {
+                let router = s.tool_router().await;
+                assert!(
+                    router.has_dynamic_tool("test_dyn_tool"),
+                    "tool should be registered in ToolRouter"
+                );
+            }
+        }
+
+        // Now test the invoke + resolve cycle directly through DynamicToolHandler
+        let codex3 = Arc::clone(&codex);
+        let invoke_handle = tokio::spawn(async move {
+            codex3
+                .dynamic_tool_handler
+                .invoke(
+                    "test_dyn_tool",
+                    "turn_1",
+                    serde_json::json!({"input": "hello"}),
+                )
+                .await
+        });
+
+        // Wait for the DynamicToolCallRequest event on EQ
+        let call_id = loop {
+            let ev = eq_rx.recv().await.unwrap();
+            if let EventMsg::DynamicToolCallRequest(req) = &ev.msg {
+                assert_eq!(req.tool, "test_dyn_tool");
+                assert_eq!(req.turn_id, "turn_1");
+                break req.call_id.clone();
+            }
+        };
+
+        // Resolve via Op::DynamicToolResponse through the SQ
+        sq_tx
+            .send(Submission {
+                id: "dr1".into(),
+                op: Op::DynamicToolResponse {
+                    id: call_id,
+                    response: crate::protocol::types::DynamicToolResponse {
+                        content_items: vec![],
+                        success: true,
+                    },
+                },
+            })
+            .await
+            .unwrap();
+
+        // The invoke should complete successfully
+        let result = invoke_handle.await.unwrap().unwrap();
+        assert!(
+            result.success,
+            "dynamic tool response should indicate success"
+        );
+
+        // Shutdown
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_unregister_removes_from_both() {
+        let (sq_tx, eq_rx, codex) = make_codex();
+        let codex = Arc::new(codex);
+        let codex2 = Arc::clone(&codex);
+
+        let handle = tokio::spawn(async move { codex2.run().await });
+
+        // Wait for SessionConfigured
+        loop {
+            let ev = eq_rx.recv().await.unwrap();
+            if matches!(&ev.msg, EventMsg::SessionConfigured(_)) {
+                break;
+            }
+        }
+
+        // Register then unregister
+        codex
+            .register_dynamic_tool(crate::protocol::types::DynamicToolSpec {
+                name: "ephemeral".to_string(),
+                description: "temp".to_string(),
+                input_schema: serde_json::Value::Null,
+            })
+            .await;
+
+        codex.unregister_dynamic_tool("ephemeral").await;
+
+        // Verify removed from both
+        assert!(!codex.dynamic_tool_handler.has_tool("ephemeral"));
+        {
+            let session_guard = codex.session.lock().await;
+            if let Some(s) = session_guard.as_ref() {
+                let router = s.tool_router().await;
+                assert!(!router.has_dynamic_tool("ephemeral"));
+            }
+        }
+
+        sq_tx
+            .send(Submission {
+                id: "s1".into(),
+                op: Op::Shutdown,
+            })
+            .await
+            .unwrap();
+
+        handle.await.unwrap().unwrap();
     }
 }

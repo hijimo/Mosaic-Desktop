@@ -44,17 +44,22 @@ mod tests {
 
     fn arb_call_tool_result() -> impl Strategy<Value = Result<CallToolResult, String>> {
         prop_oneof![
-            (prop::option::of(arb_json_object()), prop::option::of(any::<bool>()))
+            (
+                prop::option::of(arb_json_object()),
+                prop::option::of(any::<bool>())
+            )
                 .prop_map(|(content, is_error)| Ok(CallToolResult { content, is_error })),
             arb_safe_string().prop_map(Err),
         ]
     }
 
+    #[allow(dead_code)]
     fn arb_network_approval_context() -> impl Strategy<Value = NetworkApprovalContext> {
         (arb_safe_string(), arb_network_approval_protocol())
             .prop_map(|(host, protocol)| NetworkApprovalContext { host, protocol })
     }
 
+    #[allow(dead_code)]
     fn arb_network_approval_protocol() -> impl Strategy<Value = NetworkApprovalProtocol> {
         prop_oneof![
             Just(NetworkApprovalProtocol::Http),
@@ -271,17 +276,29 @@ mod tests {
 
     fn arb_user_input() -> impl Strategy<Value = UserInput> {
         prop_oneof![
-            (arb_safe_string(), prop::collection::vec(arb_text_element(), 0..2))
-                .prop_map(|(text, text_elements)| UserInput::Text { text, text_elements }),
+            (
+                arb_safe_string(),
+                prop::collection::vec(arb_text_element(), 0..2)
+            )
+                .prop_map(|(text, text_elements)| UserInput::Text {
+                    text,
+                    text_elements
+                }),
             arb_safe_string().prop_map(|image_url| UserInput::Image { image_url }),
             arb_pathbuf().prop_map(|path| UserInput::LocalImage { path }),
-            (arb_safe_string(), arb_pathbuf()).prop_map(|(name, path)| UserInput::Skill { name, path }),
-            (arb_safe_string(), arb_safe_string()).prop_map(|(name, path)| UserInput::Mention { name, path }),
+            (arb_safe_string(), arb_pathbuf())
+                .prop_map(|(name, path)| UserInput::Skill { name, path }),
+            (arb_safe_string(), arb_safe_string())
+                .prop_map(|(name, path)| UserInput::Mention { name, path }),
         ]
     }
 
     fn arb_text_element() -> impl Strategy<Value = TextElement> {
-        (any::<usize>(), any::<usize>(), prop::option::of(arb_safe_string()))
+        (
+            any::<usize>(),
+            any::<usize>(),
+            prop::option::of(arb_safe_string()),
+        )
             .prop_map(|(start, end, placeholder)| TextElement {
                 byte_range: ByteRange { start, end },
                 placeholder,
@@ -415,8 +432,16 @@ mod tests {
                 .prop_map(|(cmd, name, path)| ParsedCommand::Read { cmd, name, path }),
             (arb_safe_string(), prop::option::of(arb_safe_string()))
                 .prop_map(|(cmd, path)| ParsedCommand::ListFiles { cmd, path }),
-            (arb_safe_string(), prop::option::of(arb_safe_string()), prop::option::of(arb_safe_string()))
-                .prop_map(|(cmd, query, path)| ParsedCommand::Search { cmd, query, path }),
+            (
+                arb_safe_string(),
+                prop::option::of(arb_safe_string()),
+                prop::option::of(arb_safe_string())
+            )
+                .prop_map(|(cmd, query, path)| ParsedCommand::Search {
+                    cmd,
+                    query,
+                    path
+                }),
             arb_safe_string().prop_map(|cmd| ParsedCommand::Unknown { cmd }),
         ]
     }
@@ -428,6 +453,7 @@ mod tests {
         ]
     }
 
+    #[allow(dead_code)]
     fn arb_exec_command_status() -> impl Strategy<Value = ExecCommandStatus> {
         prop_oneof![
             Just(ExecCommandStatus::Completed),
@@ -605,16 +631,28 @@ mod tests {
             (
                 arb_safe_string(),
                 prop::option::of(arb_safe_string()),
-                arb_review_decision()
+                arb_review_decision(),
+                prop::option::of(arb_safe_string())
             )
-                .prop_map(|(id, turn_id, decision)| Op::ExecApproval {
-                    id,
-                    turn_id,
-                    decision
+                .prop_map(|(id, turn_id, decision, custom_instructions)| {
+                    Op::ExecApproval {
+                        id,
+                        turn_id,
+                        decision,
+                        custom_instructions,
+                    }
                 }),
             // PatchApproval
-            (arb_safe_string(), arb_review_decision())
-                .prop_map(|(id, decision)| Op::PatchApproval { id, decision }),
+            (
+                arb_safe_string(),
+                arb_review_decision(),
+                prop::option::of(arb_safe_string())
+            )
+                .prop_map(|(id, decision, custom_instructions)| Op::PatchApproval {
+                    id,
+                    decision,
+                    custom_instructions
+                }),
             // ResolveElicitation
             (
                 arb_safe_string(),
@@ -768,8 +806,8 @@ mod tests {
                 arb_exec_command_source(),
                 prop::option::of(arb_safe_string()),
             )
-                .prop_map(|(call_id, process_id, turn_id, command, cwd, parsed_cmd, source, interaction_input)| {
-                    EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                .prop_map(
+                    |(
                         call_id,
                         process_id,
                         turn_id,
@@ -778,8 +816,19 @@ mod tests {
                         parsed_cmd,
                         source,
                         interaction_input,
-                    })
-                }),
+                    )| {
+                        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                            call_id,
+                            process_id,
+                            turn_id,
+                            command,
+                            cwd,
+                            parsed_cmd,
+                            source,
+                            interaction_input,
+                        })
+                    }
+                ),
             // ExecCommandEnd
             (
                 arb_safe_string(),
@@ -826,9 +875,18 @@ mod tests {
                     }
                 ),
             // ExecCommandOutputDelta
-            (arb_safe_string(), arb_safe_string(), prop::option::of(arb_exec_output_stream())).prop_map(|(call_id, delta, stream)| {
-                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent { call_id, delta, stream })
-            }),
+            (
+                arb_safe_string(),
+                arb_safe_string(),
+                prop::option::of(arb_exec_output_stream())
+            )
+                .prop_map(|(call_id, delta, stream)| {
+                    EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                        call_id,
+                        delta,
+                        stream,
+                    })
+                }),
             // McpToolCallBegin
             (arb_safe_string(), arb_mcp_invocation()).prop_map(|(call_id, invocation)| {
                 EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
@@ -837,16 +895,20 @@ mod tests {
                 })
             }),
             // McpToolCallEnd
-            (arb_safe_string(), arb_mcp_invocation(), arb_duration(), arb_call_tool_result()).prop_map(
-                |(call_id, invocation, duration, result)| {
+            (
+                arb_safe_string(),
+                arb_mcp_invocation(),
+                arb_duration(),
+                arb_call_tool_result()
+            )
+                .prop_map(|(call_id, invocation, duration, result)| {
                     EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                         call_id,
                         invocation,
                         duration,
                         result,
                     })
-                }
-            ),
+                }),
             // McpStartupUpdate
             (arb_safe_string(), arb_mcp_startup_status()).prop_map(|(server, status)| {
                 EventMsg::McpStartupUpdate(McpStartupUpdateEvent { server, status })
@@ -985,22 +1047,24 @@ mod tests {
                 prop::option::of(arb_safe_string()),
                 prop::collection::vec(arb_parsed_command(), 0..2),
             )
-                .prop_map(|(call_id, approval_id, turn_id, command, cwd, reason, parsed_cmd)| {
-                    EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                        call_id,
-                        approval_id,
-                        turn_id,
-                        command,
-                        cwd,
-                        reason,
-                        network_approval_context: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        additional_permissions: None,
-                        available_decisions: None,
-                        parsed_cmd,
-                    })
-                }),
+                .prop_map(
+                    |(call_id, approval_id, turn_id, command, cwd, reason, parsed_cmd)| {
+                        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                            call_id,
+                            approval_id,
+                            turn_id,
+                            command,
+                            cwd,
+                            reason,
+                            network_approval_context: None,
+                            proposed_execpolicy_amendment: None,
+                            proposed_network_policy_amendments: None,
+                            additional_permissions: None,
+                            available_decisions: None,
+                            parsed_cmd,
+                        })
+                    }
+                ),
             // ApplyPatchApprovalRequest
             (
                 arb_safe_string(),
@@ -1085,7 +1149,16 @@ mod tests {
                 prop::option::of(arb_duration()),
             )
                 .prop_map(
-                    |(call_id, turn_id, tool, arguments, content_items, success, error, duration)| {
+                    |(
+                        call_id,
+                        turn_id,
+                        tool,
+                        arguments,
+                        content_items,
+                        success,
+                        error,
+                        duration,
+                    )| {
                         EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
                             call_id,
                             turn_id,

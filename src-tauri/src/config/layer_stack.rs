@@ -157,8 +157,10 @@ mod tests {
             tool_filter: None,
         };
 
-        let mut config_user = ConfigToml::default();
-        config_user.mcp_servers = HashMap::from([("srv-a".into(), server_a.clone())]);
+        let config_user = ConfigToml {
+            mcp_servers: HashMap::from([("srv-a".into(), server_a.clone())]),
+            ..Default::default()
+        };
 
         stack.add_layer(ConfigLayer::User, config_user);
         let merged = stack.merge();
@@ -197,12 +199,16 @@ mod tests {
     #[test]
     fn new_fields_merge_correctly() {
         let mut stack = ConfigLayerStack::new();
-        let mut c1 = ConfigToml::default();
-        c1.model_reasoning_effort = Some(Effort::Low);
-        c1.web_search = Some(crate::protocol::types::WebSearchMode::Cached);
+        let c1 = ConfigToml {
+            model_reasoning_effort: Some(Effort::Low),
+            web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+            ..Default::default()
+        };
 
-        let mut c2 = ConfigToml::default();
-        c2.model_reasoning_effort = Some(Effort::High);
+        let c2 = ConfigToml {
+            model_reasoning_effort: Some(Effort::High),
+            ..Default::default()
+        };
 
         // Session (30) > System (10), so Session wins
         stack.add_layer(ConfigLayer::System, c2);

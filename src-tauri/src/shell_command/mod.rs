@@ -93,7 +93,7 @@ pub fn classify_command(tokens: &[String]) -> ParsedCommand {
 
     match cmd_name {
         "cat" | "head" | "tail" | "less" | "more" | "bat" => {
-            let path = tokens.get(1).map(|p| PathBuf::from(p));
+            let path = tokens.get(1).map(PathBuf::from);
             let name = path
                 .as_ref()
                 .and_then(|p| p.file_name())
@@ -174,7 +174,7 @@ pub fn is_dangerous_command(tokens: &[String]) -> bool {
     }
     // sudo with dangerous subcommand
     if cmd == "sudo" && tokens.len() > 1 {
-        return is_dangerous_command(&tokens[1..].to_vec());
+        return is_dangerous_command(&tokens[1..]);
     }
     false
 }

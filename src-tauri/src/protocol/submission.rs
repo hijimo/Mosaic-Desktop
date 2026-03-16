@@ -63,10 +63,16 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
         decision: ReviewDecision,
+        /// Optional custom instructions to forward to the Agent for the next turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_instructions: Option<String>,
     },
     PatchApproval {
         id: String,
         decision: ReviewDecision,
+        /// Optional custom instructions to forward to the Agent for the next turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_instructions: Option<String>,
     },
     ResolveElicitation {
         server_name: String,

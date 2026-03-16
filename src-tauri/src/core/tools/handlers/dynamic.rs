@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{oneshot, Mutex};
@@ -15,48 +14,58 @@ use crate::protocol::types::{DynamicToolCallRequest, DynamicToolResponse, Dynami
 /// 1. A `DynamicToolCallRequest` event is sent on the EQ.
 /// 2. The handler waits for a matching `DynamicToolResponse` (keyed by `call_id`).
 /// 3. The response content is returned as the tool result.
+///
+/// All fields use interior mutability so the handler can be shared via `Arc`
+/// without an outer `Mutex`, avoiding deadlocks between `invoke` (which awaits
+/// a oneshot) and `resolve_call` (which completes the oneshot).
 pub struct DynamicToolHandler {
-    specs: HashMap<String, DynamicToolSpec>,
+    /// Registered tool specs. Uses `std::sync::Mutex` so `matches_kind` (sync) can access it.
+    specs: std::sync::Mutex<HashMap<String, DynamicToolSpec>>,
     tx_event: async_channel::Sender<Event>,
     /// Pending call waiters: call_id → oneshot sender for the response.
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<DynamicToolResponse>>>>,
+    pending: Mutex<HashMap<String, oneshot::Sender<DynamicToolResponse>>>,
     /// Counter for generating unique call IDs.
-    next_call_id: Arc<Mutex<u64>>,
+    next_call_id: Mutex<u64>,
 }
 
 impl DynamicToolHandler {
     pub fn new(tx_event: async_channel::Sender<Event>) -> Self {
         Self {
-            specs: HashMap::new(),
+            specs: std::sync::Mutex::new(HashMap::new()),
             tx_event,
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            next_call_id: Arc::new(Mutex::new(0)),
+            pending: Mutex::new(HashMap::new()),
+            next_call_id: Mutex::new(0),
         }
     }
 
     /// Register a dynamic tool spec. Immediately available for invocation.
-    pub fn register_tool(&mut self, spec: DynamicToolSpec) {
-        self.specs.insert(spec.name.clone(), spec);
+    pub fn register_tool(&self, spec: DynamicToolSpec) {
+        let mut specs = self.specs.lock().unwrap();
+        specs.insert(spec.name.clone(), spec);
     }
 
     /// Remove a registered dynamic tool.
-    pub fn unregister_tool(&mut self, name: &str) -> Option<DynamicToolSpec> {
-        self.specs.remove(name)
+    pub fn unregister_tool(&self, name: &str) -> Option<DynamicToolSpec> {
+        let mut specs = self.specs.lock().unwrap();
+        specs.remove(name)
     }
 
-    /// Get a registered tool spec by name.
-    pub fn get_spec(&self, name: &str) -> Option<&DynamicToolSpec> {
-        self.specs.get(name)
+    /// Get a registered tool spec by name (returns a clone).
+    pub fn get_spec(&self, name: &str) -> Option<DynamicToolSpec> {
+        let specs = self.specs.lock().unwrap();
+        specs.get(name).cloned()
     }
 
-    /// List all registered dynamic tool specs.
-    pub fn registered_tools(&self) -> Vec<&DynamicToolSpec> {
-        self.specs.values().collect()
+    /// List all registered dynamic tool specs (returns clones).
+    pub fn registered_tools(&self) -> Vec<DynamicToolSpec> {
+        let specs = self.specs.lock().unwrap();
+        specs.values().cloned().collect()
     }
 
     /// Check if a tool with the given name is registered.
     pub fn has_tool(&self, name: &str) -> bool {
-        self.specs.contains_key(name)
+        let specs = self.specs.lock().unwrap();
+        specs.contains_key(name)
     }
 
     /// Invoke a dynamic tool: send the request event and wait for the response.
@@ -66,11 +75,14 @@ impl DynamicToolHandler {
         turn_id: &str,
         args: serde_json::Value,
     ) -> Result<DynamicToolResponse, CodexError> {
-        if !self.specs.contains_key(tool_name) {
-            return Err(CodexError::new(
-                ErrorCode::ToolExecutionFailed,
-                format!("dynamic tool not registered: {tool_name}"),
-            ));
+        {
+            let specs = self.specs.lock().unwrap();
+            if !specs.contains_key(tool_name) {
+                return Err(CodexError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    format!("dynamic tool not registered: {tool_name}"),
+                ));
+            }
         }
 
         let call_id = {
@@ -175,7 +187,10 @@ impl DynamicToolHandler {
 impl ToolHandler for DynamicToolHandler {
     fn matches_kind(&self, kind: &ToolKind) -> bool {
         match kind {
-            ToolKind::Dynamic(name) => self.specs.contains_key(name),
+            ToolKind::Dynamic(name) => {
+                let specs = self.specs.lock().unwrap();
+                specs.contains_key(name)
+            }
             _ => false,
         }
     }
@@ -203,6 +218,8 @@ impl ToolHandler for DynamicToolHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn make_handler() -> (DynamicToolHandler, async_channel::Receiver<Event>) {
@@ -213,7 +230,7 @@ mod tests {
 
     #[test]
     fn register_and_query() {
-        let (mut handler, _rx) = make_handler();
+        let (handler, _rx) = make_handler();
         let spec = DynamicToolSpec {
             name: "my_tool".to_string(),
             description: "test".to_string(),
@@ -227,7 +244,7 @@ mod tests {
 
     #[test]
     fn unregister_tool() {
-        let (mut handler, _rx) = make_handler();
+        let (handler, _rx) = make_handler();
         handler.register_tool(DynamicToolSpec {
             name: "tmp".to_string(),
             description: String::new(),
@@ -241,7 +258,7 @@ mod tests {
 
     #[test]
     fn matches_kind_only_dynamic() {
-        let (mut handler, _rx) = make_handler();
+        let (handler, _rx) = make_handler();
         handler.register_tool(DynamicToolSpec {
             name: "dyn1".to_string(),
             description: String::new(),
@@ -264,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_sends_request_event_and_resolve_completes() {
-        let (mut handler, rx) = make_handler();
+        let (handler, rx) = make_handler();
         handler.register_tool(DynamicToolSpec {
             name: "echo".to_string(),
             description: "echo tool".to_string(),

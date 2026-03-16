@@ -34,7 +34,9 @@ pub enum PendingApproval {
     },
     Patch {
         call_id: String,
-        path: PathBuf,
+        turn_id: String,
+        changes: std::collections::HashMap<PathBuf, crate::protocol::types::FileChange>,
+        cwd: PathBuf,
     },
 }
 
@@ -120,6 +122,10 @@ pub struct SessionState {
     pub pending_approval: Option<PendingApproval>,
     /// Current turn context (set when a turn starts).
     pub turn_context: Option<TurnContext>,
+    /// Custom instructions from a ReviewDecision, forwarded to the Agent on the next turn.
+    pub custom_instructions: Option<String>,
+    /// Session-level command allow list (command prefixes approved via `ApprovedForSession`).
+    pub exec_allow_list: Vec<Vec<String>>,
 }
 
 impl SessionState {
@@ -129,6 +135,8 @@ impl SessionState {
             turn_active: false,
             pending_approval: None,
             turn_context: None,
+            custom_instructions: None,
+            exec_allow_list: Vec::new(),
         }
     }
 }
@@ -217,8 +225,10 @@ impl Session {
 
     /// Set the model by updating the session-level config layer.
     pub fn set_model(&mut self, model: String) {
-        let mut session_config = ConfigToml::default();
-        session_config.model = Some(model);
+        let session_config = ConfigToml {
+            model: Some(model),
+            ..Default::default()
+        };
         self.config
             .add_layer(crate::config::ConfigLayer::Session, session_config);
     }
@@ -337,6 +347,85 @@ impl Session {
         Ok(())
     }
 
+    // ── History compaction ────────────────────────────────────────
+
+    /// Compact the conversation history using the given truncation policy.
+    ///
+    /// For `KeepRecent` and `KeepRecentTokens`, truncation is applied directly.
+    /// For `AutoCompact`, the provided `summarize_fn` is called to generate a
+    /// summary of older messages.
+    ///
+    /// Emits a `ContextCompacted` event if the history was actually shortened.
+    /// If the history is already within the policy threshold, this is a no-op
+    /// (idempotency).
+    pub async fn compact_history<F, Fut>(
+        &self,
+        policy: &crate::core::truncation::TruncationPolicy,
+        summarize_fn: Option<F>,
+    ) -> Result<bool, CodexError>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: std::future::Future<Output = Result<String, CodexError>>,
+    {
+        let current_history = {
+            let state = self.state.lock().await;
+            state.history.clone()
+        };
+
+        let result = crate::core::compact::compact(&current_history, policy, summarize_fn).await?;
+        let changed = result.changed;
+
+        if changed {
+            let mut state = self.state.lock().await;
+            state.history = result.history;
+        }
+
+        if changed {
+            let _ = self
+                .tx_event
+                .send(Event {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    msg: EventMsg::ContextCompacted(crate::protocol::event::ContextCompactedEvent),
+                })
+                .await;
+        }
+
+        Ok(changed)
+    }
+
+    /// Compact the conversation history by calling a remote API endpoint.
+    pub async fn compact_history_remote(
+        &self,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<bool, CodexError> {
+        let current_history = {
+            let state = self.state.lock().await;
+            state.history.clone()
+        };
+
+        let result =
+            crate::core::compact::compact_remote(&current_history, endpoint, model).await?;
+        let changed = result.changed;
+
+        if changed {
+            let mut state = self.state.lock().await;
+            state.history = result.history;
+        }
+
+        if changed {
+            let _ = self
+                .tx_event
+                .send(Event {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    msg: EventMsg::ContextCompacted(crate::protocol::event::ContextCompactedEvent),
+                })
+                .await;
+        }
+
+        Ok(changed)
+    }
+
     // ── Pending approval ─────────────────────────────────────────
 
     /// Set a pending approval request.
@@ -367,6 +456,38 @@ impl Session {
 
     pub fn tx_event(&self) -> &async_channel::Sender<Event> {
         &self.tx_event
+    }
+
+    // ── ReviewDecision semantics ─────────────────────────────────
+
+    /// Store custom instructions from a ReviewDecision to be forwarded to the
+    /// Agent on the next turn.
+    pub async fn set_custom_instructions(&self, instructions: String) {
+        let mut state = self.state.lock().await;
+        state.custom_instructions = Some(instructions);
+    }
+
+    /// Take (consume) any pending custom instructions.
+    pub async fn take_custom_instructions(&self) -> Option<String> {
+        let mut state = self.state.lock().await;
+        state.custom_instructions.take()
+    }
+
+    /// Add a command prefix to the session-level allow list so that future
+    /// executions of commands matching this prefix skip approval.
+    pub async fn add_to_exec_allow_list(&self, prefix: Vec<String>) {
+        let mut state = self.state.lock().await;
+        if !state.exec_allow_list.contains(&prefix) {
+            state.exec_allow_list.push(prefix);
+        }
+    }
+
+    /// Check whether a command is covered by the session-level allow list.
+    pub async fn is_exec_allow_listed(&self, command: &[String]) -> bool {
+        let state = self.state.lock().await;
+        state.exec_allow_list.iter().any(|prefix| {
+            command.len() >= prefix.len() && command.iter().zip(prefix.iter()).all(|(a, b)| a == b)
+        })
     }
 }
 
@@ -656,5 +777,72 @@ mod tests {
 
         // After take, should be None
         assert!(session.take_pending_approval().await.is_none());
+    }
+
+    // ── ReviewDecision semantics tests ───────────────────────────
+
+    #[tokio::test]
+    async fn custom_instructions_set_and_take() {
+        let (session, _rx) = make_session();
+
+        // Initially no custom instructions
+        assert!(session.take_custom_instructions().await.is_none());
+
+        session
+            .set_custom_instructions("focus on error handling".into())
+            .await;
+        let instructions = session.take_custom_instructions().await;
+        assert_eq!(instructions.as_deref(), Some("focus on error handling"));
+
+        // After take, should be None (consumed)
+        assert!(session.take_custom_instructions().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn exec_allow_list_add_and_check() {
+        let (session, _rx) = make_session();
+
+        // Not allow-listed initially
+        assert!(
+            !session
+                .is_exec_allow_listed(&["ls".into(), "-la".into()])
+                .await
+        );
+
+        session.add_to_exec_allow_list(vec!["ls".into()]).await;
+
+        // Prefix match: "ls -la" matches prefix ["ls"]
+        assert!(
+            session
+                .is_exec_allow_listed(&["ls".into(), "-la".into()])
+                .await
+        );
+        // Exact match
+        assert!(session.is_exec_allow_listed(&["ls".into()]).await);
+        // Non-matching command
+        assert!(!session.is_exec_allow_listed(&["rm".into()]).await);
+    }
+
+    #[tokio::test]
+    async fn exec_allow_list_deduplicates() {
+        let (session, _rx) = make_session();
+
+        session.add_to_exec_allow_list(vec!["echo".into()]).await;
+        session.add_to_exec_allow_list(vec!["echo".into()]).await;
+
+        let state = session.state.lock().await;
+        assert_eq!(state.exec_allow_list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn exec_allow_list_empty_command_not_matched() {
+        let (session, _rx) = make_session();
+
+        session
+            .add_to_exec_allow_list(vec!["git".into(), "status".into()])
+            .await;
+
+        // Empty command should not match any prefix
+        assert!(!session.is_exec_allow_listed(&[]).await);
     }
 }

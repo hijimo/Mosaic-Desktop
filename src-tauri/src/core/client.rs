@@ -1,15 +1,14 @@
 //! Minimal OpenAI Responses API client.
 //!
-//! Sends a POST to `/v1/responses` with `stream: true` and yields parsed SSE events.
+//! Sends a POST to `/responses` with `stream: true` and yields parsed SSE events.
 //! Only the event types needed to drive `run_turn()` are handled; everything else is ignored.
 
 use std::collections::HashMap;
 
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
-use futures::TryStreamExt;
-use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use crate::protocol::error::CodexError;
 use crate::protocol::error::ErrorCode;
@@ -25,8 +24,6 @@ pub enum ResponseEvent {
     Done { response_id: Option<String> },
     /// An error from the API.
     Failed { code: String, message: String },
-    /// Intermediate event to ignore (response.created, response.in_progress, etc.).
-    Skip,
 }
 
 /// Minimal request body for the Responses API.
@@ -42,9 +39,6 @@ struct CreateResponseRequest<'a> {
 }
 
 /// Stream events from the Responses API for a single turn.
-///
-/// `history` is the full conversation history as Responses API input items.
-/// Returns a stream of `ResponseEvent`s.
 pub async fn stream_response(
     url: &str,
     api_key: &str,
@@ -54,7 +48,6 @@ pub async fn stream_response(
     history: Vec<Value>,
     previous_response_id: Option<&str>,
 ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
-
     let body = CreateResponseRequest {
         model,
         input: history,
@@ -73,10 +66,7 @@ pub async fn stream_response(
     }
 
     let resp = req.send().await.map_err(|e| {
-        CodexError::new(
-            ErrorCode::InternalError,
-            format!("HTTP request failed: {e}"),
-        )
+        CodexError::new(ErrorCode::InternalError, format!("HTTP request failed: {e}"))
     })?;
 
     let status = resp.status();
@@ -88,68 +78,108 @@ pub async fn stream_response(
         ));
     }
 
-    let byte_stream = resp.bytes_stream();
+    // Use channel + spawn (like the reference impl) so SSE parse errors don't
+    // silently terminate the stream — we get an explicit error event instead.
+    let (tx, rx) = mpsc::channel::<Result<ResponseEvent, CodexError>>(256);
 
-    // Debug: log raw bytes
-    let byte_stream = byte_stream.inspect(|chunk| {
-        if let Ok(bytes) = chunk {
-            eprintln!("[RAW] {} bytes: {}", bytes.len(), String::from_utf8_lossy(&bytes[..bytes.len().min(300)]));
+    tokio::spawn(async move {
+        let mut stream = resp.bytes_stream().eventsource();
+
+        loop {
+            match stream.next().await {
+                None => {
+                    // Stream closed before response.completed — send error so
+                    // the consumer knows the turn ended unexpectedly.
+                    let _ = tx
+                        .send(Err(CodexError::new(
+                            ErrorCode::InternalError,
+                            "stream closed before response.completed".to_string(),
+                        )))
+                        .await;
+                    return;
+                }
+                Some(Err(e)) => {
+                    let _ = tx
+                        .send(Err(CodexError::new(
+                            ErrorCode::InternalError,
+                            format!("SSE stream error: {e}"),
+                        )))
+                        .await;
+                    return;
+                }
+                Some(Ok(event)) => {
+                    eprintln!(
+                        "[SSE] event={:?} data={}",
+                        event.event,
+                        &event.data[..event.data.len().min(300)]
+                    );
+
+                    if event.data.is_empty() || event.data == "[DONE]" {
+                        continue;
+                    }
+
+                    let json: Value = match serde_json::from_str(&event.data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("[SSE] parse error: {e}");
+                            continue;
+                        }
+                    };
+
+                    let kind = json.get("type").and_then(Value::as_str).unwrap_or("");
+                    eprintln!("[SSE] kind={kind:?}");
+
+                    let parsed = match kind {
+                        "response.output_text.delta" => {
+                            let delta = json
+                                .get("delta")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            Some(Ok(ResponseEvent::OutputTextDelta { delta }))
+                        }
+                        "response.output_item.done" => {
+                            let item = json.get("item").cloned().unwrap_or(Value::Null);
+                            Some(Ok(ResponseEvent::OutputItemDone { item }))
+                        }
+                        "response.completed" | "response.done" => {
+                            let response_id = json
+                                .get("response")
+                                .and_then(|r| r.get("id"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            let ev = ResponseEvent::Done { response_id };
+                            let _ = tx.send(Ok(ev)).await;
+                            return; // stream complete, exit task
+                        }
+                        "response.failed" => {
+                            let error = json.get("response").and_then(|r| r.get("error"));
+                            let code = error
+                                .and_then(|e| e.get("code"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let message = error
+                                .and_then(|e| e.get("message"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown error")
+                                .to_string();
+                            Some(Ok(ResponseEvent::Failed { code, message }))
+                        }
+                        _ => None, // ignore intermediate events
+                    };
+
+                    if let Some(ev) = parsed {
+                        if tx.send(ev).await.is_err() {
+                            return; // receiver dropped
+                        }
+                    }
+                }
+            }
         }
     });
 
-    let event_stream = byte_stream.eventsource();
-
-    let parsed = event_stream.map(|result| match result {
-        Err(e) => Err(CodexError::new(
-            ErrorCode::InternalError,
-            format!("SSE stream error: {e}"),
-        )),
-        Ok(event) => parse_sse_event(&event.event, &event.data),
-    });
-
-    Ok(parsed)
-}
-
-fn parse_sse_event(_event_type: &str, data: &str) -> Result<ResponseEvent, CodexError> {
-    if data.is_empty() || data == "[DONE]" {
-        return Ok(ResponseEvent::Done { response_id: None });
-    }
-
-    eprintln!("[SSE] event_type={:?} data={}", _event_type, &data[..data.len().min(200)]);
-
-    let json: Value = serde_json::from_str(data).map_err(|e| {
-        CodexError::new(ErrorCode::InternalError, format!("Failed to parse SSE data: {e}"))
-    })?;
-
-    // Event type is in the JSON `type` field (Azure omits the SSE `event:` line)
-    let kind = json.get("type").and_then(Value::as_str).unwrap_or("");
-    eprintln!("[SSE] parsed kind={:?}", kind);
-
-    match kind {
-        "response.output_text.delta" => {
-            let delta = json.get("delta").and_then(Value::as_str).unwrap_or("").to_string();
-            Ok(ResponseEvent::OutputTextDelta { delta })
-        }
-        "response.output_item.done" => {
-            let item = json.get("item").cloned().unwrap_or(Value::Null);
-            Ok(ResponseEvent::OutputItemDone { item })
-        }
-        "response.completed" | "response.done" => {
-            let response_id = json
-                .get("response")
-                .and_then(|r| r.get("id"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            Ok(ResponseEvent::Done { response_id })
-        }
-        "response.failed" => {
-            let error = json.get("response").and_then(|r| r.get("error"));
-            let code = error.and_then(|e| e.get("code")).and_then(Value::as_str).unwrap_or("unknown").to_string();
-            let message = error.and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("unknown error").to_string();
-            Ok(ResponseEvent::Failed { code, message })
-        }
-        _ => Ok(ResponseEvent::Skip),
-    }
+    Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
 /// Convert a `ResponseInputItem` from the session history into a Responses API input item.

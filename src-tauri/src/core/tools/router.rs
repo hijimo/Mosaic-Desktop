@@ -5,6 +5,29 @@ use crate::core::tools::{ToolInfo, ToolKind, ToolRegistry};
 use crate::protocol::error::{CodexError, ErrorCode};
 use crate::protocol::types::DynamicToolSpec;
 
+/// Result of a tool routing attempt.
+pub enum RouteResult {
+    /// Tool was handled by a built-in or MCP handler; contains the result.
+    Handled(Result<serde_json::Value, CodexError>),
+    /// Tool is a registered dynamic tool that requires external invocation
+    /// via the DynamicToolCallRequest/DynamicToolResponse protocol.
+    /// Contains the `DynamicToolSpec` name for the caller to initiate the protocol.
+    DynamicTool(String),
+    /// No handler found for the tool.
+    NotFound(String),
+}
+
+impl std::fmt::Debug for RouteResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteResult::Handled(Ok(v)) => write!(f, "Handled(Ok({v}))"),
+            RouteResult::Handled(Err(e)) => write!(f, "Handled(Err({}))", e.message),
+            RouteResult::DynamicTool(name) => write!(f, "DynamicTool({name})"),
+            RouteResult::NotFound(name) => write!(f, "NotFound({name})"),
+        }
+    }
+}
+
 /// Routes tool calls to the correct handler by priority:
 /// 1. Built-in ToolRegistry handlers
 /// 2. MCP tools (via McpConnectionManager)
@@ -27,16 +50,12 @@ impl ToolRouter {
     /// Route a tool call to the appropriate handler.
     ///
     /// Priority: built-in → MCP → dynamic.
-    /// Returns `ToolExecutionFailed` if no handler is found.
-    pub async fn route_tool_call(
-        &self,
-        tool_name: &str,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value, CodexError> {
+    /// Returns `RouteResult::NotFound` if no handler is found.
+    pub async fn route_tool_call(&self, tool_name: &str, args: serde_json::Value) -> RouteResult {
         // 1. Try built-in registry
         let builtin_kind = ToolKind::Builtin(tool_name.to_string());
         if self.registry.find(&builtin_kind).is_some() {
-            return self.registry.dispatch(&builtin_kind, args).await;
+            return RouteResult::Handled(self.registry.dispatch(&builtin_kind, args).await);
         }
 
         // 2. Try MCP tool (format: mcp__{server}__{tool})
@@ -46,40 +65,24 @@ impl ToolRouter {
                 tool: tool.to_string(),
             };
             if self.registry.find(&mcp_kind).is_some() {
-                return self.registry.dispatch(&mcp_kind, args).await;
+                return RouteResult::Handled(self.registry.dispatch(&mcp_kind, args).await);
             }
             // Check if the MCP server is connected even without a registry entry
             let connected = self.mcp_manager.connected_servers().await;
             if connected.contains(&server.to_string()) {
-                // Server is connected — delegate would happen here in full impl.
-                // For now, return a placeholder indicating the tool was found on MCP.
-                return Err(CodexError::new(
+                return RouteResult::Handled(Err(CodexError::new(
                     ErrorCode::ToolExecutionFailed,
                     format!("MCP tool '{tool_name}' found on server '{server}' but call delegation is not yet implemented"),
-                ));
+                )));
             }
         }
 
-        // 3. Try dynamic tools
+        // 3. Try dynamic tools — signal the caller to use the DynamicToolHandler protocol
         if self.dynamic_tools.contains_key(tool_name) {
-            let dynamic_kind = ToolKind::Dynamic(tool_name.to_string());
-            if self.registry.find(&dynamic_kind).is_some() {
-                return self.registry.dispatch(&dynamic_kind, args).await;
-            }
-            // Dynamic tool is registered but has no handler in registry yet —
-            // the caller (codex.rs) is responsible for sending DynamicToolCallRequest
-            // and awaiting DynamicToolResponse. Return a sentinel error so the caller
-            // knows to initiate the dynamic tool call protocol.
-            return Err(CodexError::new(
-                ErrorCode::ToolExecutionFailed,
-                format!("dynamic tool '{tool_name}' requires external invocation via DynamicToolCallRequest"),
-            ));
+            return RouteResult::DynamicTool(tool_name.to_string());
         }
 
-        Err(CodexError::new(
-            ErrorCode::ToolExecutionFailed,
-            format!("no handler found for tool: {tool_name}"),
-        ))
+        RouteResult::NotFound(tool_name.to_string())
     }
 
     /// Register a dynamic tool spec. The tool becomes immediately available for routing.
@@ -193,19 +196,20 @@ mod tests {
         let router = make_router_with_builtin("read_file");
         let result = router
             .route_tool_call("read_file", serde_json::json!({"path": "/tmp"}))
-            .await
-            .unwrap();
-        assert_eq!(result["handled_by"], "read_file");
+            .await;
+        match result {
+            RouteResult::Handled(Ok(value)) => assert_eq!(value["handled_by"], "read_file"),
+            other => panic!("expected Handled(Ok), got: {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn unknown_tool_returns_error() {
+    async fn unknown_tool_returns_not_found() {
         let router = ToolRouter::new(ToolRegistry::new(), McpConnectionManager::new());
         let result = router
             .route_tool_call("nonexistent", serde_json::Value::Null)
             .await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::ToolExecutionFailed);
+        assert!(matches!(result, RouteResult::NotFound(_)));
     }
 
     #[test]
@@ -268,5 +272,40 @@ mod tests {
         assert_eq!(parse_mcp_tool_name("mcp__"), None);
         assert_eq!(parse_mcp_tool_name("mcp____tool"), None);
         assert_eq!(parse_mcp_tool_name("mcp__server__"), None);
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_returns_dynamic_route_result() {
+        let mut router = ToolRouter::new(ToolRegistry::new(), McpConnectionManager::new());
+        router.register_dynamic_tool(DynamicToolSpec {
+            name: "my_dyn".to_string(),
+            description: "dynamic".to_string(),
+            input_schema: serde_json::json!({}),
+        });
+        let result = router
+            .route_tool_call("my_dyn", serde_json::json!({"x": 1}))
+            .await;
+        match result {
+            RouteResult::DynamicTool(name) => assert_eq!(name, "my_dyn"),
+            other => panic!("expected DynamicTool, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn builtin_takes_priority_over_dynamic() {
+        let mut router = make_router_with_builtin("overlap");
+        router.register_dynamic_tool(DynamicToolSpec {
+            name: "overlap".to_string(),
+            description: "also dynamic".to_string(),
+            input_schema: serde_json::json!({}),
+        });
+        let result = router
+            .route_tool_call("overlap", serde_json::json!({}))
+            .await;
+        // Built-in should win
+        match result {
+            RouteResult::Handled(Ok(value)) => assert_eq!(value["handled_by"], "overlap"),
+            other => panic!("expected Handled(Ok) from builtin, got: {other:?}"),
+        }
     }
 }

@@ -464,8 +464,8 @@
 - [x] 16. 检查点 — 核心引擎完成
   - 确保所有测试通过，如有问题请向用户确认。
 
-- [ ] 17. 钩子系统（Hooks System）
-  - [ ] 17.1 实现 HookEvent、HookResult 和 HookRegistry（core/hooks.rs）
+- [x] 17. 钩子系统（Hooks System）
+  - [x] 17.1 实现 HookEvent、HookResult 和 HookRegistry（core/hooks.rs）
     - 定义 HookEvent 枚举（AfterAgent, AfterToolUse），使用 camelCase 序列化
     - 定义 HookResult 枚举（Success, FailedContinue, FailedAbort）
     - 定义 HookHandler async trait（execute 方法）
@@ -487,8 +487,8 @@
     - 验证 Success 继续、FailedContinue 记录错误继续、FailedAbort 停止并发送 Error
     - **Validates: Requirements 19.4**
 
-- [ ] 18. 补丁应用系统（Patch Application）
-  - [ ] 18.1 实现补丁应用逻辑（core/patch.rs）
+- [x] 18. 补丁应用系统（Patch Application）
+  - [x] 18.1 实现补丁应用逻辑（core/patch.rs）
     - 实现补丁应用前发送 PatchApplyBegin 事件（含目标文件路径）
     - 成功时发送 PatchApplyEnd（success=true）
     - 失败时发送 PatchApplyEnd（success=false）和 Error 事件
@@ -505,8 +505,8 @@
     - 验证 Always/UnlessAllowListed 下请求审批
     - **Validates: Requirements 20.4**
 
-- [ ] 19. 审批决策语义（ReviewDecision）
-  - [ ] 19.1 实现 ReviewDecision 语义逻辑（core/codex.rs 集成）
+- [x] 19. 审批决策语义（ReviewDecision）
+  - [x] 19.1 实现 ReviewDecision 语义逻辑（core/codex.rs 集成）
     - approved=false 取消操作，不论其他字段
     - approved=true + always_approve=true 将命令模式添加到允许列表
     - custom_instructions 转发给 Agent 用于下一轮次
@@ -517,21 +517,21 @@
     - 验证三种语义场景的正确行为
     - **Validates: Requirements 28.1, 28.2, 28.3**
 
-- [ ] 20. 对话历史截断与压缩
-  - [ ] 20.1 实现 TruncationPolicy（core/truncation.rs）
+- [x] 20. 对话历史截断与压缩
+  - [x] 20.1 实现 TruncationPolicy（core/truncation.rs）
     - 定义 TruncationPolicy 枚举（KeepRecent, KeepRecentTokens, AutoCompact）
     - KeepRecent：保留最近 N 条消息
     - KeepRecentTokens：从末尾保留累计 token 数不超过 N 的消息
     - _Requirements: 24.1, 24.2, 24.3_
 
-  - [ ] 20.2 实现 compact 和 compact_remote 函数（core/compact.rs）
+  - [x] 20.2 实现 compact 和 compact_remote 函数（core/compact.rs）
     - compact：使用 SUMMARIZATION_PROMPT 模板调用模型生成摘要
     - compact_remote：调用远程 API 进行压缩
     - 历史实际缩短时发送 Compacted 事件（含 new_length）
     - 已压缩历史再次调用 compact 返回不变（幂等性）
     - _Requirements: 24.4, 24.5, 24.6, 24.7_
 
-  - [ ] 20.3 集成 Session 的 compact_history 方法（core/session.rs）
+  - [x] 20.3 集成 Session 的 compact_history 方法（core/session.rs）
     - 在 Session 中集成截断和压缩逻辑
     - _Requirements: 24.1_
 
@@ -545,11 +545,11 @@
     - 验证已压缩历史再次 compact 不变，不发送 Compacted 事件
     - **Validates: Requirements 24.7**
 
-- [ ] 21. 检查点 — 核心功能模块完成
+- [x] 21. 检查点 — 核心功能模块完成
   - 确保所有测试通过，如有问题请向用户确认。
 
-- [ ] 22. MCP 客户端集成
-  - [ ] 22.1 实现 McpConnectionManager（core/mcp_client.rs）
+- [x] 22. MCP 客户端集成
+  - [x] 22.1 实现 McpConnectionManager（core/mcp_client.rs）
     - 定义 McpConnectionManager 结构体（connections: HashMap<String, McpConnection>）
     - 实现 connect 方法，支持 Stdio、HTTP、OAuth 三种传输协议
     - OAuth 传输：先从 token_url 获取 bearer token，再建立 MCP 会话
@@ -558,7 +558,7 @@
     - 连接失败发送 Error 事件，标记连接为不可用
     - _Requirements: 14.1, 14.2, 14.7, 14.9, 14.10_
 
-  - [ ] 22.2 实现工具发现和调用（core/mcp_client.rs）
+  - [x] 22.2 实现工具发现和调用（core/mcp_client.rs）
     - 新连接建立时自动调用 tools/list 执行工具发现
     - 使用 `mcp__{server}__{tool}` 格式限定工具名称，64 字符限制
     - 超过 64 字符时应用 SHA1 哈希去重
@@ -606,8 +606,8 @@
     - 验证 disabled=true 不连接，disabled_reason 保留，重新启用允许连接
     - **Validates: Requirements 12.4, 12.5**
 
-- [ ] 23. MCP 服务器暴露
-  - [ ] 23.1 实现 MCP 服务器接口（core/mcp_server.rs）
+- [x] 23. MCP 服务器暴露
+  - [x] 23.1 实现 MCP 服务器接口（core/mcp_server.rs）
     - 暴露 JSON-RPC MCP 服务器接口
     - 实现 initialize 方法
     - 实现 tools/list 方法，返回所有已注册 ToolHandler 的名称和输入 schema
@@ -625,8 +625,8 @@
     - 验证已知工具正确分发，未知工具返回 -32602 错误
     - **Validates: Requirements 15.3, 15.4**
 
-- [ ] 24. 技能系统（Skills System）
-  - [ ] 24.1 实现技能发现和加载（core/skills.rs）
+- [x] 24. 技能系统（Skills System）
+  - [x] 24.1 实现技能发现和加载（core/skills.rs）
     - 定义 SkillMetadata 结构体（完整字段：name, short_description, description, version, triggers, interface, dependencies, policy, permission_profile, path_to_skills_md, scope）
     - 定义 SkillInterface, SkillDependencies, SkillPolicy 辅助结构体
     - 定义 SkillScope 枚举（Repo, User, System, Admin）
@@ -655,8 +655,8 @@
     - 验证列表接口返回所有已发现技能的元数据
     - **Validates: Requirements 16.5**
 
-- [ ] 25. 多 Agent 系统
-  - [ ] 25.1 实现 AgentControl 和 ThreadManagerState（core/agents.rs）
+- [x] 25. 多 Agent 系统
+  - [x] 25.1 实现 AgentControl 和 ThreadManagerState（core/agents.rs）
     - 定义 AgentControl 结构体（state: Mutex<ThreadManagerState>, max_recursion_depth）
     - 定义 ThreadManagerState（agents: HashMap<String, Weak<AgentInstance>>, next_nickname）
     - 定义 SpawnAgentOptions（model, sandbox_policy, cwd, fork, max_depth）
@@ -679,8 +679,8 @@
     - 验证 close_agent 终止 Agent 并释放资源
     - **Validates: Requirements 17.2, 17.3**
 
-- [ ] 26. 批量任务系统
-  - [ ] 26.1 实现 BatchJobConfig 和 run_batch_jobs（core/agents.rs）
+- [x] 26. 批量任务系统
+  - [x] 26.1 实现 BatchJobConfig 和 run_batch_jobs（core/agents.rs）
     - 定义 BatchJobConfig 结构体（csv_path, concurrency）
     - 定义 BatchResult 结构体（row_index, success, output）
     - 实现 run_batch_jobs 函数
@@ -694,8 +694,8 @@
     - 验证返回结果数量与输入行数一致
     - **Validates: Requirements 18.2, 18.4**
 
-- [ ] 27. 动态工具生命周期
-  - [ ] 27.1 集成动态工具完整生命周期（core/tools/router.rs + core/codex.rs）
+- [x] 27. 动态工具生命周期
+  - [x] 27.1 集成动态工具完整生命周期（core/tools/router.rs + core/codex.rs）
     - register_dynamic_tool 注册后立即可用于路由
     - 调用动态工具时发送 DynamicToolCallRequest 事件
     - 等待匹配 call_id 的 DynamicToolResponse
@@ -707,8 +707,8 @@
     - 验证注册、调用请求、响应匹配的完整流程
     - **Validates: Requirements 27.1, 27.2, 27.3**
 
-- [ ] 28. 实时对话管理器
-  - [ ] 28.1 实现 RealtimeConversationManager（core/realtime.rs）
+- [x] 28. 实时对话管理器
+  - [x] 28.1 实现 RealtimeConversationManager（core/realtime.rs）
     - 定义 RealtimeConversationManager 结构体（active_session, tx_event）
     - 定义 RealtimeSession 结构体（session_id, model, voice, started_at）
     - 实现 start 方法：创建 RealtimeSession，is_active() 返回 true
@@ -723,7 +723,7 @@
     - 验证无活跃会话时发送音频返回错误
     - **Validates: Requirements 26.2, 26.3, 26.5**
 
-- [ ] 29. 检查点 — 扩展模块完成
+- [x] 29. 检查点 — 扩展模块完成
   - 确保所有测试通过，如有问题请向用户确认。
 
 - [ ] 30. Tauri 命令接口

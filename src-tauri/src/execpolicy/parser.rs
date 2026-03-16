@@ -7,10 +7,10 @@ use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
-use starlark::values::Value;
 use starlark::values::list::ListRef;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
+use starlark::values::Value;
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::collections::HashMap;
@@ -20,8 +20,8 @@ use std::sync::Arc;
 use super::error::{Error, ErrorLocation, Result, TextPosition, TextRange};
 use super::network_rule::NetworkRule;
 use super::prefix_rule::{
-    Decision, NetworkRuleProtocol, PatternToken, PrefixPattern, PrefixRule, RuleRef,
-    validate_match_examples, validate_not_match_examples,
+    validate_match_examples, validate_not_match_examples, Decision, NetworkRuleProtocol,
+    PatternToken, PrefixPattern, PrefixRule, RuleRef,
 };
 
 pub struct PolicyParser {
@@ -287,6 +287,7 @@ fn policy_builder<'v, 'a>(eval: &Evaluator<'v, 'a>) -> RefMut<'a, PolicyBuilder>
 }
 
 #[starlark_module]
+#[allow(clippy::type_complexity)]
 fn policy_builtins(builder: &mut GlobalsBuilder) {
     fn prefix_rule<'v>(
         pattern: UnpackList<Value<'v>>,
@@ -309,7 +310,10 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         };
         let pattern_tokens = parse_pattern(pattern)?;
         let matches = r#match.map(parse_examples).transpose()?.unwrap_or_default();
-        let not_matches = not_match.map(parse_examples).transpose()?.unwrap_or_default();
+        let not_matches = not_match
+            .map(parse_examples)
+            .transpose()?
+            .unwrap_or_default();
         let location = eval
             .call_stack_top_location()
             .map(error_location_from_file_span);
@@ -378,11 +382,12 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_>,
     ) -> anyhow::Result<NoneType> {
         if name.is_empty() {
-            return Err(Error::InvalidRule("host_executable name cannot be empty".to_string()).into());
+            return Err(
+                Error::InvalidRule("host_executable name cannot be empty".to_string()).into(),
+            );
         }
         let path = Path::new(name);
-        if path.components().count() != 1
-            || path.file_name().and_then(|v| v.to_str()) != Some(name)
+        if path.components().count() != 1 || path.file_name().and_then(|v| v.to_str()) != Some(name)
         {
             return Err(Error::InvalidRule(format!(
                 "host_executable name must be a bare executable name (got {name})"
@@ -497,9 +502,9 @@ network_rule(host="example.com", protocol="https", decision="deny")
         let cmd = vec!["rm".to_string(), "-rf".to_string()];
         let m = rules[0].matches(&cmd).unwrap();
         match m {
-            super::super::prefix_rule::RuleMatch::PrefixRuleMatch {
-                justification, ..
-            } => assert_eq!(justification, Some("dangerous".to_string())),
+            super::super::prefix_rule::RuleMatch::PrefixRuleMatch { justification, .. } => {
+                assert_eq!(justification, Some("dangerous".to_string()))
+            }
             _ => panic!("expected PrefixRuleMatch"),
         }
     }
