@@ -164,6 +164,9 @@ pub struct PermissionsToml {
     pub read: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write: Vec<PathBuf>,
+    /// Network permission settings from `[permissions.network]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::config::permissions::NetworkToml>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -209,6 +212,74 @@ pub struct AgentsToml {
 pub struct MemoriesToml {
     pub enabled: Option<bool>,
     pub max_entries: Option<usize>,
+    pub generate_memories: Option<bool>,
+    pub use_memories: Option<bool>,
+    pub max_raw_memories_for_consolidation: Option<usize>,
+    pub max_unused_days: Option<i64>,
+    pub max_rollout_age_days: Option<i64>,
+    pub max_rollouts_per_startup: Option<usize>,
+    pub min_rollout_idle_hours: Option<i64>,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
+}
+
+/// Resolved memories configuration with defaults applied.
+#[derive(Debug, Clone)]
+pub struct MemoriesConfig {
+    pub generate_memories: bool,
+    pub use_memories: bool,
+    pub max_raw_memories_for_consolidation: usize,
+    pub max_unused_days: i64,
+    pub max_rollout_age_days: i64,
+    pub max_rollouts_per_startup: usize,
+    pub min_rollout_idle_hours: i64,
+    pub extract_model: Option<String>,
+    pub consolidation_model: Option<String>,
+}
+
+impl Default for MemoriesConfig {
+    fn default() -> Self {
+        Self {
+            generate_memories: true,
+            use_memories: true,
+            max_raw_memories_for_consolidation: 256,
+            max_unused_days: 90,
+            max_rollout_age_days: 30,
+            max_rollouts_per_startup: 16,
+            min_rollout_idle_hours: 12,
+            extract_model: None,
+            consolidation_model: None,
+        }
+    }
+}
+
+impl From<&MemoriesToml> for MemoriesConfig {
+    fn from(toml: &MemoriesToml) -> Self {
+        let d = Self::default();
+        Self {
+            generate_memories: toml.generate_memories.unwrap_or(d.generate_memories),
+            use_memories: toml.use_memories.unwrap_or(d.use_memories),
+            max_raw_memories_for_consolidation: toml
+                .max_raw_memories_for_consolidation
+                .unwrap_or(d.max_raw_memories_for_consolidation)
+                .min(4096),
+            max_unused_days: toml.max_unused_days.unwrap_or(d.max_unused_days).clamp(0, 365),
+            max_rollout_age_days: toml
+                .max_rollout_age_days
+                .unwrap_or(d.max_rollout_age_days)
+                .clamp(0, 90),
+            max_rollouts_per_startup: toml
+                .max_rollouts_per_startup
+                .unwrap_or(d.max_rollouts_per_startup)
+                .min(128),
+            min_rollout_idle_hours: toml
+                .min_rollout_idle_hours
+                .unwrap_or(d.min_rollout_idle_hours)
+                .clamp(1, 48),
+            extract_model: toml.extract_model.clone(),
+            consolidation_model: toml.consolidation_model.clone(),
+        }
+    }
 }
 
 // ── MCP server config ────────────────────────────────────────────

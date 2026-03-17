@@ -28,10 +28,12 @@ tokio-stream = "0.1"
 rmcp = { version = "1.1.1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+dunce = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 sha1 = "0.10"
 toml = "0.8"
+tracing = "0.1"
 thiserror = "1"
 regex = "1"
 sha2 = "0.10"
@@ -40,9 +42,23 @@ starlark = "0.12"
 shlex = "1"
 fs2 = "0.4"
 anyhow = "1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 futures = "0.3"
 eventsource-stream = "0.2"
+similar = "2"
+ignore = "0.4"
+nucleo = "0.5"
+crossbeam-channel = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tiny_http = "0.12"
+libc = "0.2"
+dirs = "5"
+encoding_rs = "0.8"
+chardetng = "0.1"
+notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+which = "7"
+base64 = "0.22.1"
 
 [dev-dependencies]
 proptest = "1"

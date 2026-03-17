@@ -185,12 +185,44 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_threads_created ON threads(created_at)",
     // Placeholder migrations to reach 18 total (no-op CREATE TABLE IF NOT EXISTS)
     "CREATE TABLE IF NOT EXISTS _migration_placeholder_12 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_13 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_14 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_15 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_16 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_17 (id INTEGER PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_18 (id INTEGER PRIMARY KEY)",
+    // 13. stage1_outputs table for memory extraction results
+    "CREATE TABLE IF NOT EXISTS stage1_outputs (
+        thread_id TEXT PRIMARY KEY,
+        source_updated_at INTEGER NOT NULL,
+        raw_memory TEXT NOT NULL,
+        rollout_summary TEXT NOT NULL,
+        rollout_slug TEXT,
+        generated_at INTEGER NOT NULL,
+        usage_count INTEGER,
+        last_usage INTEGER,
+        selected_for_phase2 INTEGER NOT NULL DEFAULT 0,
+        selected_for_phase2_source_updated_at INTEGER
+    )",
+    // 14. jobs table for memory pipeline job tracking
+    "CREATE TABLE IF NOT EXISTS jobs (
+        kind TEXT NOT NULL,
+        job_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        worker_id TEXT,
+        ownership_token TEXT,
+        started_at INTEGER,
+        finished_at INTEGER,
+        lease_until INTEGER,
+        retry_at INTEGER,
+        retry_remaining INTEGER NOT NULL,
+        last_error TEXT,
+        input_watermark INTEGER,
+        last_success_watermark INTEGER,
+        PRIMARY KEY (kind, job_key)
+    )",
+    // 15. indexes for stage1_outputs and jobs
+    "CREATE INDEX IF NOT EXISTS idx_stage1_outputs_source_updated_at ON stage1_outputs(source_updated_at DESC, thread_id DESC)",
+    // 16. index for jobs
+    "CREATE INDEX IF NOT EXISTS idx_jobs_kind_status ON jobs(kind, status, retry_at, lease_until)",
+    // 17. memory_mode column on threads
+    "ALTER TABLE threads ADD COLUMN memory_mode TEXT DEFAULT 'enabled'",
+    // 18. updated_at and rollout_path columns on threads for memory pipeline
+    "ALTER TABLE threads ADD COLUMN updated_at TEXT",
 ];
 
 /// Main state database with runtime config and log storage.

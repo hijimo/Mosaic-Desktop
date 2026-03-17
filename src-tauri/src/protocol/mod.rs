@@ -3,11 +3,13 @@ pub mod event;
 #[cfg(test)]
 mod roundtrip_tests;
 pub mod submission;
+pub mod thread_id;
 pub mod types;
 
 pub use error::{CodexError, ErrorCode};
 pub use event::{Event, EventMsg};
 pub use submission::{Op, Submission};
+pub use thread_id::ThreadId;
 pub use types::{
     AgentStatus, AskForApproval, ByteRange, CallToolResult, CodexErrorInfo, CollaborationMode,
     CollaborationModeSettings, ContentItem, ContentOrItems, ConversationAudioParams,

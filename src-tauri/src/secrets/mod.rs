@@ -176,7 +176,7 @@ pub fn scan_for_secrets(content: &str) -> Vec<SecretMatch> {
 ///
 /// Uses the git repo root name if available, otherwise a SHA-256 hash prefix.
 pub fn environment_id_from_cwd(cwd: &Path) -> String {
-    if let Some(repo_root) = get_git_repo_root(cwd) {
+    if let Some(repo_root) = crate::core::git_info::get_git_repo_root(cwd) {
         if let Some(name) = repo_root.file_name() {
             let name = name.to_string_lossy().trim().to_string();
             if !name.is_empty() {
@@ -196,19 +196,6 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     let hex = format!("{digest:x}");
     let short = hex.get(..12).unwrap_or(hex.as_str());
     format!("cwd-{short}")
-}
-
-fn get_git_repo_root(base_dir: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = base_dir.to_path_buf();
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
 }
 
 #[cfg(test)]

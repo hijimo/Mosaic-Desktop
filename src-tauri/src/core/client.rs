@@ -224,3 +224,100 @@ pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> 
         }
     }
 }
+
+// ── Non-streaming structured output call ─────────────────────────
+
+/// Request body for a non-streaming Responses API call with structured output.
+#[derive(serde::Serialize)]
+struct StructuredRequest<'a> {
+    model: &'a str,
+    input: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<&'a str>,
+    stream: bool,
+    text: TextFormat<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct TextFormat<'a> {
+    format: FormatSpec<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct FormatSpec<'a> {
+    r#type: &'a str,
+    name: &'a str,
+    schema: &'a Value,
+    strict: bool,
+}
+
+/// Make a non-streaming Responses API call with JSON structured output.
+///
+/// Returns the parsed text content from the first output message.
+pub async fn complete_structured(
+    url: &str,
+    api_key: &str,
+    extra_headers: &HashMap<String, String>,
+    model: &str,
+    instructions: Option<&str>,
+    input: Vec<Value>,
+    output_schema: &Value,
+) -> Result<String, CodexError> {
+    let body = StructuredRequest {
+        model,
+        input,
+        instructions,
+        stream: false,
+        text: TextFormat {
+            format: FormatSpec {
+                r#type: "json_schema",
+                name: "memory_extraction",
+                schema: output_schema,
+                strict: true,
+            },
+        },
+    };
+
+    let mut req = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&body);
+
+    for (k, v) in extra_headers {
+        req = req.header(k.as_str(), v.as_str());
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        CodexError::new(ErrorCode::InternalError, format!("HTTP request failed: {e}"))
+    })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(CodexError::new(
+            ErrorCode::InternalError,
+            format!("API returned {status}: {body}"),
+        ));
+    }
+
+    let json: Value = resp.json().await.map_err(|e| {
+        CodexError::new(ErrorCode::InternalError, format!("JSON parse error: {e}"))
+    })?;
+
+    // Extract text from output[0].content[0].text
+    json.get("output")
+        .and_then(|o| o.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|item| item.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("text"))
+        .and_then(|t| t.as_str())
+        .map(String::from)
+        .ok_or_else(|| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("unexpected response structure: {json}"),
+            )
+        })
+}

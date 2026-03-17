@@ -1,6 +1,16 @@
 pub mod handlers;
 pub mod router;
 
+// Infrastructure modules
+pub mod context;
+pub mod events;
+pub mod js_repl;
+pub mod network_approval;
+pub mod orchestrator;
+pub mod parallel;
+pub mod sandboxing;
+pub mod spec;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 

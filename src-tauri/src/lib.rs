@@ -3,11 +3,14 @@ pub mod config;
 pub mod core;
 pub mod exec;
 pub mod execpolicy;
+pub mod file_search;
 pub mod netproxy;
 pub mod protocol;
 pub mod provider;
+pub mod responses_api_proxy;
 pub mod secrets;
 pub mod shell_command;
+pub mod shell_escalation;
 pub mod state;
 
 use std::sync::Arc;

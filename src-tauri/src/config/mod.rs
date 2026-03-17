@@ -1,9 +1,15 @@
 pub mod edit;
 pub mod layer_stack;
+pub mod permissions;
+pub mod schema;
+pub mod service;
 pub mod toml_types;
 
 pub use edit::ConfigEdit;
 pub use layer_stack::{ConfigLayer, ConfigLayerStack};
+pub use permissions::{NetworkMode, NetworkToml, PermissionsToml};
+pub use schema::{config_schema, config_schema_json, validate_config_keys};
+pub use service::{ConfigService, ConfigServiceError};
 pub use toml_types::{ConfigProfile, ConfigToml, McpServerConfig, McpServerTransportConfig, McpToolFilter};
 
 use crate::protocol::error::{CodexError, ErrorCode};
