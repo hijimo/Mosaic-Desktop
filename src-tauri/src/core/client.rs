@@ -1188,10 +1188,7 @@ mod tests {
 
     #[test]
     fn history_item_to_api_message() {
-        let item = crate::protocol::types::ResponseInputItem::Message {
-            role: "user".into(),
-            content: "hello".into(),
-        };
+        let item = crate::protocol::types::ResponseInputItem::text_message("user", "hello".to_string());
         let v = history_item_to_api(&item);
         assert_eq!(v["type"], "message");
         assert_eq!(v["role"], "user");

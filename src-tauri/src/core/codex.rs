@@ -410,10 +410,7 @@ impl Codex {
             Op::AddToHistory { text } => {
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
-                    s.add_to_history(vec![crate::protocol::types::ResponseInputItem::Message {
-                        role: "user".into(),
-                        content: text,
-                    }])
+                    s.add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", text)])
                     .await;
                 }
             }
@@ -702,10 +699,7 @@ impl Codex {
             .join("\n");
         if !user_text.is_empty() {
             session
-                .add_to_history(vec![crate::protocol::types::ResponseInputItem::Message {
-                    role: "user".into(),
-                    content: user_text,
-                }])
+                .add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", user_text)])
                 .await;
         }
 
@@ -948,10 +942,7 @@ impl Codex {
                                         if !text.is_empty() {
                                             last_agent_message = Some(text.clone());
                                             session.add_to_history(vec![
-                                                crate::protocol::types::ResponseInputItem::Message {
-                                                    role: "assistant".into(),
-                                                    content: text.clone(),
-                                                },
+                                                crate::protocol::types::ResponseInputItem::text_message("assistant", text.clone()),
                                             ]).await;
                                             if accumulated_text.is_empty() {
                                                 self.emit(EventMsg::AgentMessage(
@@ -1004,10 +995,7 @@ impl Codex {
                                 if !accumulated_text.is_empty() && last_agent_message.is_none() {
                                     last_agent_message = Some(accumulated_text.clone());
                                     session.add_to_history(vec![
-                                        crate::protocol::types::ResponseInputItem::Message {
-                                            role: "assistant".into(),
-                                            content: accumulated_text.clone(),
-                                        },
+                                        crate::protocol::types::ResponseInputItem::text_message("assistant", accumulated_text.clone()),
                                     ]).await;
                                     self.emit(EventMsg::AgentMessage(
                                         crate::protocol::event::AgentMessageEvent {

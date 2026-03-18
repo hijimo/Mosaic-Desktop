@@ -647,8 +647,7 @@ pub enum WebSearchAction {
 pub enum ResponseInputItem {
     Message {
         role: String,
-        /// Plain text content (legacy). For multi-modal, use ResponseItem.
-        content: String,
+        content: Vec<ContentItem>,
     },
     /// Function call from the model.
     FunctionCall {
@@ -677,14 +676,20 @@ impl ResponseInputItem {
     pub fn text_message(role: &str, text: String) -> Self {
         Self::Message {
             role: role.to_string(),
-            content: text,
+            content: vec![ContentItem::InputText { text }],
         }
     }
 
-    /// Extract plain text from a Message's content.
-    pub fn message_text(&self) -> Option<&str> {
+    /// Extract plain text from a Message's content items.
+    pub fn message_text(&self) -> Option<String> {
         match self {
-            Self::Message { content, .. } if !content.is_empty() => Some(content),
+            Self::Message { content, .. } if !content.is_empty() => {
+                let text: String = content.iter().filter_map(|c| match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect::<Vec<_>>().join("");
+                if text.is_empty() { None } else { Some(text) }
+            }
             _ => None,
         }
     }
@@ -702,20 +707,7 @@ impl From<ResponseItem> for ResponseInputItem {
     fn from(item: ResponseItem) -> Self {
         match item {
             ResponseItem::Message { role, content, .. } => {
-                let text: String = content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ContentItem::OutputText { text } | ContentItem::InputText { text } => {
-                            Some(text.as_str())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                Self::Message {
-                    role,
-                    content: text,
-                }
+                Self::Message { role, content }
             }
             ResponseItem::FunctionCall {
                 call_id,
@@ -735,7 +727,7 @@ impl From<ResponseItem> for ResponseInputItem {
             }
             _ => Self::Message {
                 role: "system".to_string(),
-                content: "[unhandled item]".to_string(),
+                content: vec![ContentItem::InputText { text: "[unhandled item]".to_string() }],
             },
         }
     }

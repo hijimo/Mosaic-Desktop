@@ -1,6 +1,6 @@
 use crate::protocol::error::{CodexError, ErrorCode};
 use crate::protocol::event::{ContextCompactedEvent, Event, EventMsg};
-use crate::protocol::types::ResponseInputItem;
+use crate::protocol::types::{ContentItem, ResponseInputItem};
 
 use super::truncation::{apply_truncation, TruncationPolicy};
 
@@ -69,10 +69,10 @@ where
             let history_text = format_history_for_summary(older);
             let prompt = SUMMARIZATION_PROMPT.replace("{history}", &history_text);
             let summary = summarize(prompt).await?;
-            let mut compacted = vec![ResponseInputItem::Message {
-                role: "system".into(),
-                content: format!("[Conversation Summary]\n{summary}"),
-            }];
+            let mut compacted = vec![ResponseInputItem::text_message(
+                "system",
+                format!("[Conversation Summary]\n{summary}"),
+            )];
             compacted.extend_from_slice(recent);
             Ok(CompactResult {
                 history: compacted,
@@ -135,10 +135,10 @@ pub async fn compact_remote(
         .as_str()
         .unwrap_or("(summary unavailable)")
         .to_string();
-    let mut compacted = vec![ResponseInputItem::Message {
-        role: "system".into(),
-        content: format!("[Conversation Summary]\n{summary}"),
-    }];
+    let mut compacted = vec![ResponseInputItem::text_message(
+        "system",
+        format!("[Conversation Summary]\n{summary}"),
+    )];
     compacted.extend_from_slice(recent);
     Ok(CompactResult {
         history: compacted,
@@ -165,7 +165,13 @@ fn format_history_for_summary(items: &[ResponseInputItem]) -> String {
     items
         .iter()
         .map(|item| match item {
-            ResponseInputItem::Message { role, content } => format!("[{role}]: {content}"),
+            ResponseInputItem::Message { role, content } => {
+                let text = content.iter().filter_map(|c| match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect::<Vec<_>>().join("");
+                format!("[{role}]: {text}")
+            },
             ResponseInputItem::FunctionCall {
                 name, arguments, ..
             } => {
@@ -196,10 +202,7 @@ mod tests {
     use super::*;
 
     fn msg(role: &str, content: &str) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: role.into(),
-            content: content.into(),
-        }
+        ResponseInputItem::text_message(role, content.to_string())
     }
 
     #[tokio::test]
@@ -284,8 +287,9 @@ mod tests {
         assert!(result.changed);
         assert_eq!(result.history.len(), 3);
         assert!(
-            matches!(&result.history[0], ResponseInputItem::Message { role, content }
-            if role == "system" && content.contains("summary"))
+            if let ResponseInputItem::Message { role, .. } = &result.history[0] {
+                role == "system" && result.history[0].message_text().map_or(false, |t| t.contains("summary"))
+            } else { false }
         );
     }
 

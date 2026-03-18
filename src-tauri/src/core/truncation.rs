@@ -14,11 +14,11 @@ pub enum TruncationPolicy {
 /// Rough token estimation: split on whitespace, count words.
 /// This is intentionally simple — a production system would use a proper tokenizer.
 fn estimate_tokens(item: &ResponseInputItem) -> usize {
-    let text = match item {
-        ResponseInputItem::Message { content, .. } => content.as_str(),
-        ResponseInputItem::FunctionCall { arguments, .. } => arguments.as_str(),
+    let text: String = match item {
+        ResponseInputItem::Message { .. } => item.message_text().unwrap_or_default(),
+        ResponseInputItem::FunctionCall { arguments, .. } => arguments.clone(),
         ResponseInputItem::FunctionCallOutput { output, .. } => match &output.body {
-            crate::protocol::types::FunctionCallOutputBody::Text(s) => s.as_str(),
+            crate::protocol::types::FunctionCallOutputBody::Text(s) => s.clone(),
             crate::protocol::types::FunctionCallOutputBody::ContentItems(_) => return 10,
         },
         ResponseInputItem::McpToolCallOutput { .. }
@@ -99,10 +99,7 @@ mod tests {
     use crate::protocol::types::ResponseInputItem;
 
     fn msg(content: &str) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: "user".into(),
-            content: content.into(),
-        }
+        ResponseInputItem::text_message("user", content.to_string())
     }
 
     #[test]
@@ -111,10 +108,10 @@ mod tests {
         let result = apply_truncation(&history, &TruncationPolicy::KeepRecent { max_items: 3 });
         assert_eq!(result.len(), 3);
         assert!(
-            matches!(&result[0], ResponseInputItem::Message { content, .. } if content == "msg-7")
+            result[0].message_text().as_deref() == Some("msg-7")
         );
         assert!(
-            matches!(&result[2], ResponseInputItem::Message { content, .. } if content == "msg-9")
+            result[2].message_text().as_deref() == Some("msg-9")
         );
     }
 

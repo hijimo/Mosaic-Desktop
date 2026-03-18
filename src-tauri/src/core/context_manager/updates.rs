@@ -74,10 +74,7 @@ pub fn build_settings_update(
         return None;
     }
 
-    Some(ResponseInputItem::Message {
-        role: "developer".into(),
-        content: parts.join("\n"),
-    })
+    Some(ResponseInputItem::text_message("developer", parts.join("\n")))
 }
 
 fn settings_to_message(snapshot: &TurnSettingsSnapshot) -> ResponseInputItem {
@@ -85,10 +82,7 @@ fn settings_to_message(snapshot: &TurnSettingsSnapshot) -> ResponseInputItem {
         "Current working directory: {}\nSandbox policy: {:?}\nApproval policy: {:?}",
         snapshot.cwd, snapshot.sandbox_policy, snapshot.approval_policy,
     );
-    ResponseInputItem::Message {
-        role: "developer".into(),
-        content,
-    }
+    ResponseInputItem::text_message("developer", content)
 }
 
 #[cfg(test)]
@@ -110,9 +104,9 @@ mod tests {
         let current = default_snapshot();
         let update = build_settings_update(None, &current);
         assert!(update.is_some());
-        if let Some(ResponseInputItem::Message { role, content }) = &update {
+        if let Some(ref item @ ResponseInputItem::Message { role, .. }) = &update {
             assert_eq!(role, "developer");
-            assert!(content.contains("/project"));
+            assert!(item.message_text().unwrap().contains("/project"));
         }
     }
 
@@ -130,8 +124,8 @@ mod tests {
         current.cwd = "/other".into();
         let update = build_settings_update(Some(&prev), &current);
         assert!(update.is_some());
-        if let Some(ResponseInputItem::Message { content, .. }) = &update {
-            assert!(content.contains("/other"));
+        if let Some(ref item) = &update {
+            assert!(item.message_text().unwrap().contains("/other"));
         }
     }
 
@@ -142,8 +136,8 @@ mod tests {
         current.sandbox_policy = SandboxPolicy::DangerFullAccess;
         let update = build_settings_update(Some(&prev), &current);
         assert!(update.is_some());
-        if let Some(ResponseInputItem::Message { content, .. }) = &update {
-            assert!(content.contains("Sandbox policy changed"));
+        if let Some(ref item) = &update {
+            assert!(item.message_text().unwrap().contains("Sandbox policy changed"));
         }
     }
 }

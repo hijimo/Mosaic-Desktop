@@ -1,5 +1,4 @@
-use crate::protocol::types::{ContentOrItems, FunctionCallOutputPayload, ResponseInputItem};
-use crate::protocol::types::FunctionCallOutputBody;
+use crate::protocol::types::{ContentItem, ContentOrItems, FunctionCallOutputBody, FunctionCallOutputPayload, ResponseInputItem};
 
 use super::normalize;
 
@@ -186,7 +185,13 @@ fn is_model_generated(item: &ResponseInputItem) -> bool {
 /// Rough byte estimate for one item (used for token estimation).
 fn estimate_item_bytes(item: &ResponseInputItem) -> i64 {
     let text_len = match item {
-        ResponseInputItem::Message { content, role } => content.len() + role.len(),
+        ResponseInputItem::Message { content, role } => {
+            let text_len: usize = content.iter().map(|c| match c {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => text.len(),
+                ContentItem::InputImage { .. } => 7373,
+            }).sum();
+            text_len + role.len()
+        },
         ResponseInputItem::FunctionCall {
             name, arguments, ..
         } => name.len() + arguments.len(),
@@ -256,17 +261,11 @@ mod tests {
     use crate::protocol::types::{ContentOrItems, FunctionCallOutputPayload, ResponseInputItem};
 
     fn user_msg(text: &str) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: "user".into(),
-            content: text.into(),
-        }
+        ResponseInputItem::text_message("user", text.to_string())
     }
 
     fn assistant_msg(text: &str) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: "assistant".into(),
-            content: text.into(),
-        }
+        ResponseInputItem::text_message("assistant", text.to_string())
     }
 
     fn func_call(call_id: &str) -> ResponseInputItem {
@@ -332,11 +331,11 @@ mod tests {
         cm.record_items(vec![user_msg("a"), user_msg("b"), user_msg("c")]);
         cm.remove_first();
         assert_eq!(cm.len(), 2);
-        assert!(matches!(&cm.raw_items()[0], ResponseInputItem::Message { content, .. } if content == "b"));
+        assert!(cm.raw_items()[0].message_text().as_deref() == Some("b"));
 
         cm.remove_last();
         assert_eq!(cm.len(), 1);
-        assert!(matches!(&cm.raw_items()[0], ResponseInputItem::Message { content, .. } if content == "b"));
+        assert!(cm.raw_items()[0].message_text().as_deref() == Some("b"));
     }
 
     #[test]
@@ -401,7 +400,7 @@ mod tests {
         cm.record_items(vec![user_msg("old")]);
         cm.replace(vec![user_msg("new")]);
         assert_eq!(cm.len(), 1);
-        assert!(matches!(&cm.raw_items()[0], ResponseInputItem::Message { content, .. } if content == "new"));
+        assert!(cm.raw_items()[0].message_text().as_deref() == Some("new"));
     }
 
     #[test]

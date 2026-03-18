@@ -342,7 +342,7 @@ mod tests {
     fn arb_response_input_item() -> impl Strategy<Value = ResponseInputItem> {
         prop_oneof![
             (arb_safe_string(), arb_safe_string())
-                .prop_map(|(role, content)| ResponseInputItem::Message { role, content }),
+                .prop_map(|(role, content)| ResponseInputItem::text_message(&role, content)),
             (arb_safe_string(), arb_safe_string(), arb_safe_string()).prop_map(
                 |(call_id, name, arguments)| ResponseInputItem::FunctionCall {
                     call_id,

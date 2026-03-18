@@ -90,10 +90,7 @@ mod tests {
     }
 
     fn user_msg(text: &str) -> ResponseInputItem {
-        ResponseInputItem::Message {
-            role: "user".into(),
-            content: text.into(),
-        }
+        ResponseInputItem::text_message("user", text.to_string())
     }
 
     #[test]

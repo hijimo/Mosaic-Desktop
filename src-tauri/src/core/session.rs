@@ -623,22 +623,13 @@ mod tests {
         let (session, _rx) = make_session();
 
         let items = vec![
-            ResponseInputItem::Message {
-                role: "user".into(),
-                content: "hello".into(),
-            },
-            ResponseInputItem::Message {
-                role: "assistant".into(),
-                content: "hi".into(),
-            },
+            ResponseInputItem::text_message("user", "hello".to_string()),
+            ResponseInputItem::text_message("assistant", "hi".to_string()),
         ];
         session.add_to_history(items).await;
 
         session
-            .add_to_history(vec![ResponseInputItem::Message {
-                role: "user".into(),
-                content: "how are you".into(),
-            }])
+            .add_to_history(vec![ResponseInputItem::text_message("user", "how are you".to_string())])
             .await;
 
         let history = session.history().await;
@@ -646,13 +637,13 @@ mod tests {
 
         // Verify order
         assert!(
-            matches!(&history[0], ResponseInputItem::Message { content, .. } if content == "hello")
+            history[0].message_text().as_deref() == Some("hello")
         );
         assert!(
-            matches!(&history[1], ResponseInputItem::Message { content, .. } if content == "hi")
+            history[1].message_text().as_deref() == Some("hi")
         );
         assert!(
-            matches!(&history[2], ResponseInputItem::Message { content, .. } if content == "how are you")
+            history[2].message_text().as_deref() == Some("how are you")
         );
     }
 
@@ -661,10 +652,7 @@ mod tests {
         let (session, _rx) = make_session();
 
         let items: Vec<ResponseInputItem> = (0..5)
-            .map(|i| ResponseInputItem::Message {
-                role: "user".into(),
-                content: format!("msg-{i}"),
-            })
+            .map(|i| ResponseInputItem::text_message("user", format!("msg-{i}")))
             .collect();
         session.add_to_history(items).await;
 
@@ -673,13 +661,13 @@ mod tests {
         let history = session.history().await;
         assert_eq!(history.len(), 3);
         assert!(
-            matches!(&history[0], ResponseInputItem::Message { content, .. } if content == "msg-0")
+            history[0].message_text().as_deref() == Some("msg-0")
         );
         assert!(
-            matches!(&history[1], ResponseInputItem::Message { content, .. } if content == "msg-1")
+            history[1].message_text().as_deref() == Some("msg-1")
         );
         assert!(
-            matches!(&history[2], ResponseInputItem::Message { content, .. } if content == "msg-2")
+            history[2].message_text().as_deref() == Some("msg-2")
         );
     }
 
@@ -687,10 +675,7 @@ mod tests {
     async fn rollback_all_entries() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::Message {
-                role: "user".into(),
-                content: "test".into(),
-            }])
+            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
             .await;
 
         session.rollback(1).await.unwrap();
@@ -701,10 +686,7 @@ mod tests {
     async fn rollback_exceeding_length_errors() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::Message {
-                role: "user".into(),
-                content: "test".into(),
-            }])
+            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
             .await;
 
         let err = session.rollback(5).await.unwrap_err();
@@ -715,10 +697,7 @@ mod tests {
     async fn rollback_zero_is_noop() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::Message {
-                role: "user".into(),
-                content: "test".into(),
-            }])
+            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
             .await;
 
         session.rollback(0).await.unwrap();
