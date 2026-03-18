@@ -946,7 +946,7 @@ impl Codex {
                                             ]).await;
                                             if accumulated_text.is_empty() {
                                                 self.emit(EventMsg::AgentMessage(
-                                                    crate::protocol::event::AgentMessageEvent { message: text },
+                                                crate::protocol::event::AgentMessageEvent { message: text, phase: None },
                                                 )).await;
                                             }
                                         }
@@ -973,18 +973,18 @@ impl Codex {
                                         crate::protocol::event::TokenCountEvent {
                                             info: Some(crate::protocol::types::TokenUsageInfo {
                                                 total_token_usage: crate::protocol::types::TokenUsage {
-                                                    input_tokens: usage.input_tokens as i64,
-                                                    cached_input_tokens: usage.cached_input_tokens as i64,
-                                                    output_tokens: usage.output_tokens as i64,
-                                                    reasoning_output_tokens: usage.reasoning_output_tokens as i64,
-                                                    total_tokens: usage.total_tokens as i64,
+                                                    input_tokens: usage.input_tokens,
+                                                    cached_input_tokens: usage.cached_input_tokens,
+                                                    output_tokens: usage.output_tokens,
+                                                    reasoning_output_tokens: usage.reasoning_output_tokens,
+                                                    total_tokens: usage.total_tokens,
                                                 },
                                                 last_token_usage: crate::protocol::types::TokenUsage {
-                                                    input_tokens: usage.input_tokens as i64,
-                                                    cached_input_tokens: usage.cached_input_tokens as i64,
-                                                    output_tokens: usage.output_tokens as i64,
-                                                    reasoning_output_tokens: usage.reasoning_output_tokens as i64,
-                                                    total_tokens: usage.total_tokens as i64,
+                                                    input_tokens: usage.input_tokens,
+                                                    cached_input_tokens: usage.cached_input_tokens,
+                                                    output_tokens: usage.output_tokens,
+                                                    reasoning_output_tokens: usage.reasoning_output_tokens,
+                                                    total_tokens: usage.total_tokens,
                                                 },
                                                 model_context_window: None,
                                             }),
@@ -1000,6 +1000,7 @@ impl Codex {
                                     self.emit(EventMsg::AgentMessage(
                                         crate::protocol::event::AgentMessageEvent {
                                             message: accumulated_text.clone(),
+                                            phase: None,
                                         },
                                     )).await;
                                 }

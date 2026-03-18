@@ -69,11 +69,11 @@ fn is_fallback_eligible(err: &CodexError) -> bool {
 /// Token usage information from a completed response.
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
-    pub cached_input_tokens: u64,
-    pub reasoning_output_tokens: u64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
 }
 
 /// A parsed SSE event from the Responses API stream.
@@ -893,25 +893,25 @@ fn parse_token_usage(usage: &Value) -> TokenUsage {
     TokenUsage {
         input_tokens: usage
             .get("input_tokens")
-            .and_then(Value::as_u64)
+            .and_then(Value::as_i64)
             .unwrap_or(0),
         output_tokens: usage
             .get("output_tokens")
-            .and_then(Value::as_u64)
+            .and_then(Value::as_i64)
             .unwrap_or(0),
         total_tokens: usage
             .get("total_tokens")
-            .and_then(Value::as_u64)
+            .and_then(Value::as_i64)
             .unwrap_or(0),
         cached_input_tokens: usage
             .get("input_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
-            .and_then(Value::as_u64)
+            .and_then(Value::as_i64)
             .unwrap_or(0),
         reasoning_output_tokens: usage
             .get("output_tokens_details")
             .and_then(|d| d.get("reasoning_tokens"))
-            .and_then(Value::as_u64)
+            .and_then(Value::as_i64)
             .unwrap_or(0),
     }
 }
