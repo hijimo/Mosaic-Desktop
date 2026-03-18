@@ -219,6 +219,26 @@ impl ModelProviderInfo {
             supports_websockets: false,
         }
     }
+
+    /// Create a ChatGPT provider (uses ChatGPT backend API with login tokens).
+    pub fn create_chatgpt() -> Self {
+        Self {
+            name: "ChatGPT".into(),
+            base_url: Some("https://chatgpt.com/backend-api/codex".into()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: true,
+            supports_websockets: true,
+        }
+    }
 }
 
 // ── Provider (runtime) ───────────────────────────────────────────
@@ -322,10 +342,11 @@ fn oss_base_url(default_port: u16) -> String {
         .unwrap_or(default)
 }
 
-/// Returns the built-in provider map (openai, ollama, lmstudio).
+/// Returns the built-in provider map (openai, ollama, lmstudio, chatgpt).
 pub fn built_in_providers() -> HashMap<String, ModelProviderInfo> {
     [
         ("openai".to_string(), ModelProviderInfo::create_openai()),
+        ("chatgpt".to_string(), ModelProviderInfo::create_chatgpt()),
         (
             OLLAMA_PROVIDER_ID.to_string(),
             ModelProviderInfo::create_oss(&oss_base_url(DEFAULT_OLLAMA_PORT)),
@@ -353,6 +374,78 @@ pub fn resolve_provider(
         .get(provider_id)
         .cloned()
         .or_else(|| built_in_providers().remove(provider_id)))
+}
+
+// ── ProviderRegistry ─────────────────────────────────────────────
+
+/// Manages the full set of available providers (built-in + user-defined).
+#[derive(Debug, Clone)]
+pub struct ProviderRegistry {
+    providers: HashMap<String, ModelProviderInfo>,
+    default_provider_id: String,
+}
+
+impl ProviderRegistry {
+    /// Create a registry with built-in providers.
+    pub fn new() -> Self {
+        Self {
+            providers: built_in_providers(),
+            default_provider_id: "openai".to_string(),
+        }
+    }
+
+    /// Create a registry merging built-ins with user-defined providers.
+    /// User-defined entries override built-ins.
+    pub fn with_user_providers(user_providers: HashMap<String, ModelProviderInfo>) -> Self {
+        let mut providers = built_in_providers();
+        providers.extend(user_providers);
+        Self {
+            providers,
+            default_provider_id: "openai".to_string(),
+        }
+    }
+
+    /// Set the default provider ID.
+    pub fn set_default(&mut self, id: &str) {
+        self.default_provider_id = id.to_string();
+    }
+
+    /// Get a provider by ID.
+    pub fn get(&self, id: &str) -> Option<&ModelProviderInfo> {
+        self.providers.get(id)
+    }
+
+    /// Get the default provider.
+    pub fn default_provider(&self) -> Option<&ModelProviderInfo> {
+        self.providers.get(&self.default_provider_id)
+    }
+
+    /// Select a provider: try the given ID, fall back to default.
+    pub fn select(&self, provider_id: Option<&str>) -> Result<&ModelProviderInfo, CodexError> {
+        let id = provider_id.unwrap_or(&self.default_provider_id);
+        self.providers.get(id).ok_or_else(|| {
+            CodexError::new(
+                ErrorCode::ConfigurationError,
+                format!("unknown provider: {id}"),
+            )
+        })
+    }
+
+    /// List all registered provider IDs.
+    pub fn provider_ids(&self) -> Vec<&str> {
+        self.providers.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Register or update a provider.
+    pub fn register(&mut self, id: String, info: ModelProviderInfo) {
+        self.providers.insert(id, info);
+    }
+}
+
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -427,6 +520,7 @@ wire_api = "chat""#;
         assert!(providers.contains_key("openai"));
         assert!(providers.contains_key("ollama"));
         assert!(providers.contains_key("lmstudio"));
+        assert!(providers.contains_key("chatgpt"));
     }
 
     #[test]
@@ -465,5 +559,71 @@ wire_api = "chat""#;
         let result = resolve_provider(LEGACY_OLLAMA_CHAT_PROVIDER_ID, &user);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("ollama-chat"));
+    }
+
+    #[test]
+    fn chatgpt_provider_has_correct_base_url() {
+        let info = ModelProviderInfo::create_chatgpt();
+        assert_eq!(info.name, "ChatGPT");
+        assert!(info.base_url.as_ref().unwrap().contains("chatgpt.com"));
+        assert!(info.requires_openai_auth);
+        assert!(info.supports_websockets);
+    }
+
+    #[test]
+    fn provider_registry_new_has_builtins() {
+        let reg = ProviderRegistry::new();
+        assert!(reg.get("openai").is_some());
+        assert!(reg.get("ollama").is_some());
+        assert!(reg.get("chatgpt").is_some());
+    }
+
+    #[test]
+    fn provider_registry_user_overrides() {
+        let mut user = HashMap::new();
+        let mut custom = ModelProviderInfo::create_openai();
+        custom.base_url = Some("https://my-proxy.com/v1".into());
+        user.insert("openai".to_string(), custom.clone());
+
+        let reg = ProviderRegistry::with_user_providers(user);
+        let resolved = reg.get("openai").unwrap();
+        assert_eq!(resolved.base_url, custom.base_url);
+    }
+
+    #[test]
+    fn provider_registry_select_default() {
+        let reg = ProviderRegistry::new();
+        let p = reg.select(None).unwrap();
+        assert_eq!(p.name, "OpenAI");
+    }
+
+    #[test]
+    fn provider_registry_select_by_id() {
+        let reg = ProviderRegistry::new();
+        let p = reg.select(Some("ollama")).unwrap();
+        assert_eq!(p.name, "gpt-oss");
+    }
+
+    #[test]
+    fn provider_registry_select_unknown_returns_error() {
+        let reg = ProviderRegistry::new();
+        assert!(reg.select(Some("nonexistent")).is_err());
+    }
+
+    #[test]
+    fn provider_registry_register_custom() {
+        let mut reg = ProviderRegistry::new();
+        let custom = ModelProviderInfo::create_oss("http://custom:9999/v1");
+        reg.register("custom".into(), custom);
+        assert!(reg.get("custom").is_some());
+        assert!(reg.provider_ids().contains(&"custom"));
+    }
+
+    #[test]
+    fn provider_registry_set_default() {
+        let mut reg = ProviderRegistry::new();
+        reg.set_default("ollama");
+        let p = reg.default_provider().unwrap();
+        assert_eq!(p.name, "gpt-oss");
     }
 }

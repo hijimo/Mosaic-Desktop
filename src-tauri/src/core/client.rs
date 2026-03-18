@@ -25,6 +25,45 @@ use tokio::sync::mpsc;
 use crate::protocol::error::{CodexError, ErrorCode};
 use crate::provider::{ModelProviderInfo, Provider, RetryConfig};
 
+// ── WebSocket version ────────────────────────────────────────────
+
+/// WebSocket protocol version for the Responses API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponsesWebsocketVersion {
+    V1,
+    V2,
+}
+
+/// Determine the WebSocket version from provider capabilities.
+pub fn ws_version_from_provider(info: &ModelProviderInfo) -> Option<ResponsesWebsocketVersion> {
+    if info.supports_websockets {
+        Some(ResponsesWebsocketVersion::V1)
+    } else {
+        None
+    }
+}
+
+// ── Model Fallback ───────────────────────────────────────────────
+
+/// Configuration for model fallback behavior.
+#[derive(Debug, Clone)]
+pub struct ModelFallbackConfig {
+    /// Primary model to use.
+    pub primary_model: String,
+    /// Ordered list of fallback models to try if the primary fails.
+    pub fallback_models: Vec<String>,
+}
+
+/// Errors that trigger a fallback to the next model.
+fn is_fallback_eligible(err: &CodexError) -> bool {
+    let msg = err.message.to_lowercase();
+    msg.contains("model_not_found")
+        || msg.contains("model not found")
+        || msg.contains("capacity")
+        || msg.contains("overloaded")
+        || (msg.contains("429") && msg.contains("rate"))
+}
+
 // ── Response Events ──────────────────────────────────────────────
 
 /// Token usage information from a completed response.
@@ -102,6 +141,12 @@ struct ModelClientState {
     stream_idle_timeout: Duration,
     /// Last response_id for chaining (shared across turns).
     last_response_id: StdMutex<Option<String>>,
+    /// WebSocket version to use (None = SSE only).
+    ws_version: Option<ResponsesWebsocketVersion>,
+    /// Whether WebSocket has been disabled due to connection failures.
+    ws_disabled: std::sync::atomic::AtomicBool,
+    /// Fallback config (optional).
+    fallback_config: Option<ModelFallbackConfig>,
 }
 
 /// A session-scoped client for model-provider API calls.
@@ -111,6 +156,32 @@ struct ModelClientState {
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
+}
+
+impl ModelClientState {
+    /// Clone all fields into a new owned state (needed for Arc::try_unwrap fallback).
+    fn clone_state(&self) -> Self {
+        Self {
+            provider: self.provider.clone(),
+            api_key: self.api_key.clone(),
+            extra_headers: self.extra_headers.clone(),
+            conversation_id: self.conversation_id.clone(),
+            retry: self.retry.clone(),
+            stream_idle_timeout: self.stream_idle_timeout,
+            last_response_id: StdMutex::new(
+                self.last_response_id
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+            ws_version: self.ws_version,
+            ws_disabled: std::sync::atomic::AtomicBool::new(
+                self.ws_disabled
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            fallback_config: self.fallback_config.clone(),
+        }
+    }
 }
 
 impl ModelClient {
@@ -131,6 +202,9 @@ impl ModelClient {
                 retry,
                 stream_idle_timeout,
                 last_response_id: StdMutex::new(None),
+                ws_version: None,
+                ws_disabled: std::sync::atomic::AtomicBool::new(false),
+                fallback_config: None,
             }),
         }
     }
@@ -143,7 +217,51 @@ impl ModelClient {
     ) -> Self {
         let provider = info.to_provider();
         let extra_headers = info.resolved_headers();
-        Self::new(provider, api_key, extra_headers, conversation_id)
+        let ws_version = ws_version_from_provider(info);
+        let retry = provider.retry.clone();
+        let stream_idle_timeout = provider.stream_idle_timeout;
+        Self {
+            state: Arc::new(ModelClientState {
+                provider,
+                api_key,
+                extra_headers,
+                conversation_id,
+                retry,
+                stream_idle_timeout,
+                last_response_id: StdMutex::new(None),
+                ws_version,
+                ws_disabled: std::sync::atomic::AtomicBool::new(false),
+                fallback_config: None,
+            }),
+        }
+    }
+
+    /// Creates a client with fallback model configuration.
+    pub fn with_fallback(self, config: ModelFallbackConfig) -> Self {
+        // We need to rebuild the Arc to set fallback_config
+        let state = Arc::try_unwrap(self.state).unwrap_or_else(|arc| (*arc).clone_state());
+        Self {
+            state: Arc::new(ModelClientState {
+                fallback_config: Some(config),
+                ..state
+            }),
+        }
+    }
+
+    /// Check if WebSocket transport is available and not disabled.
+    pub fn ws_available(&self) -> bool {
+        self.state.ws_version.is_some()
+            && !self
+                .state
+                .ws_disabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Disable WebSocket transport (e.g., after connection failure).
+    pub fn disable_ws(&self) {
+        self.state
+            .ws_disabled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -192,12 +310,75 @@ pub struct ModelClientSession {
 
 impl ModelClientSession {
     /// Streams a single model request within the current turn.
+    ///
+    /// Transport selection: WebSocket (if available) → SSE fallback.
+    /// Model fallback: if configured, tries fallback models on eligible errors.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
-    ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+        let state = &self.client.state;
+
+        // If fallback is configured, try models in order
+        if let Some(ref fallback) = state.fallback_config {
+            let models: Vec<String> = std::iter::once(fallback.primary_model.clone())
+                .chain(fallback.fallback_models.iter().cloned())
+                .collect();
+
+            let mut last_err = None;
+            for model in &models {
+                match self.stream_single(prompt, model).await {
+                    Ok(stream) => return Ok(stream),
+                    Err(e) if is_fallback_eligible(&e) => {
+                        tracing::warn!(model, "model failed, trying fallback: {}", e.message);
+                        last_err = Some(e);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            return Err(last_err.unwrap_or_else(|| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    "all fallback models exhausted".to_string(),
+                )
+            }));
+        }
+
+        self.stream_single(prompt, &self.model.clone()).await
+    }
+
+    /// Stream using a specific model, with WebSocket → SSE fallback.
+    async fn stream_single(
+        &mut self,
+        prompt: &Prompt,
+        model: &str,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+        let state = &self.client.state;
+
+        // Try WebSocket first if available
+        if self.client.ws_available() {
+            match self.stream_via_ws(prompt, model).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    tracing::warn!("WebSocket stream failed, falling back to SSE: {}", e.message);
+                    self.client.disable_ws();
+                }
+            }
+        }
+
+        // SSE path
+        self.stream_via_sse(prompt, model).await
+    }
+
+    /// Stream via SSE (existing logic).
+    async fn stream_via_sse(
+        &mut self,
+        prompt: &Prompt,
+        model: &str,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
         let request = ResponsesApiRequest {
-            model: self.model.clone(),
+            model: model.to_string(),
             input: prompt.input.clone(),
             stream: true,
             instructions: prompt.instructions.clone(),
@@ -239,6 +420,142 @@ impl ModelClientSession {
                     _ => {
                         if tx.send(ev).await.is_err() {
                             return;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+    }
+
+    /// Stream via WebSocket transport.
+    async fn stream_via_ws(
+        &mut self,
+        prompt: &Prompt,
+        model: &str,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+        use tokio_tungstenite::tungstenite::Message;
+
+        let state = &self.client.state;
+        let ws_url = state
+            .provider
+            .websocket_url_for_path("responses")
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, e))?;
+
+        // Build WebSocket request with auth headers
+        let ws_url_with_auth = format!(
+            "{}{}",
+            ws_url,
+            if ws_url.contains('?') { "&" } else { "?" }
+        );
+
+        // tokio-tungstenite uses http::Request for custom headers
+        let mut request = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(&ws_url)
+            .header("Authorization", format!("Bearer {}", state.api_key))
+            .header("OpenAI-Beta", "responses_websockets=2026-02-04");
+
+        for (k, v) in &state.extra_headers {
+            request = request.header(k.as_str(), v.as_str());
+        }
+
+        let request = request
+            .body(())
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("ws request build: {e}")))?;
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("WebSocket connection failed: {e}"),
+                )
+            })?;
+
+        let (mut write, mut read) = futures::StreamExt::split(ws_stream);
+
+        // Build the request payload
+        let request = serde_json::json!({
+            "type": "response.create",
+            "response": {
+                "model": model,
+                "input": prompt.input,
+                "instructions": prompt.instructions,
+                "tools": prompt.tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": prompt.parallel_tool_calls,
+                "previous_response_id": self.previous_response_id,
+            }
+        });
+
+        use futures::SinkExt;
+        write
+            .send(Message::Text(request.to_string().into()))
+            .await
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("WebSocket send failed: {e}"),
+                )
+            })?;
+
+        // Spawn reader task
+        let client = self.client.clone();
+        let idle_timeout = state.stream_idle_timeout;
+        let (tx, rx) = mpsc::channel::<Result<ResponseEvent, CodexError>>(256);
+
+        tokio::spawn(async move {
+            loop {
+                let next = tokio::time::timeout(idle_timeout, read.next()).await;
+                match next {
+                    Err(_) => {
+                        let _ = tx
+                            .send(Err(CodexError::new(
+                                ErrorCode::InternalError,
+                                "WebSocket idle timeout".to_string(),
+                            )))
+                            .await;
+                        return;
+                    }
+                    Ok(None) => return,
+                    Ok(Some(Err(e))) => {
+                        let _ = tx
+                            .send(Err(CodexError::new(
+                                ErrorCode::InternalError,
+                                format!("WebSocket error: {e}"),
+                            )))
+                            .await;
+                        return;
+                    }
+                    Ok(Some(Ok(msg))) => {
+                        let text = match msg {
+                            Message::Text(t) => t.to_string(),
+                            Message::Close(_) => return,
+                            _ => continue,
+                        };
+
+                        let json: Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+
+                        let kind = json.get("type").and_then(Value::as_str).unwrap_or("");
+                        let parsed = parse_ws_event(kind, &json);
+
+                        if let Some(ev) = parsed {
+                            let is_completed = matches!(&ev, Ok(ResponseEvent::Completed { .. }));
+                            if let Ok(ResponseEvent::Completed { response_id, .. }) = &ev {
+                                if !response_id.is_empty() {
+                                    client.store_response_id(response_id.clone());
+                                }
+                            }
+                            if tx.send(ev).await.is_err() {
+                                return;
+                            }
+                            if is_completed {
+                                return;
+                            }
                         }
                     }
                 }
@@ -492,6 +809,70 @@ async fn try_stream_request(
     });
 
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, CodexError>> {
+    match kind {
+        "response.output_text.delta" => {
+            let delta = json
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            Some(Ok(ResponseEvent::OutputTextDelta { delta }))
+        }
+        "response.output_item.done" => {
+            let item = json.get("item").cloned().unwrap_or(Value::Null);
+            Some(Ok(ResponseEvent::OutputItemDone { item }))
+        }
+        "response.reasoning_summary_text.delta" => {
+            let delta = json
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            Some(Ok(ResponseEvent::ReasoningDelta { delta }))
+        }
+        "response.completed" | "response.done" => {
+            let resp_obj = json.get("response");
+            let response_id = resp_obj
+                .and_then(|r| r.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let token_usage = resp_obj
+                .and_then(|r| r.get("usage"))
+                .map(parse_token_usage);
+            Some(Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }))
+        }
+        "response.failed" => {
+            let error = json.get("response").and_then(|r| r.get("error"));
+            let code = error
+                .and_then(|e| e.get("code"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let message = error
+                .and_then(|e| e.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string();
+            Some(Ok(ResponseEvent::Failed { code, message }))
+        }
+        "error" => {
+            let message = json
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("WebSocket error")
+                .to_string();
+            Some(Err(CodexError::new(ErrorCode::InternalError, message)))
+        }
+        _ => None,
+    }
 }
 
 fn parse_token_usage(usage: &Value) -> TokenUsage {
@@ -803,5 +1184,113 @@ mod tests {
         client.store_response_id("resp-123".into());
         let session = client.new_session("gpt-test".into());
         assert_eq!(session.previous_response_id.as_deref(), Some("resp-123"));
+    }
+
+    #[test]
+    fn ws_version_from_provider_returns_v1_when_supported() {
+        let mut info = crate::provider::ModelProviderInfo::create_openai();
+        info.supports_websockets = true;
+        assert_eq!(
+            ws_version_from_provider(&info),
+            Some(ResponsesWebsocketVersion::V1)
+        );
+    }
+
+    #[test]
+    fn ws_version_from_provider_returns_none_when_not_supported() {
+        let info = crate::provider::ModelProviderInfo::create_oss("http://localhost:8080/v1");
+        assert_eq!(ws_version_from_provider(&info), None);
+    }
+
+    #[test]
+    fn ws_available_respects_provider_and_disable() {
+        let mut info = crate::provider::ModelProviderInfo::create_openai();
+        info.supports_websockets = true;
+        let client = ModelClient::from_provider_info(&info, "key".into(), "conv".into());
+        assert!(client.ws_available());
+
+        client.disable_ws();
+        assert!(!client.ws_available());
+    }
+
+    #[test]
+    fn ws_not_available_for_oss_provider() {
+        let info = crate::provider::ModelProviderInfo::create_oss("http://localhost:8080/v1");
+        let client = ModelClient::from_provider_info(&info, "key".into(), "conv".into());
+        assert!(!client.ws_available());
+    }
+
+    #[test]
+    fn is_fallback_eligible_detects_model_not_found() {
+        let err = CodexError::new(ErrorCode::InternalError, "model_not_found");
+        assert!(is_fallback_eligible(&err));
+    }
+
+    #[test]
+    fn is_fallback_eligible_detects_capacity() {
+        let err = CodexError::new(ErrorCode::InternalError, "server overloaded");
+        assert!(is_fallback_eligible(&err));
+    }
+
+    #[test]
+    fn is_fallback_eligible_detects_rate_limit() {
+        let err = CodexError::new(ErrorCode::InternalError, "429 rate limit exceeded");
+        assert!(is_fallback_eligible(&err));
+    }
+
+    #[test]
+    fn is_fallback_eligible_rejects_auth_error() {
+        let err = CodexError::new(ErrorCode::InternalError, "unauthorized");
+        assert!(!is_fallback_eligible(&err));
+    }
+
+    #[test]
+    fn parse_ws_event_output_text_delta() {
+        let json = serde_json::json!({"type": "response.output_text.delta", "delta": "hello"});
+        let ev = parse_ws_event("response.output_text.delta", &json).unwrap().unwrap();
+        match ev {
+            ResponseEvent::OutputTextDelta { delta } => assert_eq!(delta, "hello"),
+            _ => panic!("expected OutputTextDelta"),
+        }
+    }
+
+    #[test]
+    fn parse_ws_event_completed() {
+        let json = serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp-1", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
+        });
+        let ev = parse_ws_event("response.completed", &json).unwrap().unwrap();
+        match ev {
+            ResponseEvent::Completed { response_id, token_usage } => {
+                assert_eq!(response_id, "resp-1");
+                assert_eq!(token_usage.unwrap().total_tokens, 15);
+            }
+            _ => panic!("expected Completed"),
+        }
+    }
+
+    #[test]
+    fn parse_ws_event_error() {
+        let json = serde_json::json!({"type": "error", "error": {"message": "bad request"}});
+        let ev = parse_ws_event("error", &json).unwrap();
+        assert!(ev.is_err());
+        assert!(ev.unwrap_err().message.contains("bad request"));
+    }
+
+    #[test]
+    fn parse_ws_event_unknown_returns_none() {
+        let json = serde_json::json!({"type": "unknown.event"});
+        assert!(parse_ws_event("unknown.event", &json).is_none());
+    }
+
+    #[test]
+    fn model_fallback_config_creation() {
+        let config = ModelFallbackConfig {
+            primary_model: "gpt-4o".into(),
+            fallback_models: vec!["gpt-4o-mini".into(), "gpt-3.5-turbo".into()],
+        };
+        assert_eq!(config.primary_model, "gpt-4o");
+        assert_eq!(config.fallback_models.len(), 2);
     }
 }
