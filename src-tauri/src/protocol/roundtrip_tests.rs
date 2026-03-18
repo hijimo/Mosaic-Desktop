@@ -522,6 +522,7 @@ mod tests {
                     total_token_usage,
                     last_token_usage,
                     model_context_window,
+                    rate_limits: None,
                 },
             )
     }
@@ -751,6 +752,10 @@ mod tests {
                             cwd,
                             history_log_id,
                             history_entry_count,
+                            mode: ModeKind::Default,
+                            reasoning_effort: None,
+                            reasoning_summary: None,
+                            can_append: false,
                         })
                     }
                 ),

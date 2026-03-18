@@ -124,6 +124,10 @@ impl Codex {
             cwd: self.cwd.clone(),
             history_log_id: 0,
             history_entry_count: 0,
+            mode: crate::protocol::types::ModeKind::Default,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            can_append: false,
         }))
         .await;
 
@@ -1016,6 +1020,7 @@ impl Codex {
                                                     total_tokens: usage.total_tokens as i64,
                                                 },
                                                 model_context_window: None,
+                                                rate_limits: None,
                                             }),
                                         },
                                     )).await;

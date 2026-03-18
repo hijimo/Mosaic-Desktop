@@ -58,6 +58,14 @@ pub struct SessionConfiguredEvent {
     pub cwd: PathBuf,
     pub history_log_id: u64,
     pub history_entry_count: usize,
+    #[serde(default)]
+    pub mode: ModeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<super::types::Effort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<super::types::ReasoningSummary>,
+    #[serde(default)]
+    pub can_append: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

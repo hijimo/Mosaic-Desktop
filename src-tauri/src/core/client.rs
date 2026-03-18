@@ -95,6 +95,8 @@ pub enum ResponseEvent {
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
+        /// Whether the conversation can be appended to (incremental turns).
+        can_append: bool,
     },
     /// An error from the API.
     Failed { code: String, message: String },
@@ -787,9 +789,13 @@ async fn try_stream_request(
                             let token_usage = resp_obj
                                 .and_then(|r| r.get("usage"))
                                 .map(parse_token_usage);
+                            let can_append = resp_obj
+                                .and_then(|r| r.get("incomplete_details"))
+                                .is_none();
                             let ev = ResponseEvent::Completed {
                                 response_id,
                                 token_usage,
+                                can_append,
                             };
                             let _ = tx.send(Ok(ev)).await;
                             return;
@@ -863,9 +869,13 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
             let token_usage = resp_obj
                 .and_then(|r| r.get("usage"))
                 .map(parse_token_usage);
+            let can_append = resp_obj
+                .and_then(|r| r.get("incomplete_details"))
+                .is_none();
             Some(Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }))
         }
         "response.failed" => {
@@ -1283,9 +1293,10 @@ mod tests {
         });
         let ev = parse_ws_event("response.completed", &json).unwrap().unwrap();
         match ev {
-            ResponseEvent::Completed { response_id, token_usage } => {
+            ResponseEvent::Completed { response_id, token_usage, can_append } => {
                 assert_eq!(response_id, "resp-1");
                 assert_eq!(token_usage.unwrap().total_tokens, 15);
+                assert!(can_append);
             }
             _ => panic!("expected Completed"),
         }

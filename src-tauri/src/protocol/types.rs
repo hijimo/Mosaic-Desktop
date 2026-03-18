@@ -771,11 +771,22 @@ pub struct TokenUsage {
 }
 
 /// Token usage info with totals and context window.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
     pub model_context_window: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<Vec<RateLimitInfo>>,
+}
+
+/// Rate limit information from the API response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitInfo {
+    pub name: String,
+    pub limit: i64,
+    pub remaining: i64,
+    pub reset_seconds: f64,
 }
 
 // ── MCP Startup ──────────────────────────────────────────────────
