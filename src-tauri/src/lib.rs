@@ -15,6 +15,7 @@ pub mod shell_command;
 pub mod shell_escalation;
 pub mod state;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -23,9 +24,6 @@ use config::ConfigLayerStack;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let (sq_tx, sq_rx) = async_channel::unbounded();
-    let (eq_tx, eq_rx) = async_channel::unbounded();
-
     // Load ~/.codex/config.toml as the User layer
     let mut config = ConfigLayerStack::new();
     if let Some(home) = std::env::var_os("HOME") {
@@ -38,9 +36,8 @@ pub fn run() {
     }
 
     let app_state = AppState {
-        sq_tx,
-        eq_rx: Arc::new(Mutex::new(eq_rx)),
-        config: Arc::new(Mutex::new(config.clone())),
+        threads: Arc::new(Mutex::new(HashMap::new())),
+        config: Arc::new(Mutex::new(config)),
     };
 
     tauri::Builder::default()
@@ -48,19 +45,15 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::submit_op,
-            commands::poll_events,
+            commands::thread_start,
+            commands::thread_list,
+            commands::thread_archive,
+            commands::thread_fork,
+            commands::fuzzy_file_search,
             commands::get_config,
             commands::update_config,
             commands::get_cwd,
         ])
-        .setup(move |_app| {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let codex = core::codex::Codex::new(sq_rx, eq_tx, config, cwd);
-            tauri::async_runtime::spawn(async move {
-                let _ = codex.run().await;
-            });
-            Ok(())
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
