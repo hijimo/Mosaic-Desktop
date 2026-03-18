@@ -894,6 +894,7 @@ impl Codex {
 
             let mut needs_follow_up = false;
             accumulated_text.clear();
+            let mut pending_calls: Vec<(String, String, String)> = Vec::new();
 
             match stream_result {
                 Err(e) => {
@@ -931,28 +932,7 @@ impl Codex {
                                         arguments: arguments.clone(),
                                     },
                                 ]).await;
-
-                                // Dispatch the tool call
-                                let args: serde_json::Value = serde_json::from_str(&arguments)
-                                    .unwrap_or(serde_json::Value::Object(Default::default()));
-
-                                let tool_result = self.dispatch_tool_call(
-                                    session, turn_id, &call_id, &name, args,
-                                ).await;
-
-                                // Record function_call_output in history
-                                let output_str = match &tool_result {
-                                    Ok(v) => v.to_string(),
-                                    Err(e) => format!("Error: {}", e.message),
-                                };
-                                session.add_to_history(vec![
-                                    crate::protocol::types::ResponseInputItem::FunctionCallOutput {
-                                        call_id: call_id.clone(),
-                                        output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
-                                    },
-                                ]).await;
-
-                                needs_follow_up = true;
+                                pending_calls.push((call_id, name, arguments));
                             }
                             Ok(crate::core::client::ResponseEvent::OutputItemDone(item)) => {
                                 if let crate::protocol::types::ResponseItem::Message { role, content, .. } = &item {
@@ -1049,6 +1029,34 @@ impl Codex {
                         }
                     }
                 }
+            }
+
+            // Dispatch pending tool calls in parallel
+            if !pending_calls.is_empty() {
+                let futs: Vec<_> = pending_calls.iter().map(|(call_id, name, arguments)| {
+                    let args: serde_json::Value = serde_json::from_str(arguments)
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                    let call_id = call_id.clone();
+                    let name = name.clone();
+                    async move {
+                        let result = self.dispatch_tool_call(session, turn_id, &call_id, &name, args).await;
+                        (call_id, result)
+                    }
+                }).collect();
+                let results = futures::future::join_all(futs).await;
+                for (call_id, tool_result) in results {
+                    let output_str = match &tool_result {
+                        Ok(v) => v.to_string(),
+                        Err(e) => format!("Error: {}", e.message),
+                    };
+                    session.add_to_history(vec![
+                        crate::protocol::types::ResponseInputItem::FunctionCallOutput {
+                            call_id,
+                            output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
+                        },
+                    ]).await;
+                }
+                needs_follow_up = true;
             }
 
             // If no tool calls were made, exit the agentic loop
