@@ -91,6 +91,14 @@ pub use seatbelt::{
 pub use session::{ModelInfo, PendingApproval, Session, SessionState, TurnContext};
 pub use skills::{
     load_skills_from_roots, render_skills_section, install_system_skills, system_cache_root_dir,
+    skill_roots_for_cwd,
+    build_implicit_skill_path_indexes, detect_implicit_skill_invocation,
+    collect_env_var_dependencies, resolve_dependencies, ResolvedDependencies, SkillDependencyInfo,
+    collect_explicit_skill_mentions, collect_explicit_skill_mentions_from_text,
+    build_skill_name_counts, extract_tool_mentions, normalize_skill_path,
+    tool_kind_for_path, ToolMentionKind,
+    compile_skill_permissions, normalize_permission_paths, SkillPermissions, MacOsSkillPermissions,
+    disabled_paths_from_entries,
     SkillDependencies, SkillError, SkillInterface, SkillLoadOutcome, SkillMetadata, SkillPolicy,
     SkillRoot, SkillScope, SkillsManager, SkillToolDependency,
 };

@@ -3,6 +3,46 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Scope for remote skill listing (maps to hazelnut scopes in the source project).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSkillScope {
+    WorkspaceShared,
+    AllShared,
+    Personal,
+    Example,
+}
+
+/// Product surface for remote skill listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSkillProductSurface {
+    Chatgpt,
+    Codex,
+    Api,
+    Atlas,
+}
+
+impl RemoteSkillProductSurface {
+    pub fn as_query_str(&self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chatgpt",
+            Self::Codex => "codex",
+            Self::Api => "api",
+            Self::Atlas => "atlas",
+        }
+    }
+}
+
+impl RemoteSkillScope {
+    pub fn as_query_str(&self) -> Option<&'static str> {
+        match self {
+            Self::WorkspaceShared => Some("workspace-shared"),
+            Self::AllShared => Some("all-shared"),
+            Self::Personal => Some("personal"),
+            Self::Example => Some("example"),
+        }
+    }
+}
+
 /// Summary of a remote skill from the skills API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteSkillSummary {
@@ -208,6 +248,23 @@ fn detect_common_prefix(archive: &zip::ZipArchive<Cursor<&[u8]>>) -> Option<Path
     prefix
 }
 
+/// Normalize a zip entry name by stripping known prefix candidates.
+///
+/// This aligns with the source project's `normalize_zip_name` which strips
+/// the hazelnut ID prefix from zip entries.
+pub fn normalize_zip_name(name: &str, prefix_candidates: &[String]) -> Option<String> {
+    let mut trimmed = name.trim_start_matches("./");
+    for prefix in prefix_candidates {
+        if prefix.is_empty() { continue; }
+        let with_slash = format!("{prefix}/");
+        if let Some(rest) = trimmed.strip_prefix(&with_slash) {
+            trimmed = rest;
+            break;
+        }
+    }
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+}
+
 /// Errors from remote skill operations.
 #[derive(Debug)]
 pub enum RemoteSkillError {
@@ -258,5 +315,25 @@ mod tests {
         // Common prefix "skill-x/" should be stripped.
         assert!(dir.path().join("SKILL.md").exists());
         assert!(dir.path().join("scripts/run.sh").exists());
+    }
+
+    #[test]
+    fn normalize_zip_name_strips_prefix() {
+        assert_eq!(
+            normalize_zip_name("abc123/SKILL.md", &["abc123".to_string()]),
+            Some("SKILL.md".to_string())
+        );
+        assert_eq!(
+            normalize_zip_name("./abc123/scripts/run.py", &["abc123".to_string()]),
+            Some("scripts/run.py".to_string())
+        );
+        assert_eq!(
+            normalize_zip_name("abc123/", &["abc123".to_string()]),
+            None
+        );
+        assert_eq!(
+            normalize_zip_name("other/SKILL.md", &["abc123".to_string()]),
+            Some("other/SKILL.md".to_string())
+        );
     }
 }

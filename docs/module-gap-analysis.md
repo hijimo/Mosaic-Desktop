@@ -331,15 +331,17 @@
 
 | 维度 | codex-main | Mosaic | 差异 |
 |------|-----------|--------|------|
-| 架构 | 11个子模块 (loader 89KB, injection 26KB, manager 18KB 等) | 8个子模块 (mod.rs + model.rs + loader.rs + render.rs + injection.rs + permissions.rs + remote.rs + manager.rs + system.rs) | ~21% |
-| Loader | 89KB 完整的 BFS 加载器 | BFS 加载 + YAML frontmatter + 优先级去重 | 存在 |
-| Injection | 26KB 技能注入系统 | injection.rs — `$name` + `[$name](path)` 语法 + SKILL.md 读取 | ✅ 已实现 |
-| Permissions | 16KB 技能权限管理 | permissions.rs — permission profile 编译 + env_var 依赖提取 | ✅ 已实现 |
-| Remote | 8KB 远程技能支持 | remote.rs — list + download + zip 解压 | ✅ 已实现 |
+| 架构 | 11个子模块 (loader 89KB, injection 26KB, manager 18KB 等) | 11个子模块 (loader 31KB, injection 15KB, manager 7KB 等) | ~35% |
+| Loader | 89KB 完整的 BFS 加载器 | BFS 加载 + YAML frontmatter + 优先级去重 + namespaced names + dirs_between + permission_profile + default_prompt | ✅ 已实现 |
+| Injection | 26KB 技能注入系统 | injection.rs — `$name` + `[$name](path)` 语法 + SKILL.md 读取 + build_skill_injections + text_mentions_skill | ✅ 已实现 |
+| Permissions | 16KB 技能权限管理 | permissions.rs — permission profile 编译 + env_var 依赖提取 + MacOsSkillPermissions + normalize_permission_path | ✅ 已实现 |
+| Remote | 8KB 远程技能支持 | remote.rs — list + download + zip 解压 + RemoteSkillScope + normalize_zip_name | ✅ 已实现 |
 | Render | 3KB 技能渲染 | render.rs — 独立模块 | ✅ 已实现 |
-| Manager | 18KB 技能管理器 | manager.rs — per-cwd 缓存 + 系统技能集成 | ✅ 已实现 |
+| Manager | 18KB 技能管理器 | manager.rs — per-cwd 缓存 + 系统技能集成 + disabled_paths_from_entries + extra_roots | ✅ 已实现 |
 | System | codex_skills crate | system.rs — include_dir 嵌入 + 指纹增量更新 | ✅ 已实现 |
 | Model | 丰富类型 | model.rs — SkillLoadOutcome + implicit invocation indexes | ✅ 已实现 |
+| InvocationUtils | 11KB 隐式调用检测 | invocation_utils.rs — script_run + doc_read + command_basename | ✅ 已实现 |
+| EnvVarDeps | 5KB 环境变量依赖 | env_var_dependencies.rs — collect + resolve + cache | ✅ 已实现 |
 
 ### 13.2 Memories 系统
 
@@ -510,7 +512,7 @@
 │ 配置系统                         │ ~400KB   │ ~40KB    │ 10%    │
 │ 状态持久化                       │ ~60KB    │ ~65KB    │ 100%+  │
 │ 执行策略                         │ ~180KB   │ ~57KB    │ 32%    │
-│ Skills 系统                      │ ~190KB   │ ~40KB    │ 21%    │
+│ Skills 系统                      │ ~190KB   │ ~95KB    │ 50%    │
 │ Memories 系统                    │ ~100KB   │ ~45KB    │ 45%    │
 │ Rollout 系统                     │ ~200KB   │ ~45KB    │ 24%    │
 │ Context Manager                  │ ~90KB    │ ~24KB    │ 27%    │

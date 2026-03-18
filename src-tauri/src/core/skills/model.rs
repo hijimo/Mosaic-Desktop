@@ -31,7 +31,9 @@ pub struct SkillInterface {
     pub display_name: Option<String>,
     pub short_description: Option<String>,
     pub icon: Option<String>,
+    pub icon_large: Option<String>,
     pub brand_color: Option<String>,
+    pub default_prompt: Option<String>,
 }
 
 /// A single tool dependency required by a skill.
@@ -123,18 +125,11 @@ impl SkillLoadOutcome {
 }
 
 /// Build path indexes for implicit skill invocation detection.
+/// (Moved to invocation_utils.rs — this is kept as a re-export for backward compat.)
 pub fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
 ) -> (HashMap<PathBuf, SkillMetadata>, HashMap<PathBuf, SkillMetadata>) {
-    let mut by_scripts_dir = HashMap::new();
-    let mut by_doc_path = HashMap::new();
-    for skill in skills {
-        by_doc_path.insert(skill.path_to_skills_md.clone(), skill.clone());
-        if let Some(skill_dir) = skill.path_to_skills_md.parent() {
-            by_scripts_dir.insert(skill_dir.join("scripts"), skill);
-        }
-    }
-    (by_scripts_dir, by_doc_path)
+    super::invocation_utils::build_implicit_skill_path_indexes(skills)
 }
 
 #[cfg(test)]
@@ -184,7 +179,7 @@ mod tests {
     #[test]
     fn build_indexes() {
         let skill = make_skill("a", "/tmp/a/SKILL.md");
-        let (by_scripts, by_doc) = build_implicit_skill_path_indexes(vec![skill]);
+        let (by_scripts, by_doc) = crate::core::skills::invocation_utils::build_implicit_skill_path_indexes(vec![skill]);
         assert!(by_doc.contains_key(&PathBuf::from("/tmp/a/SKILL.md")));
         assert!(by_scripts.contains_key(&PathBuf::from("/tmp/a/scripts")));
     }
