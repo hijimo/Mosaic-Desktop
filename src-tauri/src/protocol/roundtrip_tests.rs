@@ -534,7 +534,6 @@ mod tests {
                     total_token_usage,
                     last_token_usage,
                     model_context_window,
-                    rate_limits: None,
                 },
             )
     }
@@ -801,7 +800,7 @@ mod tests {
             ),
             // TokenCount
             prop::option::of(arb_token_usage_info())
-                .prop_map(|info| EventMsg::TokenCount(TokenCountEvent { info })),
+                .prop_map(|info| EventMsg::TokenCount(TokenCountEvent { info, rate_limits: None })),
             // AgentMessage
             arb_safe_string()
                 .prop_map(|message| EventMsg::AgentMessage(AgentMessageEvent { message })),

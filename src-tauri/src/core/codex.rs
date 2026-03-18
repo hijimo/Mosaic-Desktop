@@ -954,44 +954,42 @@ impl Codex {
 
                                 needs_follow_up = true;
                             }
-                            Ok(crate::core::client::ResponseEvent::OutputItemDone { item }) => {
-                                if item.get("type").and_then(|t| t.as_str()) == Some("message")
-                                    && item.get("role").and_then(|r| r.as_str()) == Some("assistant")
-                                {
-                                    let text: String = item
-                                        .get("content")
-                                        .and_then(|c| c.as_array())
-                                        .map(|arr| {
-                                            arr.iter()
-                                                .filter_map(|c| {
-                                                    if c.get("type").and_then(|t| t.as_str()) == Some("output_text") {
-                                                        c.get("text").and_then(|t| t.as_str()).map(str::to_string)
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .collect::<Vec<_>>()
-                                                .join("")
-                                        })
-                                        .unwrap_or_default();
+                            Ok(crate::core::client::ResponseEvent::OutputItemDone(item)) => {
+                                if let crate::protocol::types::ResponseItem::Message { role, content, .. } = &item {
+                                    if role == "assistant" {
+                                        let text: String = content.iter().filter_map(|c| {
+                                            if let crate::protocol::types::ContentItem::OutputText { text } = c {
+                                                Some(text.as_str())
+                                            } else {
+                                                None
+                                            }
+                                        }).collect::<Vec<_>>().join("");
 
-                                    if !text.is_empty() {
-                                        last_agent_message = Some(text.clone());
-                                        session.add_to_history(vec![
-                                            crate::protocol::types::ResponseInputItem::Message {
-                                                role: "assistant".into(),
-                                                content: text.clone(),
-                                            },
-                                        ]).await;
-                                        if accumulated_text.is_empty() {
-                                            self.emit(EventMsg::AgentMessage(
-                                                crate::protocol::event::AgentMessageEvent { message: text },
-                                            )).await;
+                                        if !text.is_empty() {
+                                            last_agent_message = Some(text.clone());
+                                            session.add_to_history(vec![
+                                                crate::protocol::types::ResponseInputItem::Message {
+                                                    role: "assistant".into(),
+                                                    content: text.clone(),
+                                                },
+                                            ]).await;
+                                            if accumulated_text.is_empty() {
+                                                self.emit(EventMsg::AgentMessage(
+                                                    crate::protocol::event::AgentMessageEvent { message: text },
+                                                )).await;
+                                            }
                                         }
                                     }
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::ReasoningDelta { delta }) => {
+                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryDelta { delta, .. }) => {
+                                if !delta.is_empty() {
+                                    self.emit(EventMsg::AgentReasoningDelta(
+                                        crate::protocol::event::AgentReasoningDeltaEvent { delta },
+                                    )).await;
+                                }
+                            }
+                            Ok(crate::core::client::ResponseEvent::ReasoningContentDelta { delta, .. }) => {
                                 if !delta.is_empty() {
                                     self.emit(EventMsg::AgentReasoningDelta(
                                         crate::protocol::event::AgentReasoningDeltaEvent { delta },
@@ -1018,8 +1016,8 @@ impl Codex {
                                                     total_tokens: usage.total_tokens as i64,
                                                 },
                                                 model_context_window: None,
-                                                rate_limits: None,
                                             }),
+                                            rate_limits: None,
                                         },
                                     )).await;
                                 }
@@ -1046,6 +1044,8 @@ impl Codex {
                                 })).await;
                                 break;
                             }
+                            // Created, OutputItemAdded, ReasoningSummaryPartAdded, ServerModel, RateLimits
+                            _ => {}
                         }
                     }
                 }

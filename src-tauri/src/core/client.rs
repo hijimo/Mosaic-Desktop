@@ -79,18 +79,30 @@ pub struct TokenUsage {
 /// A parsed SSE event from the Responses API stream.
 #[derive(Debug)]
 pub enum ResponseEvent {
+    /// The response has been created.
+    Created,
     /// Streaming text delta from the assistant.
     OutputTextDelta { delta: String },
     /// A complete output item (message, function_call, etc.).
-    OutputItemDone { item: Value },
+    OutputItemDone(crate::protocol::types::ResponseItem),
+    /// A new output item has been added to the response.
+    OutputItemAdded(crate::protocol::types::ResponseItem),
     /// A function call from the model requesting tool execution.
     FunctionCall {
         call_id: String,
         name: String,
         arguments: String,
     },
-    /// Reasoning text delta (for models that support reasoning).
-    ReasoningDelta { delta: String },
+    /// Reasoning summary text delta.
+    ReasoningSummaryDelta { delta: String, summary_index: i64 },
+    /// Reasoning content text delta.
+    ReasoningContentDelta { delta: String, content_index: i64 },
+    /// A new reasoning summary part has been added.
+    ReasoningSummaryPartAdded { summary_index: i64 },
+    /// The effective model reported by the server.
+    ServerModel(String),
+    /// Rate-limit snapshot from the server.
+    RateLimits(crate::protocol::types::RateLimitSnapshot),
     /// The response is complete.
     Completed {
         response_id: String,
@@ -752,69 +764,14 @@ async fn try_stream_request(
                     let kind = json.get("type").and_then(Value::as_str).unwrap_or("");
 
                     let parsed = match kind {
-                        "response.output_text.delta" => {
-                            let delta = json
-                                .get("delta")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            Some(Ok(ResponseEvent::OutputTextDelta { delta }))
-                        }
-                        "response.output_item.done" => {
-                            let item = json.get("item").cloned().unwrap_or(Value::Null);
-                            if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                                let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
-                                let name = item.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                                let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
-                                Some(Ok(ResponseEvent::FunctionCall { call_id, name, arguments }))
-                            } else {
-                                Some(Ok(ResponseEvent::OutputItemDone { item }))
-                            }
-                        }
-                        "response.reasoning_summary_text.delta" => {
-                            let delta = json
-                                .get("delta")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            Some(Ok(ResponseEvent::ReasoningDelta { delta }))
-                        }
                         "response.completed" | "response.done" => {
-                            let resp_obj = json.get("response");
-                            let response_id = resp_obj
-                                .and_then(|r| r.get("id"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            let token_usage = resp_obj
-                                .and_then(|r| r.get("usage"))
-                                .map(parse_token_usage);
-                            let can_append = resp_obj
-                                .and_then(|r| r.get("incomplete_details"))
-                                .is_none();
-                            let ev = ResponseEvent::Completed {
-                                response_id,
-                                token_usage,
-                                can_append,
-                            };
-                            let _ = tx.send(Ok(ev)).await;
+                            // These terminate the stream, handle specially
+                            if let Some(result) = parse_ws_event(kind, &json) {
+                                let _ = tx.send(result).await;
+                            }
                             return;
                         }
-                        "response.failed" => {
-                            let error = json.get("response").and_then(|r| r.get("error"));
-                            let code = error
-                                .and_then(|e| e.get("code"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let message = error
-                                .and_then(|e| e.get("message"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("unknown error")
-                                .to_string();
-                            Some(Ok(ResponseEvent::Failed { code, message }))
-                        }
-                        _ => None,
+                        _ => parse_ws_event(kind, &json),
                     };
 
                     if let Some(ev) = parsed {
@@ -841,25 +798,46 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
             Some(Ok(ResponseEvent::OutputTextDelta { delta }))
         }
         "response.output_item.done" => {
-            let item = json.get("item").cloned().unwrap_or(Value::Null);
+            let item_val = json.get("item").cloned().unwrap_or(Value::Null);
             // Check if this is a function_call item
-            if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
-                let name = item.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
+            if item_val.get("type").and_then(Value::as_str) == Some("function_call") {
+                let call_id = item_val.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
+                let name = item_val.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let arguments = item_val.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
                 return Some(Ok(ResponseEvent::FunctionCall { call_id, name, arguments }));
             }
-            Some(Ok(ResponseEvent::OutputItemDone { item }))
+            if let Ok(item) = serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val) {
+                return Some(Ok(ResponseEvent::OutputItemDone(item)));
+            }
+            None
+        }
+        "response.output_item.added" => {
+            let item_val = json.get("item").cloned()?;
+            let item = serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val).ok()?;
+            Some(Ok(ResponseEvent::OutputItemAdded(item)))
         }
         "response.reasoning_summary_text.delta" => {
-            let delta = json
-                .get("delta")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            Some(Ok(ResponseEvent::ReasoningDelta { delta }))
+            let delta = json.get("delta").and_then(Value::as_str).unwrap_or("").to_string();
+            let summary_index = json.get("summary_index").and_then(Value::as_i64).unwrap_or(0);
+            Some(Ok(ResponseEvent::ReasoningSummaryDelta { delta, summary_index }))
+        }
+        "response.reasoning_text.delta" => {
+            let delta = json.get("delta").and_then(Value::as_str).unwrap_or("").to_string();
+            let content_index = json.get("content_index").and_then(Value::as_i64).unwrap_or(0);
+            Some(Ok(ResponseEvent::ReasoningContentDelta { delta, content_index }))
+        }
+        "response.reasoning_summary_part.added" => {
+            let summary_index = json.get("summary_index").and_then(Value::as_i64)?;
+            Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { summary_index }))
+        }
+        "response.created" => {
+            if json.get("response").is_some() {
+                return Some(Ok(ResponseEvent::Created));
+            }
+            None
         }
         "response.completed" | "response.done" => {
+            let can_append = kind == "response.done";
             let resp_obj = json.get("response");
             let response_id = resp_obj
                 .and_then(|r| r.get("id"))
@@ -869,14 +847,20 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
             let token_usage = resp_obj
                 .and_then(|r| r.get("usage"))
                 .map(parse_token_usage);
-            let can_append = resp_obj
-                .and_then(|r| r.get("incomplete_details"))
-                .is_none();
             Some(Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
                 can_append,
             }))
+        }
+        "response.incomplete" => {
+            let reason = json.get("response")
+                .and_then(|r| r.get("incomplete_details"))
+                .and_then(|d| d.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let message = format!("Incomplete response, reason: {reason}");
+            Some(Err(CodexError::new(ErrorCode::InternalError, message)))
         }
         "response.failed" => {
             let error = json.get("response").and_then(|r| r.get("error"));
@@ -1315,7 +1299,7 @@ mod tests {
             ResponseEvent::Completed { response_id, token_usage, can_append } => {
                 assert_eq!(response_id, "resp-1");
                 assert_eq!(token_usage.unwrap().total_tokens, 15);
-                assert!(can_append);
+                assert!(!can_append);
             }
             _ => panic!("expected Completed"),
         }

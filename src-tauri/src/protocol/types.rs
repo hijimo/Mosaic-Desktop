@@ -1044,17 +1044,49 @@ pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
     pub model_context_window: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rate_limits: Option<Vec<RateLimitInfo>>,
 }
 
-/// Rate limit information from the API response.
+/// Snapshot of rate-limit state for a single metered limit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RateLimitInfo {
-    pub name: String,
-    pub limit: i64,
-    pub remaining: i64,
-    pub reset_seconds: f64,
+pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<PlanType>,
+}
+
+/// A single rate-limit window (primary or secondary).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitWindow {
+    pub used_percent: f64,
+    pub window_minutes: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+/// Credits balance snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+/// Account plan type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanType {
+    #[default]
+    Free,
+    Go,
+    Plus,
+    Pro,
+    Team,
+    Business,
+    Enterprise,
+    Edu,
+    #[serde(other)]
+    Unknown,
 }
 
 // ── MCP Startup ──────────────────────────────────────────────────

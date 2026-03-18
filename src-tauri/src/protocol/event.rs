@@ -8,8 +8,8 @@ use super::types::{
     DynamicToolCallRequest, ExecCommandSource, ExecCommandStatus, ExecOutputStream,
     ExecPolicyAmendment, FileChange, McpInvocation, McpStartupFailure, McpStartupStatus, ModeKind,
     ModelRerouteReason, NetworkApprovalContext, NetworkPolicyAmendment, ParsedCommand,
-    PatchApplyStatus, ReviewDecision, ReviewRequest, SandboxPolicy, TextElement, TokenUsageInfo,
-    TurnAbortReason,
+    PatchApplyStatus, RateLimitSnapshot, ReviewDecision, ReviewRequest, SandboxPolicy,
+    TextElement, TokenUsageInfo, TurnAbortReason,
 };
 
 // ── Event wrapper ────────────────────────────────────────────────
@@ -101,6 +101,8 @@ pub struct TurnAbortedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
