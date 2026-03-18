@@ -62,6 +62,7 @@ mod tests {
     fn agent_item(text: &str) -> RolloutItem {
         RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
             message: text.to_string(),
+            phase: None,
         }))
     }
 

@@ -8,8 +8,8 @@ use super::types::{
     DynamicToolCallRequest, ExecCommandSource, ExecCommandStatus, ExecOutputStream,
     ExecPolicyAmendment, FileChange, McpInvocation, McpStartupFailure, McpStartupStatus, ModeKind,
     ModelRerouteReason, NetworkApprovalContext, NetworkPolicyAmendment, ParsedCommand,
-    PatchApplyStatus, RateLimitSnapshot, ReviewDecision, ReviewRequest, SandboxPolicy,
-    TextElement, TokenUsageInfo, TurnAbortReason,
+    PatchApplyStatus, RateLimitSnapshot, ResponseItem, ReviewDecision, ReviewOutputEvent,
+    ReviewRequest, SandboxPolicy, TextElement, TokenUsageInfo, TurnAbortReason, WebSearchAction,
 };
 
 // ── Event wrapper ────────────────────────────────────────────────
@@ -108,6 +108,8 @@ pub struct TokenCountEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentMessageEvent {
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<super::types::MessagePhase>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,7 +130,7 @@ pub struct AgentMessageDeltaEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentReasoningEvent {
-    pub message: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,7 +140,7 @@ pub struct AgentReasoningDeltaEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentReasoningRawContentEvent {
-    pub content: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -148,9 +150,13 @@ pub struct AgentReasoningRawContentDeltaEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentReasoningSectionBreakEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    #[serde(default)]
+    pub item_id: String,
+    #[serde(default)]
+    pub summary_index: i64,
 }
+
+use super::items::TurnItem;
 
 // ── Structured item events ───────────────────────────────────────
 
@@ -158,14 +164,14 @@ pub struct AgentReasoningSectionBreakEvent {
 pub struct ItemStartedEvent {
     pub thread_id: String,
     pub turn_id: String,
-    pub item: serde_json::Value,
+    pub item: TurnItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ItemCompletedEvent {
     pub thread_id: String,
     pub turn_id: String,
-    pub item: serde_json::Value,
+    pub item: TurnItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -206,7 +212,7 @@ pub struct ReasoningRawContentDeltaEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RawResponseItemEvent {
-    pub item: serde_json::Value,
+    pub item: ResponseItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -406,7 +412,7 @@ pub struct WebSearchBeginEvent {
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
-    pub action: serde_json::Value,
+    pub action: WebSearchAction,
 }
 
 // ── Dynamic tool events ──────────────────────────────────────────
@@ -449,6 +455,21 @@ pub struct StreamErrorEvent {
     pub codex_error_info: Option<CodexErrorInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub additional_details: Option<String>,
+}
+
+// ── Stream info event ────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamInfoEvent {
+    pub message: String,
+}
+
+// ── Conversation path response event ─────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConversationPathResponseEvent {
+    pub conversation_id: String,
+    pub path: PathBuf,
 }
 
 // ── Misc events ──────────────────────────────────────────────────
@@ -513,7 +534,7 @@ pub struct PlanUpdateEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExitedReviewModeEvent {
-    pub review_output: Option<serde_json::Value>,
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // ── Realtime conversation events ─────────────────────────────────
@@ -710,6 +731,12 @@ pub enum EventMsg {
     // --- Undo ---
     UndoStarted(UndoStartedEvent),
     UndoCompleted(UndoCompletedEvent),
+
+    // --- Stream info ---
+    StreamInfo(StreamInfoEvent),
+
+    // --- Conversation path ---
+    ConversationPathResponse(ConversationPathResponseEvent),
 
     // --- Stream errors ---
     StreamError(StreamErrorEvent),

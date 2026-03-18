@@ -26,7 +26,10 @@ impl SessionTask for ReviewTask {
         // Emit review mode entry. The actual review sub-agent conversation
         // will be implemented when codex_delegate (sub-codex thread) is available.
         ctx.emit(EventMsg::EnteredReviewMode(
-            crate::protocol::types::ReviewRequest { instructions: None },
+            crate::protocol::types::ReviewRequest {
+                target: crate::protocol::types::ReviewTarget::UncommittedChanges,
+                user_facing_hint: None,
+            },
         ))
         .await;
 

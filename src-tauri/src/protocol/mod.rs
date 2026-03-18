@@ -1,5 +1,6 @@
 pub mod error;
 pub mod event;
+pub mod items;
 #[cfg(test)]
 mod roundtrip_tests;
 pub mod submission;
@@ -8,6 +9,10 @@ pub mod types;
 
 pub use error::{CodexError, ErrorCode};
 pub use event::{Event, EventMsg};
+pub use items::{
+    AgentMessageContent, AgentMessageItem, ContextCompactionItem, PlanItem, ReasoningItem,
+    TurnItem, UserMessageItem, WebSearchItem,
+};
 pub use submission::{Op, Submission};
 pub use thread_id::ThreadId;
 pub use types::{
@@ -17,14 +22,16 @@ pub use types::{
     DynamicToolCallRequest, DynamicToolResponse, DynamicToolSpec, Effort, ElicitationAction,
     ExecCommandSource, ExecCommandStatus, ExecOutputStream, ExecPolicyAmendment, FileChange,
     ForcedLoginMethod, FunctionCallOutputBody, FunctionCallOutputContentItem,
-    FunctionCallOutputPayload, McpInvocation, McpServerRefreshConfig,
+    FunctionCallOutputPayload, LocalShellAction, LocalShellExecAction, LocalShellStatus,
+    McpInvocation, McpServerRefreshConfig,
     McpStartupFailure, McpStartupStatus, MessagePhase, ModeKind, ModelRerouteReason,
     NetworkAccess, NetworkApprovalContext, NetworkApprovalProtocol, NetworkPolicyAmendment,
     NetworkPolicyRuleAction, ParsedCommand, PatchApplyStatus, Personality, ReadOnlyAccess,
     ReasoningContentItem, ReasoningSummary, ReasoningSummaryItem, RejectConfig,
     RemoteSkillHazelnutScope, RemoteSkillProductSurface, RateLimitSnapshot, RateLimitWindow,
     CreditsSnapshot, PlanType, ResponseInputItem, ResponseItem,
-    ReviewDecision, ReviewRequest, SandboxMode, SandboxPolicy, ServiceTier,
+    ReviewCodeLocation, ReviewDecision, ReviewFinding, ReviewLineRange, ReviewOutputEvent,
+    ReviewRequest, ReviewTarget, SandboxMode, SandboxPolicy, ServiceTier,
     TextElement, TokenUsage, TokenUsageInfo, TrustLevel, TurnAbortReason, TurnContextOverrides,
     UserInput, Verbosity, WebSearchAction, WebSearchMode, WritableRoot,
 };

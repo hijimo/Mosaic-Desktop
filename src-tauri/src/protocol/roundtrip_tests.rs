@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::protocol::event::*;
+    use crate::protocol::items::*;
     use crate::protocol::submission::{Op, Submission};
     use crate::protocol::types::*;
     use proptest::prelude::*;
@@ -538,6 +539,22 @@ mod tests {
             )
     }
 
+    fn arb_turn_item() -> impl Strategy<Value = TurnItem> {
+        prop_oneof![
+            (arb_safe_string(), arb_safe_string()).prop_map(|(id, text)| {
+                TurnItem::AgentMessage(AgentMessageItem {
+                    id,
+                    content: vec![AgentMessageContent::Text { text }],
+                    phase: None,
+                })
+            }),
+            (arb_safe_string(), arb_safe_string()).prop_map(|(id, text)| {
+                TurnItem::Plan(PlanItem { id, text })
+            }),
+            arb_safe_string().prop_map(|id| TurnItem::ContextCompaction(ContextCompactionItem { id })),
+        ]
+    }
+
     fn arb_turn_context_overrides() -> impl Strategy<Value = TurnContextOverrides> {
         (
             prop::option::of(arb_safe_string()),
@@ -803,7 +820,7 @@ mod tests {
                 .prop_map(|info| EventMsg::TokenCount(TokenCountEvent { info, rate_limits: None })),
             // AgentMessage
             arb_safe_string()
-                .prop_map(|message| EventMsg::AgentMessage(AgentMessageEvent { message })),
+                .prop_map(|message| EventMsg::AgentMessage(AgentMessageEvent { message, phase: None })),
             // AgentMessageDelta
             arb_safe_string()
                 .prop_map(|delta| EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })),
@@ -1031,7 +1048,7 @@ mod tests {
                     })
                 }),
             // ItemStarted
-            (arb_safe_string(), arb_safe_string(), arb_json_object()).prop_map(
+            (arb_safe_string(), arb_safe_string(), arb_turn_item()).prop_map(
                 |(thread_id, turn_id, item)| {
                     EventMsg::ItemStarted(ItemStartedEvent {
                         thread_id,
@@ -1041,7 +1058,7 @@ mod tests {
                 }
             ),
             // ItemCompleted
-            (arb_safe_string(), arb_safe_string(), arb_json_object()).prop_map(
+            (arb_safe_string(), arb_safe_string(), arb_turn_item()).prop_map(
                 |(thread_id, turn_id, item)| {
                     EventMsg::ItemCompleted(ItemCompletedEvent {
                         thread_id,
@@ -1051,8 +1068,18 @@ mod tests {
                 }
             ),
             // RawResponseItem
-            arb_json_object()
-                .prop_map(|item| EventMsg::RawResponseItem(RawResponseItemEvent { item })),
+            arb_safe_string()
+                .prop_map(|text| {
+                    EventMsg::RawResponseItem(RawResponseItemEvent {
+                        item: ResponseItem::Message {
+                            id: None,
+                            role: "assistant".to_string(),
+                            content: vec![ContentItem::OutputText { text }],
+                            end_turn: None,
+                            phase: None,
+                        },
+                    })
+                }),
             // ExecApprovalRequest
             (
                 arb_safe_string(),

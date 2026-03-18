@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ── Network & Read-Only Access ───────────────────────────────────
@@ -487,6 +488,24 @@ pub struct TextElement {
     pub placeholder: Option<String>,
 }
 
+impl TextElement {
+    pub fn new(byte_range: ByteRange, placeholder: Option<String>) -> Self {
+        Self {
+            byte_range,
+            placeholder,
+        }
+    }
+
+    /// Return the placeholder text, or the slice from `source` if no placeholder is set.
+    pub fn placeholder<'a>(&'a self, source: &'a str) -> Option<&'a str> {
+        if let Some(ref p) = self.placeholder {
+            Some(p.as_str())
+        } else {
+            source.get(self.byte_range.start..self.byte_range.end)
+        }
+    }
+}
+
 /// User input item (tagged enum matching reference source).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -567,8 +586,11 @@ pub enum ResponseItem {
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         call_id: Option<String>,
-        status: String,
-        action: serde_json::Value,
+        status: LocalShellStatus,
+        action: LocalShellAction,
+    },
+    GhostSnapshot {
+        ghost_commit: serde_json::Value,
     },
     CustomToolCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -612,6 +634,34 @@ pub enum ReasoningSummaryItem {
 pub enum ReasoningContentItem {
     ReasoningText { text: String },
     Text { text: String },
+}
+
+// ── Local Shell Types ─────────────────────────────────────────────
+
+/// Status of a local shell call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalShellStatus {
+    Completed,
+    InProgress,
+    Incomplete,
+}
+
+/// Action for a local shell call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LocalShellAction {
+    Exec(LocalShellExecAction),
+}
+
+/// Exec action details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalShellExecAction {
+    pub command: Vec<String>,
+    pub timeout_ms: Option<u64>,
+    pub working_directory: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub user: Option<String>,
 }
 
 /// Web search action.
@@ -998,6 +1048,8 @@ pub enum ExecCommandSource {
     #[default]
     Agent,
     UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
 }
 
 /// Status of a completed command execution.
@@ -1127,11 +1179,72 @@ pub enum AgentStatus {
 
 // ── Review Request ───────────────────────────────────────────────
 
+/// Review target specifying what to review.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    #[serde(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+    #[serde(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        title: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 /// Review request payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewRequest {
+    pub target: ReviewTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
+    pub user_facing_hint: Option<String>,
+}
+
+/// Structured review result produced by a child review session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewOutputEvent {
+    pub findings: Vec<ReviewFinding>,
+    pub overall_correctness: String,
+    pub overall_explanation: String,
+    pub overall_confidence_score: f32,
+}
+
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
+/// A single review finding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub priority: i32,
+    pub code_location: ReviewCodeLocation,
+}
+
+/// Location of code related to a review finding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+/// Inclusive line range in a file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 // ── Remote Skills ────────────────────────────────────────────────
@@ -1158,9 +1271,8 @@ pub enum RemoteSkillProductSurface {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessagePhase {
-    Planning,
-    Executing,
-    Summarizing,
+    Commentary,
+    FinalAnswer,
 }
 
 // ── Model Reroute ────────────────────────────────────────────────
