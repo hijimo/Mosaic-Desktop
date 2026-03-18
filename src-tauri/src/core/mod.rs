@@ -40,6 +40,11 @@ pub use agent::{
     run_batch_jobs, AgentControl, AgentInstance, BatchJobConfig, BatchResult, Guards,
     SpawnAgentOptions,
 };
+pub use agent::{
+    AgentRoleConfig, SpawnGuards, SpawnReservation, DEFAULT_ROLE_NAME,
+    agent_status_from_event, exceeds_thread_spawn_depth_limit, is_final,
+    next_thread_spawn_depth,
+};
 pub use codex::{Codex, CodexHandle};
 pub use compact::{compact, compact_remote, emit_compacted_if_changed, CompactResult};
 pub use context_manager::{ContextManager, TokenUsageBreakdown};

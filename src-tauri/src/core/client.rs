@@ -83,6 +83,12 @@ pub enum ResponseEvent {
     OutputTextDelta { delta: String },
     /// A complete output item (message, function_call, etc.).
     OutputItemDone { item: Value },
+    /// A function call from the model requesting tool execution.
+    FunctionCall {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
     /// Reasoning text delta (for models that support reasoning).
     ReasoningDelta { delta: String },
     /// The response is complete.
@@ -754,7 +760,14 @@ async fn try_stream_request(
                         }
                         "response.output_item.done" => {
                             let item = json.get("item").cloned().unwrap_or(Value::Null);
-                            Some(Ok(ResponseEvent::OutputItemDone { item }))
+                            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                                let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
+                                let name = item.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                                let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
+                                Some(Ok(ResponseEvent::FunctionCall { call_id, name, arguments }))
+                            } else {
+                                Some(Ok(ResponseEvent::OutputItemDone { item }))
+                            }
                         }
                         "response.reasoning_summary_text.delta" => {
                             let delta = json
@@ -823,6 +836,13 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
         }
         "response.output_item.done" => {
             let item = json.get("item").cloned().unwrap_or(Value::Null);
+            // Check if this is a function_call item
+            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
+                return Some(Ok(ResponseEvent::FunctionCall { call_id, name, arguments }));
+            }
             Some(Ok(ResponseEvent::OutputItemDone { item }))
         }
         "response.reasoning_summary_text.delta" => {
@@ -1054,6 +1074,7 @@ pub async fn stream_response(
     instructions: Option<&str>,
     history: Vec<Value>,
     previous_response_id: Option<&str>,
+    tools: Option<Vec<Value>>,
 ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
     let request = ResponsesApiRequest {
         model: model.into(),
@@ -1061,8 +1082,8 @@ pub async fn stream_response(
         stream: true,
         instructions: instructions.map(String::from),
         previous_response_id: previous_response_id.map(String::from),
-        tool_choice: None,
-        tools: None,
+        tool_choice: if tools.is_some() { Some("auto".into()) } else { None },
+        tools,
         parallel_tool_calls: None,
         text: None,
     };

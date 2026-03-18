@@ -35,6 +35,33 @@ impl ToolHandler for GrepFilesHandler {
         ToolKind::Builtin("grep_files".to_string())
     }
 
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "name": "grep_files",
+            "description": "Search for a pattern in files using regex. Returns matching lines with file paths and line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to search in"
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "Glob pattern for files to include (e.g. '*.rs')"
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        }))
+    }
+
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: GrepFilesArgs = serde_json::from_value(args).map_err(|e| {
             CodexError::new(ErrorCode::InvalidInput, format!("invalid grep_files args: {e}"))

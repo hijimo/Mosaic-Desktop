@@ -38,6 +38,29 @@ impl ToolHandler for ListDirHandler {
         ToolKind::Builtin("list_dir".to_string())
     }
 
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "name": "list_dir",
+            "description": "List the contents of a directory. Returns file names, types, and sizes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative path to the directory"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum recursion depth (default: 1)"
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        }))
+    }
+
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: ListDirArgs = serde_json::from_value(args).map_err(|e| {
             CodexError::new(ErrorCode::InvalidInput, format!("invalid list_dir args: {e}"))

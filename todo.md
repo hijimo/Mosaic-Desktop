@@ -1,32 +1,30 @@
-# Unified Exec 补全任务清单
+# Agentic Loop 实施任务清单
 
-## 全部完成 ✅ — 622 tests passed, 0 failed
+## 核心目标
+实现 run_turn 中的 agentic tool call loop，使 AI 能够调用 tools 并循环对话。
 
-### Phase 1: 基础设施补全
-- [x] 1.1 truncation.rs 添加 `approx_token_count` + `formatted_truncate_text`
-- [x] 1.2 mod.rs 添加 `UnifiedExecProcessManager` (带 process_store + max_write_stdin_yield_time_ms)
-- [x] 1.3 mod.rs 添加 `apply_exec_env` 辅助函数
-- [x] 1.4 ProcessEntry 增加 `process: Arc<UnifiedExecProcess>` + `call_id` 字段
+## 任务清单
 
-### Phase 2: process_manager.rs 重写核心方法
-- [x] 2.1 `open_session_with_exec_env` — PTY/pipe spawn → UnifiedExecProcess
-- [x] 2.2 `collect_output_until_deadline` — deadline 轮询 + post-exit grace
-- [x] 2.3 `exec_command` — 完整流程: spawn → stream → collect → store/release
-- [x] 2.4 `write_stdin` — 获取进程 handles → 发送 input → 收集 output → 刷新状态
-- [x] 2.5 `allocate_process_id` / `release_process_id`
-- [x] 2.6 `store_process` + `prune_processes_if_needed`
-- [x] 2.7 `terminate_all_processes`
+### Phase 1: Tool Spec 收集
+- [x] 1.1 给 ToolHandler trait 添加 `tool_spec()` 默认方法
+- [x] 1.2 给 ToolRegistry 添加 `collect_tool_specs()` 方法
+- [x] 1.3 给核心 handlers 实现 `tool_spec()`: shell, read_file, list_dir, grep_files, apply_patch
+- [x] 1.4 在 ToolRouter 中添加 `collect_tool_specs()` 聚合 built-in + dynamic tools
 
-### Phase 3: async_watcher.rs 流式事件
-- [x] 3.1 `start_streaming_output` — 后台 task 读 PTY → HeadTailBuffer + UTF-8 split
-- [x] 3.2 `spawn_exit_watcher` — 监听退出 + output drain
+### Phase 2: stream_response 传入 tools
+- [x] 2.1 修改 `stream_response` 接受 `tools: Option<Vec<Value>>` 参数
+- [x] 2.2 当有 tools 时设置 `tool_choice: "auto"`
 
-### Phase 4: handler 重写
-- [x] 4.1 handlers/unified_exec.rs 接入 UnifiedExecProcessManager (exec_command + write_stdin)
-- [x] 4.2 runtimes/unified_exec.rs 接入真实 PTY spawn
-- [x] 4.3 format_response 函数 (匹配 codex-main 格式)
+### Phase 3: Agentic Loop
+- [x] 3.1 在 ResponseEvent 中添加 `FunctionCall` 变体
+- [x] 3.2 在 SSE 和 WebSocket 解析中识别 function_call 类型的 OutputItemDone
+- [x] 3.3 重构 `run_turn` 为循环结构：stream → 检测 function_call → dispatch → 继续
+- [x] 3.4 将 function_call 和 function_call_output 加入 history
+- [x] 3.5 添加 MAX_TOOL_ROUNDS=32 安全限制
 
-### Phase 5: 集成 + 测试
-- [x] 5.1 编译通过 (0 errors, warnings only)
-- [x] 5.2 全量测试通过 (622 passed)
-- [x] 5.3 新增 PTY 集成测试 (5 个: exec_output, nonzero_exit, write_stdin, unknown_process, terminate_all)
+### Phase 4: 测试验证
+- [x] 4.1 所有现有测试通过 — 745 passed, 0 failed
+- [x] 4.2 codex 模块测试通过 — 22 passed
+- [x] 4.3 client 模块测试通过 — 22 passed
+
+## 完成状态: ✅ 全部完成

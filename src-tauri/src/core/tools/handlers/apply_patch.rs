@@ -33,6 +33,29 @@ impl ToolHandler for ApplyPatchHandler {
         ToolKind::Builtin("apply_patch".to_string())
     }
 
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "name": "apply_patch",
+            "description": "Apply a unified diff patch to modify files. Use this to make targeted edits to existing files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": "The unified diff patch content to apply"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Base path for the patch"
+                    }
+                },
+                "required": ["patch"],
+                "additionalProperties": false
+            }
+        }))
+    }
+
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         // Support both freeform (string) and JSON object input
         let patch_text = if let Some(s) = args.as_str() {

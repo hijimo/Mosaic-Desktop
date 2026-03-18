@@ -146,6 +146,24 @@ impl ToolRouter {
     pub fn mcp_manager(&self) -> &McpConnectionManager {
         &self.mcp_manager
     }
+
+    /// Collect all tool specs for sending to the model API.
+    /// Aggregates built-in registry specs + dynamic tool specs.
+    pub fn collect_tool_specs(&self) -> Vec<serde_json::Value> {
+        let mut specs = self.registry.collect_tool_specs();
+
+        // Add dynamic tools
+        for spec in self.dynamic_tools.values() {
+            specs.push(serde_json::json!({
+                "type": "function",
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.input_schema,
+            }));
+        }
+
+        specs
+    }
 }
 
 /// Parse an MCP-qualified tool name (`mcp__{server}__{tool}`) into (server, tool).

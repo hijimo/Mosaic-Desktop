@@ -252,6 +252,34 @@ impl ToolHandler for ShellHandler {
         ToolKind::Builtin("shell".to_string())
     }
 
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "name": "shell",
+            "description": "Runs a shell command on the user's machine. Use this for file operations, running scripts, installing packages, or any system task. The command array is executed directly (not through a shell interpreter).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The command to run as an array of strings (e.g. [\"ls\", \"-la\"])"
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Working directory for the command"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Timeout in milliseconds (default: 120000)"
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }
+        }))
+    }
+
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: ShellArgs = serde_json::from_value(args).map_err(|e| {
             CodexError::new(ErrorCode::InvalidInput, format!("invalid shell args: {e}"))

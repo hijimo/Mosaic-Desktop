@@ -88,6 +88,33 @@ impl ToolHandler for ReadFileHandler {
         ToolKind::Builtin("read_file".to_string())
     }
 
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "function",
+            "name": "read_file",
+            "description": "Read the contents of a file at the given path. Use this to examine source code, configuration files, or any text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative path to the file to read"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line offset to start reading from (0-based)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to read"
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        }))
+    }
+
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: ReadFileArgs = serde_json::from_value(args).map_err(|e| {
             CodexError::new(ErrorCode::InvalidInput, format!("invalid read_file args: {e}"))

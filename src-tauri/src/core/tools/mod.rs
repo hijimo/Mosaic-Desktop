@@ -52,11 +52,17 @@ pub struct ToolInfo {
 /// - `matches_kind`: returns true if this handler can service the given `ToolKind`.
 /// - `kind`: returns the canonical `ToolKind` for this handler.
 /// - `handle`: executes the tool with the provided JSON arguments.
+/// - `tool_spec`: returns the Responses API tool definition for this handler.
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
     fn matches_kind(&self, kind: &ToolKind) -> bool;
     fn kind(&self) -> ToolKind;
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError>;
+    /// Returns the tool definition in Responses API format for sending to the model.
+    /// Default returns None (tool is not advertised to the model).
+    fn tool_spec(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// Registry of built-in tool handlers.
@@ -106,6 +112,14 @@ impl ToolRegistry {
     /// List all registered handler kinds.
     pub fn registered_kinds(&self) -> Vec<ToolKind> {
         self.handlers.iter().map(|h| h.kind()).collect()
+    }
+
+    /// Collect all tool specs from registered handlers for sending to the model API.
+    pub fn collect_tool_specs(&self) -> Vec<serde_json::Value> {
+        self.handlers
+            .iter()
+            .filter_map(|h| h.tool_spec())
+            .collect()
     }
 }
 

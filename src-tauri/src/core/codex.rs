@@ -833,14 +833,14 @@ impl Codex {
             }
         };
 
-        // Build API input from history
-        let history_items = session.history().await;
-        let api_input: Vec<serde_json::Value> = history_items
-            .iter()
-            .map(crate::core::client::history_item_to_api)
-            .collect();
+        // Collect tool specs from the router for the model API
+        let tool_specs = {
+            let router = session.tool_router().await;
+            let specs = router.collect_tool_specs();
+            if specs.is_empty() { None } else { Some(specs) }
+        };
 
-        // Call the Responses API and stream events
+        // Call the Responses API with agentic tool-call loop
         let mut last_agent_message: Option<String> = None;
         let mut accumulated_text = String::new();
 
@@ -858,167 +858,199 @@ impl Codex {
                 (None, None) => None,
             }
         };
-        match crate::core::client::stream_response(
-            &base_url,
-            &api_key,
-            &extra_headers,
-            &model,
-            instructions.as_deref(),
-            api_input,
-            None, // previous_response_id
-        )
-        .await
-        {
-            Err(e) => {
-                self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
-                    message: format!("Failed to start API stream: {}", e.message),
-                    codex_error_info: None,
-                }))
-                .await;
-            }
-            Ok(mut stream) => {
-                use futures::StreamExt;
-                eprintln!("[run_turn] stream started, waiting for events");
-                while let Some(event_result) = stream.next().await {
-                    eprintln!(
-                        "[run_turn] got event: {:?}",
-                        event_result.as_ref().map(std::mem::discriminant)
-                    );
-                    match event_result {
-                        Err(e) => {
-                            self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
-                                message: format!("Stream error: {}", e.message),
-                                codex_error_info: None,
-                            }))
-                            .await;
-                            break;
-                        }
-                        Ok(crate::core::client::ResponseEvent::OutputTextDelta { delta }) => {
-                            if !delta.is_empty() {
-                                accumulated_text.push_str(&delta);
-                                self.emit(EventMsg::AgentMessageDelta(
-                                    crate::protocol::event::AgentMessageDeltaEvent {
-                                        delta: delta.clone(),
-                                    },
-                                ))
-                                .await;
-                            }
-                        }
-                        Ok(crate::core::client::ResponseEvent::OutputItemDone { item }) => {
-                            // Extract assistant message text from completed items
-                            if item.get("type").and_then(|t| t.as_str()) == Some("message")
-                                && item.get("role").and_then(|r| r.as_str()) == Some("assistant")
-                            {
-                                let text: String = item
-                                    .get("content")
-                                    .and_then(|c| c.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|c| {
-                                                if c.get("type").and_then(|t| t.as_str())
-                                                    == Some("output_text")
-                                                {
-                                                    c.get("text")
-                                                        .and_then(|t| t.as_str())
-                                                        .map(str::to_string)
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("")
-                                    })
-                                    .unwrap_or_default();
 
-                                if !text.is_empty() {
-                                    last_agent_message = Some(text.clone());
-                                    // Store assistant response in history
-                                    session
-                                        .add_to_history(vec![
+        // ── Agentic loop: stream → detect function_call → dispatch → continue ──
+        const MAX_TOOL_ROUNDS: usize = 32;
+        let mut round = 0;
+        loop {
+            round += 1;
+            if round > MAX_TOOL_ROUNDS {
+                self.emit(EventMsg::Warning(crate::protocol::event::WarningEvent {
+                    message: format!("Tool call loop exceeded {MAX_TOOL_ROUNDS} rounds, stopping"),
+                })).await;
+                break;
+            }
+
+            // Rebuild API input from current history each round
+            let api_input: Vec<serde_json::Value> = session.history().await
+                .iter()
+                .map(crate::core::client::history_item_to_api)
+                .collect();
+
+            let stream_result = crate::core::client::stream_response(
+                &base_url,
+                &api_key,
+                &extra_headers,
+                &model,
+                instructions.as_deref(),
+                api_input,
+                None,
+                tool_specs.clone(),
+            ).await;
+
+            let mut needs_follow_up = false;
+            accumulated_text.clear();
+
+            match stream_result {
+                Err(e) => {
+                    self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
+                        message: format!("Failed to start API stream: {}", e.message),
+                        codex_error_info: None,
+                    })).await;
+                    break;
+                }
+                Ok(mut stream) => {
+                    use futures::StreamExt;
+                    while let Some(event_result) = stream.next().await {
+                        match event_result {
+                            Err(e) => {
+                                self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
+                                    message: format!("Stream error: {}", e.message),
+                                    codex_error_info: None,
+                                })).await;
+                                break;
+                            }
+                            Ok(crate::core::client::ResponseEvent::OutputTextDelta { delta }) => {
+                                if !delta.is_empty() {
+                                    accumulated_text.push_str(&delta);
+                                    self.emit(EventMsg::AgentMessageDelta(
+                                        crate::protocol::event::AgentMessageDeltaEvent { delta },
+                                    )).await;
+                                }
+                            }
+                            Ok(crate::core::client::ResponseEvent::FunctionCall { call_id, name, arguments }) => {
+                                // Record the function_call in history
+                                session.add_to_history(vec![
+                                    crate::protocol::types::ResponseInputItem::FunctionCall {
+                                        call_id: call_id.clone(),
+                                        name: name.clone(),
+                                        arguments: arguments.clone(),
+                                    },
+                                ]).await;
+
+                                // Dispatch the tool call
+                                let args: serde_json::Value = serde_json::from_str(&arguments)
+                                    .unwrap_or(serde_json::Value::Object(Default::default()));
+
+                                let tool_result = self.dispatch_tool_call(
+                                    session, turn_id, &call_id, &name, args,
+                                ).await;
+
+                                // Record function_call_output in history
+                                let output_str = match &tool_result {
+                                    Ok(v) => v.to_string(),
+                                    Err(e) => format!("Error: {}", e.message),
+                                };
+                                session.add_to_history(vec![
+                                    crate::protocol::types::ResponseInputItem::FunctionOutput {
+                                        call_id: call_id.clone(),
+                                        output: crate::protocol::types::FunctionCallOutputPayload {
+                                            content: crate::protocol::types::ContentOrItems::String(output_str),
+                                        },
+                                    },
+                                ]).await;
+
+                                needs_follow_up = true;
+                            }
+                            Ok(crate::core::client::ResponseEvent::OutputItemDone { item }) => {
+                                if item.get("type").and_then(|t| t.as_str()) == Some("message")
+                                    && item.get("role").and_then(|r| r.as_str()) == Some("assistant")
+                                {
+                                    let text: String = item
+                                        .get("content")
+                                        .and_then(|c| c.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|c| {
+                                                    if c.get("type").and_then(|t| t.as_str()) == Some("output_text") {
+                                                        c.get("text").and_then(|t| t.as_str()).map(str::to_string)
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .collect::<Vec<_>>()
+                                                .join("")
+                                        })
+                                        .unwrap_or_default();
+
+                                    if !text.is_empty() {
+                                        last_agent_message = Some(text.clone());
+                                        session.add_to_history(vec![
                                             crate::protocol::types::ResponseInputItem::Message {
                                                 role: "assistant".into(),
                                                 content: text.clone(),
                                             },
-                                        ])
-                                        .await;
-                                    // Emit full AgentMessage if we didn't stream deltas
-                                    if accumulated_text.is_empty() {
-                                        self.emit(EventMsg::AgentMessage(
-                                            crate::protocol::event::AgentMessageEvent {
-                                                message: text,
-                                            },
-                                        ))
-                                        .await;
+                                        ]).await;
+                                        if accumulated_text.is_empty() {
+                                            self.emit(EventMsg::AgentMessage(
+                                                crate::protocol::event::AgentMessageEvent { message: text },
+                                            )).await;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Ok(crate::core::client::ResponseEvent::ReasoningDelta { delta }) => {
-                            if !delta.is_empty() {
-                                self.emit(EventMsg::AgentReasoningDelta(
-                                    crate::protocol::event::AgentReasoningDeltaEvent {
-                                        delta,
-                                    },
-                                ))
-                                .await;
+                            Ok(crate::core::client::ResponseEvent::ReasoningDelta { delta }) => {
+                                if !delta.is_empty() {
+                                    self.emit(EventMsg::AgentReasoningDelta(
+                                        crate::protocol::event::AgentReasoningDeltaEvent { delta },
+                                    )).await;
+                                }
                             }
-                        }
-                        Ok(crate::core::client::ResponseEvent::Completed { token_usage, .. }) => {
-                            // Emit token usage if available
-                            if let Some(usage) = token_usage {
-                                self.emit(EventMsg::TokenCount(
-                                    crate::protocol::event::TokenCountEvent {
-                                        info: Some(crate::protocol::types::TokenUsageInfo {
-                                            total_token_usage: crate::protocol::types::TokenUsage {
-                                                input_tokens: usage.input_tokens as i64,
-                                                cached_input_tokens: usage.cached_input_tokens as i64,
-                                                output_tokens: usage.output_tokens as i64,
-                                                reasoning_output_tokens: usage.reasoning_output_tokens as i64,
-                                                total_tokens: usage.total_tokens as i64,
-                                            },
-                                            last_token_usage: crate::protocol::types::TokenUsage {
-                                                input_tokens: usage.input_tokens as i64,
-                                                cached_input_tokens: usage.cached_input_tokens as i64,
-                                                output_tokens: usage.output_tokens as i64,
-                                                reasoning_output_tokens: usage.reasoning_output_tokens as i64,
-                                                total_tokens: usage.total_tokens as i64,
-                                            },
-                                            model_context_window: None,
-                                        }),
-                                    },
-                                ))
-                                .await;
-                            }
-                            // If we accumulated delta text, emit the full message now
-                            if !accumulated_text.is_empty() && last_agent_message.is_none() {
-                                last_agent_message = Some(accumulated_text.clone());
-                                session
-                                    .add_to_history(vec![
+                            Ok(crate::core::client::ResponseEvent::Completed { token_usage, .. }) => {
+                                if let Some(usage) = token_usage {
+                                    self.emit(EventMsg::TokenCount(
+                                        crate::protocol::event::TokenCountEvent {
+                                            info: Some(crate::protocol::types::TokenUsageInfo {
+                                                total_token_usage: crate::protocol::types::TokenUsage {
+                                                    input_tokens: usage.input_tokens as i64,
+                                                    cached_input_tokens: usage.cached_input_tokens as i64,
+                                                    output_tokens: usage.output_tokens as i64,
+                                                    reasoning_output_tokens: usage.reasoning_output_tokens as i64,
+                                                    total_tokens: usage.total_tokens as i64,
+                                                },
+                                                last_token_usage: crate::protocol::types::TokenUsage {
+                                                    input_tokens: usage.input_tokens as i64,
+                                                    cached_input_tokens: usage.cached_input_tokens as i64,
+                                                    output_tokens: usage.output_tokens as i64,
+                                                    reasoning_output_tokens: usage.reasoning_output_tokens as i64,
+                                                    total_tokens: usage.total_tokens as i64,
+                                                },
+                                                model_context_window: None,
+                                            }),
+                                        },
+                                    )).await;
+                                }
+                                if !accumulated_text.is_empty() && last_agent_message.is_none() {
+                                    last_agent_message = Some(accumulated_text.clone());
+                                    session.add_to_history(vec![
                                         crate::protocol::types::ResponseInputItem::Message {
                                             role: "assistant".into(),
                                             content: accumulated_text.clone(),
                                         },
-                                    ])
-                                    .await;
-                                self.emit(EventMsg::AgentMessage(
-                                    crate::protocol::event::AgentMessageEvent {
-                                        message: accumulated_text.clone(),
-                                    },
-                                ))
-                                .await;
+                                    ]).await;
+                                    self.emit(EventMsg::AgentMessage(
+                                        crate::protocol::event::AgentMessageEvent {
+                                            message: accumulated_text.clone(),
+                                        },
+                                    )).await;
+                                }
+                                break;
                             }
-                            break;
-                        }
-                        Ok(crate::core::client::ResponseEvent::Failed { code, message }) => {
-                            self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
-                                message: format!("API error [{code}]: {message}"),
-                                codex_error_info: None,
-                            }))
-                            .await;
-                            break;
+                            Ok(crate::core::client::ResponseEvent::Failed { code, message }) => {
+                                self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
+                                    message: format!("API error [{code}]: {message}"),
+                                    codex_error_info: None,
+                                })).await;
+                                break;
+                            }
                         }
                     }
                 }
+            }
+
+            // If no tool calls were made, exit the agentic loop
+            if !needs_follow_up {
+                break;
             }
         }
 
@@ -1037,13 +1069,6 @@ impl Codex {
     }
 
     /// Dispatch a single tool call through the ToolRouter, emitting bracket events.
-    ///
-    /// For dynamic tools, this initiates the DynamicToolCallRequest/DynamicToolResponse
-    /// protocol via the DynamicToolHandler. For built-in and MCP tools, it dispatches
-    /// directly through the ToolRouter.
-    ///
-    /// Returns the tool result on success, or emits an Error event on failure.
-    #[allow(dead_code)]
     async fn dispatch_tool_call(
         &self,
         session: &Session,

@@ -115,40 +115,8 @@ impl Default for SpawnAgentOptions {
     }
 }
 
-// ── SpawnSlotGuard ───────────────────────────────────────────────
-
-/// RAII guard that releases a spawn slot when dropped.
-pub struct SpawnSlotGuard {
-    active_count: Arc<std::sync::Mutex<usize>>,
-}
-
-impl SpawnSlotGuard {
-    fn new(active_count: Arc<std::sync::Mutex<usize>>) -> Self {
-        Self { active_count }
-    }
-}
-
-impl Drop for SpawnSlotGuard {
-    fn drop(&mut self) {
-        if let Ok(mut count) = self.active_count.lock() {
-            *count = count.saturating_sub(1);
-        }
-    }
-}
-
-/// Guards acquired during agent spawn: a spawn slot and a nickname.
-pub struct Guards {
-    pub spawn_slot: SpawnSlotGuard,
-    pub nickname: String,
-}
-
-impl std::fmt::Debug for Guards {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Guards")
-            .field("nickname", &self.nickname)
-            .finish_non_exhaustive()
-    }
-}
+// Guards and SpawnReservation are now in the `guards` submodule.
+// Re-exported via mod.rs for backward compatibility.
 
 // ── ThreadManagerState ───────────────────────────────────────────
 
@@ -192,14 +160,30 @@ impl ThreadManagerState {
 ///
 /// Enforces a maximum recursion depth and tracks agents via weak references
 /// so that dropped `Arc<AgentInstance>` values are automatically cleaned up.
+/// Uses [`super::guards::Guards`] for atomic concurrent spawn limiting and
+/// nickname pool management.
 pub struct AgentControl {
     state: Mutex<ThreadManagerState>,
-    active_count: Arc<std::sync::Mutex<usize>>,
+    guards: Arc<super::guards::Guards>,
     max_recursion_depth: usize,
+    max_threads: Option<usize>,
     default_cwd: PathBuf,
     default_sandbox_policy: SandboxPolicy,
-    #[allow(dead_code)] // Used when emitting collab events in future integration
+    #[allow(dead_code)]
     tx_event: Sender<Event>,
+}
+
+/// Spawn result containing the nickname assigned by the guards system.
+pub struct SpawnGuards {
+    pub nickname: String,
+}
+
+impl std::fmt::Debug for SpawnGuards {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnGuards")
+            .field("nickname", &self.nickname)
+            .finish()
+    }
 }
 
 impl AgentControl {
@@ -211,22 +195,30 @@ impl AgentControl {
     ) -> Self {
         Self {
             state: Mutex::new(ThreadManagerState::new()),
-            active_count: Arc::new(std::sync::Mutex::new(0)),
+            guards: Arc::new(super::guards::Guards::default()),
             max_recursion_depth,
+            max_threads: None,
             default_cwd,
             default_sandbox_policy,
             tx_event,
         }
     }
 
-    /// Spawn a new agent, returning an `Arc<AgentInstance>` and associated [`Guards`].
+    /// Create with an explicit max-threads limit for the guards system.
+    pub fn with_max_threads(mut self, max_threads: usize) -> Self {
+        self.max_threads = Some(max_threads);
+        self
+    }
+
+    /// Spawn a new agent, returning an `Arc<AgentInstance>` and associated [`SpawnGuards`].
     ///
-    /// Fails if the requested depth exceeds `max_recursion_depth`.
+    /// Fails if the requested depth exceeds `max_recursion_depth` or the
+    /// concurrent agent limit is reached.
     pub async fn spawn_agent(
         &self,
         options: SpawnAgentOptions,
         current_depth: usize,
-    ) -> Result<(Arc<AgentInstance>, Guards), CodexError> {
+    ) -> Result<(Arc<AgentInstance>, SpawnGuards), CodexError> {
         let effective_max = options.max_depth.unwrap_or(self.max_recursion_depth);
         if current_depth >= effective_max {
             return Err(CodexError::new(
@@ -234,6 +226,9 @@ impl AgentControl {
                 format!("Agent recursion depth {current_depth} exceeds maximum {effective_max}"),
             ));
         }
+
+        // Reserve a spawn slot via the guards system.
+        let reservation = self.guards.reserve_spawn_slot(self.max_threads)?;
 
         let mut mgr = self.state.lock().await;
         mgr.prune_dead();
@@ -255,21 +250,14 @@ impl AgentControl {
             sandbox,
         ));
 
-        mgr.agents.insert(thread_id, Arc::downgrade(&instance));
+        mgr.agents.insert(thread_id.clone(), Arc::downgrade(&instance));
 
-        // Increment active count and create the slot guard.
-        {
-            let mut count = self.active_count.lock().unwrap();
-            *count += 1;
-        }
-        let slot_guard = SpawnSlotGuard::new(Arc::clone(&self.active_count));
+        // Commit the reservation, registering the thread as active.
+        reservation.commit(&thread_id);
 
-        let guards = Guards {
-            spawn_slot: slot_guard,
-            nickname,
-        };
+        let spawn_guards = SpawnGuards { nickname };
 
-        Ok((instance, guards))
+        Ok((instance, spawn_guards))
     }
 
     /// Send user input to a running agent.
@@ -334,6 +322,9 @@ impl AgentControl {
         // Close channels to unblock any pending sends/receives.
         instance.tx_input.close();
         instance.resume_tx.close();
+
+        // Release the spawn slot in the guards system.
+        self.guards.release_spawned_thread(agent_id);
 
         // Remove from the registry.
         let mut mgr = self.state.lock().await;
