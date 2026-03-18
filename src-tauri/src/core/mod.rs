@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod analytics_client;
 pub mod client;
 pub mod codex;
 pub mod compact;
@@ -25,6 +26,7 @@ pub mod session;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
+pub mod tasks;
 pub mod state_db;
 pub mod text_encoding;
 pub mod thread_manager;
@@ -88,11 +90,14 @@ pub use seatbelt::{
 };
 pub use session::{ModelInfo, PendingApproval, Session, SessionState, TurnContext};
 pub use skills::{
-    list_skills, load_skills_from_roots, SkillDependencies, SkillInterface, SkillLoadOutcome,
-    SkillLoader, SkillMetadata, SkillPolicy, SkillRoot, SkillScope,
+    load_skills_from_roots, render_skills_section, install_system_skills, system_cache_root_dir,
+    SkillDependencies, SkillError, SkillInterface, SkillLoadOutcome, SkillMetadata, SkillPolicy,
+    SkillRoot, SkillScope, SkillsManager, SkillToolDependency,
 };
 pub use tools::router::ToolRouter;
 pub use tools::{ToolHandler, ToolInfo, ToolKind, ToolRegistry};
+pub use tasks::{SessionTask, TaskContext, TaskKind};
+pub use analytics_client::{AnalyticsEventsClient, TrackEventsContext};
 pub use truncation::TruncationPolicy;
 pub use turn_diff_tracker::TurnDiffTracker;
 pub use thread_manager::{CodexThread, NewThread, ThreadManager};
@@ -101,4 +106,10 @@ pub use shell::{Shell, ShellType, detect_shell_type, default_user_shell, get_she
 pub use shell_snapshot::ShellSnapshot;
 pub use file_watcher::{FileWatcher, FileWatcherEvent, WatchRegistration};
 pub use state_db::StateDb;
-pub use unified_exec::{ProcessManager, ProcessHandle, ExecResult, ExecCommand};
+pub use unified_exec::{
+    ProcessManager, ProcessMgrHandle, ExecResult, ExecCommand,
+    UnifiedExecError, HeadTailBuffer, UnifiedExecProcess,
+    UnifiedExecProcessManager,
+    ExecCommandRequest, WriteStdinRequest, UnifiedExecResponse,
+    ProcessStore, ProcessEntry,
+};

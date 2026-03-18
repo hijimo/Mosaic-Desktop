@@ -1,4 +1,13 @@
+use serde::{Deserialize, Serialize};
+
 use super::toml_types::ConfigToml;
+
+/// Metadata identifying a config layer (for origin tracking).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigLayerMeta {
+    pub name: String,
+    pub version: String,
+}
 
 /// Configuration layer precedence (lowest to highest):
 /// Mdm < System < User < Project < Session
@@ -147,15 +156,21 @@ mod tests {
         let mut stack = ConfigLayerStack::new();
 
         let server_a = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "node".into(),
-                args: vec![],
-                env: HashMap::new(),
-            },
-            disabled: false,
-            disabled_reason: None,
-            tool_filter: None,
-        };
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "node".into(),
+                        args: vec![],
+                        env: HashMap::new(),
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                };
 
         let config_user = ConfigToml {
             mcp_servers: HashMap::from([("srv-a".into(), server_a.clone())]),

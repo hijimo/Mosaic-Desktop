@@ -11,7 +11,9 @@ use crate::protocol::submission::{Op, Submission};
 use crate::protocol::types::TurnContextOverrides;
 
 use super::session::Session;
-use super::skills::SkillLoader;
+use super::skills::loader::SkillRoot;
+use super::skills::model::{SkillScope, SkillMetadata};
+use super::skills::manager::SkillsManager;
 use super::tools::handlers::dynamic::DynamicToolHandler;
 
 /// Handle returned by `Codex::spawn`, giving the caller access to the SQ/EQ channels.
@@ -37,7 +39,7 @@ pub struct Codex {
     /// Whether the engine is running.
     running: Arc<Mutex<bool>>,
     /// Skill loader.
-    skill_loader: Arc<Mutex<SkillLoader>>,
+    skills_manager: Arc<SkillsManager>,
     /// Dynamic tool handler for managing dynamic tool lifecycle.
     dynamic_tool_handler: Arc<DynamicToolHandler>,
 }
@@ -49,7 +51,10 @@ impl Codex {
         config: ConfigLayerStack,
         cwd: PathBuf,
     ) -> Self {
-        let skill_loader = SkillLoader::new(vec![cwd.join(".codex/skills")]);
+        let codex_home = dirs::home_dir()
+            .map(|h| h.join(".codex"))
+            .unwrap_or_else(|| cwd.join(".codex"));
+        let skills_manager = SkillsManager::new(codex_home);
         let dynamic_tool_handler = DynamicToolHandler::new(eq_tx.clone());
         Self {
             sq_rx,
@@ -58,7 +63,7 @@ impl Codex {
             config,
             cwd,
             running: Arc::new(Mutex::new(false)),
-            skill_loader: Arc::new(Mutex::new(skill_loader)),
+            skills_manager: Arc::new(skills_manager),
             dynamic_tool_handler: Arc::new(dynamic_tool_handler),
         }
     }
@@ -450,15 +455,16 @@ impl Codex {
                 .await;
             }
             Op::Review { review_request } => {
-                self.emit(EventMsg::EnteredReviewMode(review_request)).await;
+                self.spawn_task(Arc::new(
+                    crate::core::tasks::review::ReviewTask,
+                ), vec![]).await;
             }
             Op::Compact => {
+                // Compact runs inline because it needs session access.
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
                     let policy =
                         crate::core::truncation::TruncationPolicy::KeepRecent { max_items: 50 };
-                    // Use KeepRecent as default compact strategy; AutoCompact would
-                    // require a model call which needs provider resolution.
                     match s
                         .compact_history::<fn(String) -> std::future::Ready<Result<String, crate::protocol::error::CodexError>>, _>(
                             &policy, None,
@@ -482,18 +488,9 @@ impl Codex {
                 }
             }
             Op::Undo => {
-                self.emit(EventMsg::UndoStarted(
-                    crate::protocol::event::UndoStartedEvent { message: None },
-                ))
-                .await;
-                // TODO: actual undo logic (file rollback)
-                self.emit(EventMsg::UndoCompleted(
-                    crate::protocol::event::UndoCompletedEvent {
-                        success: true,
-                        message: None,
-                    },
-                ))
-                .await;
+                self.spawn_task(Arc::new(
+                    crate::core::tasks::undo::UndoTask,
+                ), vec![]).await;
             }
             Op::ThreadRollback { num_turns } => {
                 let session_guard = self.session.lock().await;
@@ -543,10 +540,9 @@ impl Codex {
                 .await;
             }
             Op::ListSkills { .. } => {
-                let mut loader = self.skill_loader.lock().await;
-                let _ = loader.load_all().await;
-                let skills = loader
-                    .loaded_skills()
+                let outcome = self.skills_manager.skills_for_cwd(&self.cwd, false);
+                let skills = outcome
+                    .skills
                     .iter()
                     .filter_map(|s| {
                         serde_json::to_value(serde_json::json!({
@@ -853,9 +849,8 @@ impl Codex {
 
         // Build instructions: merge skill list (like source render.rs) + custom instructions
         let instructions: Option<String> = {
-            let loader = self.skill_loader.lock().await;
-            let skills = loader.loaded_skills();
-            let skill_section = render_skills_section(skills);
+            let outcome = self.skills_manager.skills_for_cwd(&self.cwd, false);
+            let skill_section = super::skills::render_skills_section(&outcome.skills);
             match (skill_section, custom_instructions) {
                 (Some(s), Some(c)) => Some(format!("{s}\n\n{c}")),
                 (Some(s), None) => Some(s),
@@ -958,7 +953,42 @@ impl Codex {
                                 }
                             }
                         }
-                        Ok(crate::core::client::ResponseEvent::Done { .. }) => {
+                        Ok(crate::core::client::ResponseEvent::ReasoningDelta { delta }) => {
+                            if !delta.is_empty() {
+                                self.emit(EventMsg::AgentReasoningDelta(
+                                    crate::protocol::event::AgentReasoningDeltaEvent {
+                                        delta,
+                                    },
+                                ))
+                                .await;
+                            }
+                        }
+                        Ok(crate::core::client::ResponseEvent::Completed { token_usage, .. }) => {
+                            // Emit token usage if available
+                            if let Some(usage) = token_usage {
+                                self.emit(EventMsg::TokenCount(
+                                    crate::protocol::event::TokenCountEvent {
+                                        info: Some(crate::protocol::types::TokenUsageInfo {
+                                            total_token_usage: crate::protocol::types::TokenUsage {
+                                                input_tokens: usage.input_tokens as i64,
+                                                cached_input_tokens: usage.cached_input_tokens as i64,
+                                                output_tokens: usage.output_tokens as i64,
+                                                reasoning_output_tokens: usage.reasoning_output_tokens as i64,
+                                                total_tokens: usage.total_tokens as i64,
+                                            },
+                                            last_token_usage: crate::protocol::types::TokenUsage {
+                                                input_tokens: usage.input_tokens as i64,
+                                                cached_input_tokens: usage.cached_input_tokens as i64,
+                                                output_tokens: usage.output_tokens as i64,
+                                                reasoning_output_tokens: usage.reasoning_output_tokens as i64,
+                                                total_tokens: usage.total_tokens as i64,
+                                            },
+                                            model_context_window: None,
+                                        }),
+                                    },
+                                ))
+                                .await;
+                            }
                             // If we accumulated delta text, emit the full message now
                             if !accumulated_text.is_empty() && last_agent_message.is_none() {
                                 last_agent_message = Some(accumulated_text.clone());
@@ -1186,31 +1216,45 @@ impl Codex {
         let _ = self.eq_tx.send(event).await;
     }
 
+    /// Spawn a session task on a background Tokio task.
+    async fn spawn_task(
+        &self,
+        task: Arc<dyn super::tasks::SessionTask>,
+        input: Vec<crate::protocol::types::UserInput>,
+    ) {
+        let session_guard = self.session.lock().await;
+        if session_guard.is_none() {
+            self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
+                message: "no active session for task".to_string(),
+                codex_error_info: None,
+            }))
+            .await;
+            return;
+        }
+        let ctx = super::tasks::TaskContext::new(
+            self.eq_tx.clone(),
+            self.config.clone(),
+            self.cwd.clone(),
+        );
+        drop(session_guard);
+        let cancellation_token = tokio_util::sync::CancellationToken::new();
+        tokio::spawn(async move {
+            let last_msg = task.run(ctx.clone(), input, cancellation_token).await;
+            if let Some(msg) = last_msg {
+                ctx.emit(EventMsg::TurnComplete(
+                    crate::protocol::event::TurnCompleteEvent {
+                        turn_id: uuid::Uuid::new_v4().to_string(),
+                        last_agent_message: Some(msg),
+                    },
+                ))
+                .await;
+            }
+        });
+    }
+
     pub async fn is_running(&self) -> bool {
         *self.running.lock().await
     }
-}
-
-/// Render loaded skills into a system prompt section (mirrors source render.rs).
-fn render_skills_section(skills: &[crate::core::skills::SkillMetadata]) -> Option<String> {
-    if skills.is_empty() {
-        return None;
-    }
-    let mut lines = vec![
-        "## Skills".to_string(),
-        "A skill is a set of local instructions stored in a SKILL.md file. Below is the list of available skills.".to_string(),
-        "### Available skills".to_string(),
-    ];
-    for skill in skills {
-        let path = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
-        lines.push(format!(
-            "- {}: {} (file: {path})",
-            skill.name, skill.description
-        ));
-    }
-    lines.push("### How to use skills".to_string());
-    lines.push("If the user names a skill with $SkillName or the task matches a skill description, use that skill. Open its SKILL.md for full instructions.".to_string());
-    Some(lines.join("\n"))
 }
 
 #[cfg(test)]

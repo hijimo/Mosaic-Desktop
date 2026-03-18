@@ -294,16 +294,15 @@ pub enum McpServerTransportConfig {
         #[serde(default)]
         env: HashMap<String, String>,
     },
-    Http {
+    #[serde(alias = "http")]
+    StreamableHttp {
         url: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-    },
-    OAuth {
-        url: String,
-        client_id: String,
-        client_secret: String,
-        token_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
     },
 }
 
@@ -311,12 +310,28 @@ pub enum McpServerTransportConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct McpServerConfig {
     pub transport: McpServerTransportConfig,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
-    pub disabled: bool,
+    pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_filter: Option<McpToolFilter>,
+    pub startup_timeout_sec: Option<std::time::Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_timeout_sec: Option<std::time::Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_resource: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -386,15 +401,21 @@ mod tests {
     #[test]
     fn mcp_server_roundtrip() {
         let server = McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command: "node".into(),
-                args: vec!["server.js".into()],
-                env: HashMap::new(),
-            },
-            disabled: false,
-            disabled_reason: None,
-            tool_filter: None,
-        };
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "node".into(),
+                        args: vec!["server.js".into()],
+                        env: HashMap::new(),
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                };
         let config = ConfigToml {
             mcp_servers: HashMap::from([("test".into(), server)]),
             ..Default::default()

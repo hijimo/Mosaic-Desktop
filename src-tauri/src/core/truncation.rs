@@ -65,6 +65,32 @@ pub fn apply_truncation(
     }
 }
 
+/// Approximate token count for a raw string (~4 chars per token).
+pub fn approx_token_count(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
+/// Truncate text to fit within a token budget, appending a notice if truncated.
+pub fn formatted_truncate_text(text: &str, policy: TruncationPolicy) -> String {
+    let max_tokens = match policy {
+        TruncationPolicy::KeepRecentTokens { max_tokens } => max_tokens,
+        _ => return text.to_string(),
+    };
+    let max_chars = max_tokens * 4;
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    let mut end = max_chars;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n[... truncated {} tokens]",
+        &text[..end],
+        approx_token_count(&text[end..])
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

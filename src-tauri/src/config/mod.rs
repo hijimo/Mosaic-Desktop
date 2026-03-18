@@ -1,12 +1,32 @@
+pub mod config_requirements;
+pub mod constraint;
+pub mod diagnostics;
 pub mod edit;
+pub mod fingerprint;
 pub mod layer_stack;
+pub mod merge;
+pub mod overrides;
 pub mod permissions;
 pub mod schema;
 pub mod service;
 pub mod toml_types;
 
+pub use config_requirements::{
+    ConfigRequirements, ConfigRequirementsToml, ConstrainedWithSource, McpServerIdentity,
+    McpServerRequirement, NetworkConstraints, RequirementSource, ResidencyRequirement,
+    SandboxModeRequirement, Sourced, WebSearchModeRequirement,
+};
+pub use constraint::{Constrained, ConstraintError, ConstraintResult};
+pub use diagnostics::{
+    ConfigError, ConfigLoadError, TextPosition, TextRange, config_error_from_toml,
+    config_error_from_typed_toml, format_config_error, format_config_error_with_source,
+    io_error_from_config_error, validate_config_file,
+};
 pub use edit::ConfigEdit;
-pub use layer_stack::{ConfigLayer, ConfigLayerStack};
+pub use fingerprint::{record_origins, version_for_toml};
+pub use layer_stack::{ConfigLayer, ConfigLayerMeta, ConfigLayerStack};
+pub use merge::merge_toml_values;
+pub use overrides::build_cli_overrides_layer;
 pub use permissions::{NetworkMode, NetworkToml, PermissionsToml};
 pub use schema::{config_schema, config_schema_json, validate_config_keys};
 pub use service::{ConfigService, ConfigServiceError};

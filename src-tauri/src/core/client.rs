@@ -1,95 +1,402 @@
-//! Minimal OpenAI Responses API client.
+//! Session- and turn-scoped helpers for talking to model provider APIs.
 //!
-//! Sends a POST to `/responses` with `stream: true` and yields parsed SSE events.
-//! Only the event types needed to drive `run_turn()` are handled; everything else is ignored.
+//! `ModelClient` lives for the lifetime of a Codex session and holds stable
+//! configuration (provider, conversation id, retry settings).
+//!
+//! `ModelClientSession` is created per turn and streams one or more Responses
+//! API requests. It caches the `previous_response_id` so subsequent requests
+//! within the same turn can chain responses.
+//!
+//! Retry logic uses exponential backoff with jitter. Retryable conditions:
+//! - HTTP 429 (rate limit)
+//! - HTTP 5xx (server error)
+//! - Transport-level errors (connection reset, timeout)
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::protocol::error::CodexError;
-use crate::protocol::error::ErrorCode;
+use crate::protocol::error::{CodexError, ErrorCode};
+use crate::provider::{ModelProviderInfo, Provider, RetryConfig};
 
-/// A single parsed SSE event from the Responses API stream.
+// ── Response Events ──────────────────────────────────────────────
+
+/// Token usage information from a completed response.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub reasoning_output_tokens: u64,
+}
+
+/// A parsed SSE event from the Responses API stream.
 #[derive(Debug)]
 pub enum ResponseEvent {
     /// Streaming text delta from the assistant.
     OutputTextDelta { delta: String },
     /// A complete output item (message, function_call, etc.).
     OutputItemDone { item: Value },
+    /// Reasoning text delta (for models that support reasoning).
+    ReasoningDelta { delta: String },
     /// The response is complete.
-    Done { response_id: Option<String> },
+    Completed {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
     /// An error from the API.
     Failed { code: String, message: String },
 }
 
+// ── Request types ────────────────────────────────────────────────
+
 /// Minimal request body for the Responses API.
-#[derive(serde::Serialize)]
-struct CreateResponseRequest<'a> {
-    model: &'a str,
-    input: Vec<Value>,
-    stream: bool,
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ResponsesApiRequest {
+    pub model: String,
+    pub input: Vec<Value>,
+    pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    instructions: Option<&'a str>,
+    pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    previous_response_id: Option<&'a str>,
+    pub previous_response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<Value>,
 }
 
-/// Stream events from the Responses API for a single turn.
-pub async fn stream_response(
+/// Prompt payload for a single model turn.
+#[derive(Default, Debug, Clone)]
+pub struct Prompt {
+    pub input: Vec<Value>,
+    pub instructions: Option<String>,
+    pub tools: Option<Vec<Value>>,
+    pub parallel_tool_calls: Option<bool>,
+    pub output_schema: Option<Value>,
+}
+
+// ── ModelClient (session-scoped) ─────────────────────────────────
+
+/// Shared state across all turns within a session.
+#[derive(Debug)]
+struct ModelClientState {
+    provider: Provider,
+    api_key: String,
+    extra_headers: HashMap<String, String>,
+    conversation_id: String,
+    /// Retry config from provider.
+    retry: RetryConfig,
+    /// Stream idle timeout.
+    stream_idle_timeout: Duration,
+    /// Last response_id for chaining (shared across turns).
+    last_response_id: StdMutex<Option<String>>,
+}
+
+/// A session-scoped client for model-provider API calls.
+///
+/// Holds configuration and state shared across turns: provider, API key,
+/// conversation ID, retry settings, and the last response_id for chaining.
+#[derive(Debug, Clone)]
+pub struct ModelClient {
+    state: Arc<ModelClientState>,
+}
+
+impl ModelClient {
+    pub fn new(
+        provider: Provider,
+        api_key: String,
+        extra_headers: HashMap<String, String>,
+        conversation_id: String,
+    ) -> Self {
+        let retry = provider.retry.clone();
+        let stream_idle_timeout = provider.stream_idle_timeout;
+        Self {
+            state: Arc::new(ModelClientState {
+                provider,
+                api_key,
+                extra_headers,
+                conversation_id,
+                retry,
+                stream_idle_timeout,
+                last_response_id: StdMutex::new(None),
+            }),
+        }
+    }
+
+    /// Creates a new session-scoped client from a `ModelProviderInfo`.
+    pub fn from_provider_info(
+        info: &ModelProviderInfo,
+        api_key: String,
+        conversation_id: String,
+    ) -> Self {
+        let provider = info.to_provider();
+        let extra_headers = info.resolved_headers();
+        Self::new(provider, api_key, extra_headers, conversation_id)
+    }
+
+    /// Creates a fresh turn-scoped streaming session.
+    pub fn new_session(&self, model: String) -> ModelClientSession {
+        let previous_response_id = self
+            .state
+            .last_response_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        ModelClientSession {
+            client: self.clone(),
+            model,
+            previous_response_id,
+        }
+    }
+
+    fn store_response_id(&self, id: String) {
+        *self
+            .state
+            .last_response_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(id);
+    }
+
+    pub fn conversation_id(&self) -> &str {
+        &self.state.conversation_id
+    }
+
+    pub fn provider(&self) -> &Provider {
+        &self.state.provider
+    }
+}
+
+// ── ModelClientSession (turn-scoped) ─────────────────────────────
+
+/// A turn-scoped streaming session created from a `ModelClient`.
+///
+/// Caches the `previous_response_id` so subsequent requests within the
+/// same turn can chain responses.
+pub struct ModelClientSession {
+    client: ModelClient,
+    model: String,
+    previous_response_id: Option<String>,
+}
+
+impl ModelClientSession {
+    /// Streams a single model request within the current turn.
+    pub async fn stream(
+        &mut self,
+        prompt: &Prompt,
+    ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
+        let request = ResponsesApiRequest {
+            model: self.model.clone(),
+            input: prompt.input.clone(),
+            stream: true,
+            instructions: prompt.instructions.clone(),
+            previous_response_id: self.previous_response_id.clone(),
+            tool_choice: Some("auto".into()),
+            tools: prompt.tools.clone(),
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            text: build_text_param(&prompt.output_schema),
+        };
+
+        let state = &self.client.state;
+        let url = state.provider.url_for_path("responses");
+
+        let stream = stream_with_retry(
+            &url,
+            &state.api_key,
+            &state.extra_headers,
+            &request,
+            &state.retry,
+            state.stream_idle_timeout,
+        )
+        .await?;
+
+        // Wrap to capture response_id for chaining
+        let client = self.client.clone();
+        let (tx, rx) = mpsc::channel::<Result<ResponseEvent, CodexError>>(256);
+
+        tokio::spawn(async move {
+            let mut inner = std::pin::pin!(stream);
+            while let Some(ev) = inner.next().await {
+                match &ev {
+                    Ok(ResponseEvent::Completed { response_id, .. }) => {
+                        if !response_id.is_empty() {
+                            client.store_response_id(response_id.clone());
+                        }
+                        let _ = tx.send(ev).await;
+                        return;
+                    }
+                    _ => {
+                        if tx.send(ev).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
+    }
+
+    /// Make a non-streaming Responses API call with JSON structured output.
+    pub async fn complete_structured(
+        &self,
+        input: Vec<Value>,
+        instructions: Option<&str>,
+        output_schema: &Value,
+    ) -> Result<String, CodexError> {
+        complete_structured(
+            &self.client.state.provider.url_for_path("responses"),
+            &self.client.state.api_key,
+            &self.client.state.extra_headers,
+            &self.model,
+            instructions,
+            input,
+            output_schema,
+        )
+        .await
+    }
+}
+
+// ── Retry logic ──────────────────────────────────────────────────
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn backoff_delay(attempt: u32, base: Duration) -> Duration {
+    let exp = base.mul_f64(2.0_f64.powi(attempt as i32));
+    let jitter = Duration::from_millis(rand_jitter_ms());
+    exp + jitter
+}
+
+/// Simple jitter: 0-100ms using a basic hash of the current time.
+fn rand_jitter_ms() -> u64 {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    (t % 100) as u64
+}
+
+async fn stream_with_retry(
     url: &str,
     api_key: &str,
     extra_headers: &HashMap<String, String>,
-    model: &str,
-    instructions: Option<&str>,
-    history: Vec<Value>,
-    previous_response_id: Option<&str>,
+    request: &ResponsesApiRequest,
+    retry: &RetryConfig,
+    idle_timeout: Duration,
 ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
-    let body = CreateResponseRequest {
-        model,
-        input: history,
-        stream: true,
-        instructions,
-        previous_response_id,
-    };
+    let max_attempts = retry.max_attempts.max(1);
+    let mut last_err = None;
 
-    let mut req = reqwest::Client::new()
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            let delay = backoff_delay(attempt as u32 - 1, retry.base_delay);
+            tokio::time::sleep(delay).await;
+        }
+
+        match try_stream_request(url, api_key, extra_headers, request, idle_timeout).await {
+            Ok(stream) => return Ok(stream),
+            Err(RetryableError::Retryable(e)) => {
+                tracing::warn!(attempt, "retryable API error: {}", e.message);
+                last_err = Some(e);
+                continue;
+            }
+            Err(RetryableError::Fatal(e)) => return Err(e),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        CodexError::new(ErrorCode::InternalError, "all retry attempts exhausted".to_string())
+    }))
+}
+
+enum RetryableError {
+    Retryable(CodexError),
+    Fatal(CodexError),
+}
+
+async fn try_stream_request(
+    url: &str,
+    api_key: &str,
+    extra_headers: &HashMap<String, String>,
+    request: &ResponsesApiRequest,
+    idle_timeout: Duration,
+) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, RetryableError> {
+    let mut req = reqwest::Client::builder()
+        .timeout(Duration::from_secs(0)) // no overall timeout for streaming
+        .build()
+        .map_err(|e| RetryableError::Fatal(CodexError::new(
+            ErrorCode::InternalError,
+            format!("failed to build HTTP client: {e}"),
+        )))?
         .post(url)
         .bearer_auth(api_key)
-        .json(&body);
+        .json(request);
 
     for (k, v) in extra_headers {
         req = req.header(k.as_str(), v.as_str());
     }
 
     let resp = req.send().await.map_err(|e| {
-        CodexError::new(ErrorCode::InternalError, format!("HTTP request failed: {e}"))
+        if e.is_connect() || e.is_timeout() {
+            RetryableError::Retryable(CodexError::new(
+                ErrorCode::InternalError,
+                format!("transport error: {e}"),
+            ))
+        } else {
+            RetryableError::Fatal(CodexError::new(
+                ErrorCode::InternalError,
+                format!("HTTP request failed: {e}"),
+            ))
+        }
     })?;
 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(CodexError::new(
+        let err = CodexError::new(
             ErrorCode::InternalError,
             format!("API returned {status}: {body}"),
-        ));
+        );
+        return if is_retryable_status(status) {
+            Err(RetryableError::Retryable(err))
+        } else {
+            Err(RetryableError::Fatal(err))
+        };
     }
 
-    // Use channel + spawn (like the reference impl) so SSE parse errors don't
-    // silently terminate the stream — we get an explicit error event instead.
     let (tx, rx) = mpsc::channel::<Result<ResponseEvent, CodexError>>(256);
 
     tokio::spawn(async move {
         let mut stream = resp.bytes_stream().eventsource();
+        let idle = idle_timeout;
 
         loop {
-            match stream.next().await {
-                None => {
-                    // Stream closed before response.completed — send error so
-                    // the consumer knows the turn ended unexpectedly.
+            let next = tokio::time::timeout(idle, stream.next()).await;
+            match next {
+                Err(_elapsed) => {
+                    let _ = tx
+                        .send(Err(CodexError::new(
+                            ErrorCode::InternalError,
+                            format!("stream idle timeout after {}s", idle.as_secs()),
+                        )))
+                        .await;
+                    return;
+                }
+                Ok(None) => {
                     let _ = tx
                         .send(Err(CodexError::new(
                             ErrorCode::InternalError,
@@ -98,7 +405,7 @@ pub async fn stream_response(
                         .await;
                     return;
                 }
-                Some(Err(e)) => {
+                Ok(Some(Err(e))) => {
                     let _ = tx
                         .send(Err(CodexError::new(
                             ErrorCode::InternalError,
@@ -107,27 +414,17 @@ pub async fn stream_response(
                         .await;
                     return;
                 }
-                Some(Ok(event)) => {
-                    eprintln!(
-                        "[SSE] event={:?} data={}",
-                        event.event,
-                        &event.data[..event.data.len().min(300)]
-                    );
-
+                Ok(Some(Ok(event))) => {
                     if event.data.is_empty() || event.data == "[DONE]" {
                         continue;
                     }
 
                     let json: Value = match serde_json::from_str(&event.data) {
                         Ok(v) => v,
-                        Err(e) => {
-                            eprintln!("[SSE] parse error: {e}");
-                            continue;
-                        }
+                        Err(_) => continue,
                     };
 
                     let kind = json.get("type").and_then(Value::as_str).unwrap_or("");
-                    eprintln!("[SSE] kind={kind:?}");
 
                     let parsed = match kind {
                         "response.output_text.delta" => {
@@ -142,15 +439,30 @@ pub async fn stream_response(
                             let item = json.get("item").cloned().unwrap_or(Value::Null);
                             Some(Ok(ResponseEvent::OutputItemDone { item }))
                         }
+                        "response.reasoning_summary_text.delta" => {
+                            let delta = json
+                                .get("delta")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            Some(Ok(ResponseEvent::ReasoningDelta { delta }))
+                        }
                         "response.completed" | "response.done" => {
-                            let response_id = json
-                                .get("response")
+                            let resp_obj = json.get("response");
+                            let response_id = resp_obj
                                 .and_then(|r| r.get("id"))
                                 .and_then(Value::as_str)
-                                .map(str::to_string);
-                            let ev = ResponseEvent::Done { response_id };
+                                .unwrap_or("")
+                                .to_string();
+                            let token_usage = resp_obj
+                                .and_then(|r| r.get("usage"))
+                                .map(parse_token_usage);
+                            let ev = ResponseEvent::Completed {
+                                response_id,
+                                token_usage,
+                            };
                             let _ = tx.send(Ok(ev)).await;
-                            return; // stream complete, exit task
+                            return;
                         }
                         "response.failed" => {
                             let error = json.get("response").and_then(|r| r.get("error"));
@@ -166,12 +478,12 @@ pub async fn stream_response(
                                 .to_string();
                             Some(Ok(ResponseEvent::Failed { code, message }))
                         }
-                        _ => None, // ignore intermediate events
+                        _ => None,
                     };
 
                     if let Some(ev) = parsed {
                         if tx.send(ev).await.is_err() {
-                            return; // receiver dropped
+                            return;
                         }
                     }
                 }
@@ -182,7 +494,48 @@ pub async fn stream_response(
     Ok(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
-/// Convert a `ResponseInputItem` from the session history into a Responses API input item.
+fn parse_token_usage(usage: &Value) -> TokenUsage {
+    TokenUsage {
+        input_tokens: usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output_tokens: usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        total_tokens: usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cached_input_tokens: usage
+            .get("input_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning_output_tokens: usage
+            .get("output_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    }
+}
+
+fn build_text_param(output_schema: &Option<Value>) -> Option<Value> {
+    let schema = output_schema.as_ref()?;
+    Some(serde_json::json!({
+        "format": {
+            "type": "json_schema",
+            "name": "codex_output_schema",
+            "schema": schema,
+            "strict": true,
+        }
+    }))
+}
+
+// ── History conversion ───────────────────────────────────────────
+
+/// Convert a `ResponseInputItem` from session history into a Responses API input item.
 pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> Value {
     match item {
         crate::protocol::types::ResponseInputItem::Message { role, content } => {
@@ -225,31 +578,7 @@ pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> 
     }
 }
 
-// ── Non-streaming structured output call ─────────────────────────
-
-/// Request body for a non-streaming Responses API call with structured output.
-#[derive(serde::Serialize)]
-struct StructuredRequest<'a> {
-    model: &'a str,
-    input: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    instructions: Option<&'a str>,
-    stream: bool,
-    text: TextFormat<'a>,
-}
-
-#[derive(serde::Serialize)]
-struct TextFormat<'a> {
-    format: FormatSpec<'a>,
-}
-
-#[derive(serde::Serialize)]
-struct FormatSpec<'a> {
-    r#type: &'a str,
-    name: &'a str,
-    schema: &'a Value,
-    strict: bool,
-}
+// ── Non-streaming structured output ──────────────────────────────
 
 /// Make a non-streaming Responses API call with JSON structured output.
 ///
@@ -263,19 +592,29 @@ pub async fn complete_structured(
     input: Vec<Value>,
     output_schema: &Value,
 ) -> Result<String, CodexError> {
+    #[derive(serde::Serialize)]
+    struct StructuredRequest<'a> {
+        model: &'a str,
+        input: Vec<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instructions: Option<&'a str>,
+        stream: bool,
+        text: Value,
+    }
+
     let body = StructuredRequest {
         model,
         input,
         instructions,
         stream: false,
-        text: TextFormat {
-            format: FormatSpec {
-                r#type: "json_schema",
-                name: "memory_extraction",
-                schema: output_schema,
-                strict: true,
-            },
-        },
+        text: serde_json::json!({
+            "format": {
+                "type": "json_schema",
+                "name": "memory_extraction",
+                "schema": output_schema,
+                "strict": true,
+            }
+        }),
     };
 
     let mut req = reqwest::Client::new()
@@ -304,7 +643,6 @@ pub async fn complete_structured(
         CodexError::new(ErrorCode::InternalError, format!("JSON parse error: {e}"))
     })?;
 
-    // Extract text from output[0].content[0].text
     json.get("output")
         .and_then(|o| o.as_array())
         .and_then(|arr| arr.first())
@@ -320,4 +658,150 @@ pub async fn complete_structured(
                 format!("unexpected response structure: {json}"),
             )
         })
+}
+
+// ── Legacy free-function API (backward compat) ───────────────────
+
+/// Stream events from the Responses API for a single turn (legacy API).
+///
+/// Prefer `ModelClient::new_session().stream()` for new code.
+pub async fn stream_response(
+    url: &str,
+    api_key: &str,
+    extra_headers: &HashMap<String, String>,
+    model: &str,
+    instructions: Option<&str>,
+    history: Vec<Value>,
+    previous_response_id: Option<&str>,
+) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, CodexError> {
+    let request = ResponsesApiRequest {
+        model: model.into(),
+        input: history,
+        stream: true,
+        instructions: instructions.map(String::from),
+        previous_response_id: previous_response_id.map(String::from),
+        tool_choice: None,
+        tools: None,
+        parallel_tool_calls: None,
+        text: None,
+    };
+
+    let retry = RetryConfig {
+        max_attempts: 4,
+        base_delay: Duration::from_millis(200),
+        retry_429: false,
+        retry_5xx: true,
+        retry_transport: true,
+    };
+
+    stream_with_retry(
+        url,
+        api_key,
+        extra_headers,
+        &request,
+        &retry,
+        Duration::from_secs(300),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_token_usage_extracts_fields() {
+        let usage = serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 30},
+            "output_tokens_details": {"reasoning_tokens": 10}
+        });
+        let parsed = parse_token_usage(&usage);
+        assert_eq!(parsed.input_tokens, 100);
+        assert_eq!(parsed.output_tokens, 50);
+        assert_eq!(parsed.total_tokens, 150);
+        assert_eq!(parsed.cached_input_tokens, 30);
+        assert_eq!(parsed.reasoning_output_tokens, 10);
+    }
+
+    #[test]
+    fn parse_token_usage_handles_missing_fields() {
+        let usage = serde_json::json!({});
+        let parsed = parse_token_usage(&usage);
+        assert_eq!(parsed.input_tokens, 0);
+        assert_eq!(parsed.total_tokens, 0);
+    }
+
+    #[test]
+    fn build_text_param_returns_none_for_none() {
+        assert!(build_text_param(&None).is_none());
+    }
+
+    #[test]
+    fn build_text_param_wraps_schema() {
+        let schema = serde_json::json!({"type": "object"});
+        let result = build_text_param(&Some(schema.clone())).unwrap();
+        assert_eq!(
+            result["format"]["type"].as_str(),
+            Some("json_schema")
+        );
+        assert_eq!(result["format"]["schema"], schema);
+    }
+
+    #[test]
+    fn backoff_delay_increases_exponentially() {
+        let base = Duration::from_millis(100);
+        let d0 = backoff_delay(0, base);
+        let d1 = backoff_delay(1, base);
+        let d2 = backoff_delay(2, base);
+        // d0 ≈ 100ms + jitter, d1 ≈ 200ms + jitter, d2 ≈ 400ms + jitter
+        assert!(d1 > d0);
+        assert!(d2 > d1);
+    }
+
+    #[test]
+    fn is_retryable_status_checks_correctly() {
+        assert!(is_retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_retryable_status(reqwest::StatusCode::BAD_GATEWAY));
+        assert!(!is_retryable_status(reqwest::StatusCode::BAD_REQUEST));
+        assert!(!is_retryable_status(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!is_retryable_status(reqwest::StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn history_item_to_api_message() {
+        let item = crate::protocol::types::ResponseInputItem::Message {
+            role: "user".into(),
+            content: "hello".into(),
+        };
+        let v = history_item_to_api(&item);
+        assert_eq!(v["type"], "message");
+        assert_eq!(v["role"], "user");
+    }
+
+    #[test]
+    fn history_item_to_api_function_call() {
+        let item = crate::protocol::types::ResponseInputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "shell".into(),
+            arguments: "{}".into(),
+        };
+        let v = history_item_to_api(&item);
+        assert_eq!(v["type"], "function_call");
+        assert_eq!(v["name"], "shell");
+    }
+
+    #[test]
+    fn model_client_stores_and_retrieves_response_id() {
+        let info = crate::provider::ModelProviderInfo::create_oss("http://localhost:8080/v1");
+        let client = ModelClient::from_provider_info(&info, "test-key".into(), "conv-1".into());
+        assert_eq!(client.conversation_id(), "conv-1");
+
+        client.store_response_id("resp-123".into());
+        let session = client.new_session("gpt-test".into());
+        assert_eq!(session.previous_response_id.as_deref(), Some("resp-123"));
+    }
 }

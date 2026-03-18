@@ -7,6 +7,7 @@ pub mod file_search;
 pub mod netproxy;
 pub mod protocol;
 pub mod provider;
+pub mod pty;
 pub mod responses_api_proxy;
 pub mod secrets;
 pub mod shell_command;

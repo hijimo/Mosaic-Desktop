@@ -1,11 +1,30 @@
+//! Handler for exec_command and write_stdin tool calls.
+//!
+//! Dispatches to the shared `UnifiedExecProcessManager` for PTY-backed
+//! interactive sessions with process reuse.
+
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::time::Instant;
 
 use crate::core::tools::{ToolHandler, ToolKind};
+use crate::core::unified_exec::{
+    ExecCommandRequest, UnifiedExecProcessManager, UnifiedExecResponse, WriteStdinRequest,
+};
 use crate::protocol::error::{CodexError, ErrorCode};
 
-pub struct UnifiedExecHandler;
+/// Shared handler for `exec_command` and `write_stdin`.
+pub struct UnifiedExecHandler {
+    manager: Arc<UnifiedExecProcessManager>,
+}
+
+impl UnifiedExecHandler {
+    pub fn new(manager: Arc<UnifiedExecProcessManager>) -> Self {
+        Self { manager }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct ExecCommandArgs {
@@ -45,8 +64,12 @@ struct WriteStdinArgs {
     max_output_tokens: Option<usize>,
 }
 
-fn default_exec_yield_time_ms() -> u64 { 10_000 }
-fn default_write_stdin_yield_time_ms() -> u64 { 250 }
+fn default_exec_yield_time_ms() -> u64 {
+    10_000
+}
+fn default_write_stdin_yield_time_ms() -> u64 {
+    250
+}
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
@@ -59,131 +82,168 @@ impl ToolHandler for UnifiedExecHandler {
     }
 
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
-        // Dispatch based on presence of session_id (write_stdin) vs cmd (exec_command)
         if args.get("session_id").is_some() {
-            return handle_write_stdin(args).await;
+            return self.handle_write_stdin(args).await;
         }
-        handle_exec_command(args).await
+        self.handle_exec_command(args).await
     }
 }
 
-async fn handle_exec_command(args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
-    let params: ExecCommandArgs = serde_json::from_value(args).map_err(|e| {
-        CodexError::new(ErrorCode::InvalidInput, format!("invalid exec_command args: {e}"))
-    })?;
-
-    // Resolve shell: model-provided shell takes precedence, then $SHELL, then /bin/sh
-    let default_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let shell_path = params.shell.as_deref().unwrap_or(&default_shell);
-
-    // Resolve login shell with config check (matches source Codex get_command)
-    // TODO: wire allow_login_shell from actual tools_config
-    let allow_login_shell = true;
-    let use_login = match params.login {
-        Some(true) if !allow_login_shell => {
-            return Err(CodexError::new(
+impl UnifiedExecHandler {
+    async fn handle_exec_command(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, CodexError> {
+        let params: ExecCommandArgs = serde_json::from_value(args).map_err(|e| {
+            CodexError::new(
                 ErrorCode::InvalidInput,
-                "login shell is disabled by config; omit `login` or set it to false.",
-            ));
+                format!("invalid exec_command args: {e}"),
+            )
+        })?;
+
+        // Resolve shell
+        let default_shell =
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell_path = params.shell.as_deref().unwrap_or(&default_shell);
+
+        // Login shell check
+        let allow_login_shell = true; // TODO: wire from config
+        let use_login = match params.login {
+            Some(true) if !allow_login_shell => {
+                return Err(CodexError::new(
+                    ErrorCode::InvalidInput,
+                    "login shell is disabled by config; omit `login` or set it to false.",
+                ));
+            }
+            Some(v) => v,
+            None => allow_login_shell,
+        };
+
+        let mut shell_args = vec![shell_path.to_string()];
+        if use_login {
+            shell_args.push("-l".to_string());
         }
-        Some(v) => v,
-        None => allow_login_shell,
-    };
-    let mut shell_args = vec![shell_path.to_string()];
-    if use_login {
-        shell_args.push("-l".to_string());
-    }
-    shell_args.push("-c".to_string());
-    shell_args.push(params.cmd.clone());
+        shell_args.push("-c".to_string());
+        shell_args.push(params.cmd.clone());
 
-    // Validate additional permissions (matches source Codex security checks)
-    let uses_additional = params.sandbox_permissions.as_deref() == Some("with_additional_permissions");
-    if uses_additional {
-        // TODO: wire approval_policy from actual turn context
-        let approval_policy: Option<&str> = None; // defaults to on_request
-        let request_permission_enabled = true; // TODO: wire from features
-        let _ = super::normalize_and_validate_additional_permissions(
-            request_permission_enabled,
-            approval_policy,
-            params.sandbox_permissions.as_deref(),
-            params.additional_permissions.as_ref(),
-        ).map_err(|e| CodexError::new(ErrorCode::InvalidInput, e))?;
-    }
-
-    let program = &shell_args[0];
-    let cmd_args = &shell_args[1..];
-
-    let timeout_ms = params.timeout_ms.unwrap_or(params.yield_time_ms.max(120_000));
-
-    // Intercept apply_patch commands (matches source Codex behavior)
-    if let Some(result) = super::apply_patch::intercept_apply_patch(
-        &shell_args,
-        &std::env::current_dir().unwrap_or_default(),
-        Some(timeout_ms),
-    ).await? {
-        return Ok(result);
-    }
-
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(cmd_args);
-    if let Some(ref wd) = params.workdir {
-        if !wd.is_empty() {
-            cmd.current_dir(wd);
+        // Validate additional permissions
+        let uses_additional =
+            params.sandbox_permissions.as_deref() == Some("with_additional_permissions");
+        if uses_additional {
+            super::normalize_and_validate_additional_permissions(
+                true,
+                None,
+                params.sandbox_permissions.as_deref(),
+                params.additional_permissions.as_ref(),
+            )
+            .map_err(|e| CodexError::new(ErrorCode::InvalidInput, e))?;
         }
+
+        // Intercept apply_patch
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let timeout_ms = params.timeout_ms.unwrap_or(params.yield_time_ms.max(120_000));
+        if let Some(result) = super::apply_patch::intercept_apply_patch(
+            &shell_args,
+            &cwd,
+            Some(timeout_ms),
+        )
+        .await?
+        {
+            return Ok(result);
+        }
+
+        // Allocate process ID and build request
+        let process_id = self.manager.allocate_process_id().await;
+        let call_id = uuid::Uuid::new_v4().to_string();
+
+        let workdir = params
+            .workdir
+            .filter(|wd| !wd.is_empty())
+            .map(std::path::PathBuf::from);
+
+        let request = ExecCommandRequest {
+            command: shell_args,
+            process_id,
+            yield_time_ms: params.yield_time_ms,
+            max_output_tokens: params.max_output_tokens,
+            workdir,
+            tty: params.tty,
+            justification: params.justification,
+            prefix_rule: params.prefix_rule,
+        };
+
+        let response = self
+            .manager
+            .exec_command(request, &call_id)
+            .await
+            .map_err(|err| {
+                CodexError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    format!("exec_command failed: {err}"),
+                )
+            })?;
+
+        Ok(serde_json::to_value(format_response(&response)).unwrap_or_default())
     }
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
 
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    let start = Instant::now();
+    async fn handle_write_stdin(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, CodexError> {
+        let params: WriteStdinArgs = serde_json::from_value(args).map_err(|e| {
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid write_stdin args: {e}"),
+            )
+        })?;
 
-    let child = cmd.spawn().map_err(|e| {
-        CodexError::new(ErrorCode::ToolExecutionFailed, format!("spawn error: {e}"))
-    })?;
+        let response = self
+            .manager
+            .write_stdin(WriteStdinRequest {
+                process_id: &params.session_id.to_string(),
+                input: &params.chars,
+                yield_time_ms: params.yield_time_ms,
+                max_output_tokens: params.max_output_tokens,
+            })
+            .await
+            .map_err(|err| {
+                CodexError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    format!("write_stdin failed: {err}"),
+                )
+            })?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
-            return Err(CodexError::new(ErrorCode::ToolExecutionFailed, format!("{e}")));
-        }
-        Err(_) => {
-            return Ok(serde_json::json!({
-                "exit_code": -1,
-                "output": "command timed out",
-                "timed_out": true,
-                "wall_time_seconds": start.elapsed().as_secs_f64(),
-            }));
-        }
-    };
-
-    let wall_time = start.elapsed();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = if stderr.is_empty() {
-        stdout.to_string()
-    } else if stdout.is_empty() {
-        stderr.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
-    };
-
-    Ok(serde_json::json!({
-        "exit_code": output.status.code().unwrap_or(-1),
-        "output": combined,
-        "wall_time_seconds": format!("{:.4}", wall_time.as_secs_f64()),
-    }))
+        Ok(serde_json::to_value(format_response(&response)).unwrap_or_default())
+    }
 }
 
-async fn handle_write_stdin(args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
-    let _params: WriteStdinArgs = serde_json::from_value(args).map_err(|e| {
-        CodexError::new(ErrorCode::InvalidInput, format!("invalid write_stdin args: {e}"))
-    })?;
+/// Format a UnifiedExecResponse into a human-readable string (matches codex-main).
+fn format_response(response: &UnifiedExecResponse) -> String {
+    let mut sections = Vec::new();
 
-    // write_stdin requires the UnifiedExecProcessManager for PTY session management.
-    // This will be fully implemented when the process manager is wired.
-    Err(CodexError::new(
-        ErrorCode::ToolExecutionFailed,
-        "write_stdin requires the unified exec process manager (PTY sessions not yet wired)",
-    ))
+    if !response.chunk_id.is_empty() {
+        sections.push(format!("Chunk ID: {}", response.chunk_id));
+    }
+
+    sections.push(format!(
+        "Wall time: {:.4} seconds",
+        response.wall_time.as_secs_f64()
+    ));
+
+    if let Some(exit_code) = response.exit_code {
+        sections.push(format!("Process exited with code {exit_code}"));
+    }
+
+    if let Some(process_id) = &response.process_id {
+        sections.push(format!("Process running with session ID {process_id}"));
+    }
+
+    if let Some(original_token_count) = response.original_token_count {
+        sections.push(format!("Original token count: {original_token_count}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(response.output.clone());
+
+    sections.join("\n")
 }
