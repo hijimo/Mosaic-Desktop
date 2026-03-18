@@ -307,10 +307,9 @@ mod tests {
 
     fn arb_content_item() -> impl Strategy<Value = ContentItem> {
         prop_oneof![
-            arb_safe_string().prop_map(|text| ContentItem::Text { text }),
-            arb_safe_string().prop_map(|url| ContentItem::Image { url }),
-            prop::collection::vec(any::<u8>(), 0..16)
-                .prop_map(|data| ContentItem::InputAudio { data }),
+            arb_safe_string().prop_map(|text| ContentItem::InputText { text }),
+            arb_safe_string().prop_map(|image_url| ContentItem::InputImage { image_url }),
+            arb_safe_string().prop_map(|text| ContentItem::OutputText { text }),
         ]
     }
 
@@ -318,13 +317,26 @@ mod tests {
     /// untagged deserialization of `ContentOrItems`.
     fn arb_content_or_items() -> impl Strategy<Value = ContentOrItems> {
         prop_oneof![
-            arb_safe_string().prop_map(ContentOrItems::String),
-            prop::collection::vec(arb_content_item(), 0..3).prop_map(ContentOrItems::Items),
+            arb_safe_string().prop_map(FunctionCallOutputBody::Text),
+            prop::collection::vec(arb_function_call_output_content_item(), 0..3)
+                .prop_map(FunctionCallOutputBody::ContentItems),
+        ]
+    }
+
+    fn arb_function_call_output_content_item(
+    ) -> impl Strategy<Value = crate::protocol::types::FunctionCallOutputContentItem> {
+        prop_oneof![
+            arb_safe_string().prop_map(|text| {
+                crate::protocol::types::FunctionCallOutputContentItem::InputText { text }
+            }),
+            arb_safe_string().prop_map(|image_url| {
+                crate::protocol::types::FunctionCallOutputContentItem::InputImage { image_url }
+            }),
         ]
     }
 
     fn arb_function_call_output_payload() -> impl Strategy<Value = FunctionCallOutputPayload> {
-        arb_content_or_items().prop_map(|content| FunctionCallOutputPayload { content })
+        arb_content_or_items().prop_map(|body| FunctionCallOutputPayload { body, success: None })
     }
 
     fn arb_response_input_item() -> impl Strategy<Value = ResponseInputItem> {
@@ -339,7 +351,7 @@ mod tests {
                 }
             ),
             (arb_safe_string(), arb_function_call_output_payload()).prop_map(
-                |(call_id, output)| ResponseInputItem::FunctionOutput { call_id, output }
+                |(call_id, output)| ResponseInputItem::FunctionCallOutput { call_id, output }
             ),
         ]
     }

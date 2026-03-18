@@ -171,14 +171,20 @@ fn format_history_for_summary(items: &[ResponseInputItem]) -> String {
             } => {
                 format!("[function_call:{name}]: {arguments}")
             }
-            ResponseInputItem::FunctionOutput { output, .. } => {
-                let text = match &output.content {
-                    crate::protocol::types::ContentOrItems::String(s) => s.clone(),
-                    crate::protocol::types::ContentOrItems::Items(items) => {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let text = match &output.body {
+                    crate::protocol::types::FunctionCallOutputBody::Text(s) => s.clone(),
+                    crate::protocol::types::FunctionCallOutputBody::ContentItems(items) => {
                         format!("({} items)", items.len())
                     }
                 };
                 format!("[function_output]: {text}")
+            }
+            ResponseInputItem::McpToolCallOutput { call_id, .. } => {
+                format!("[mcp_tool_output:{call_id}]")
+            }
+            ResponseInputItem::CustomToolCallOutput { call_id, .. } => {
+                format!("[custom_tool_output:{call_id}]")
             }
         })
         .collect::<Vec<_>>()

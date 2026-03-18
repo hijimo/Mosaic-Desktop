@@ -17,10 +17,12 @@ fn estimate_tokens(item: &ResponseInputItem) -> usize {
     let text = match item {
         ResponseInputItem::Message { content, .. } => content.as_str(),
         ResponseInputItem::FunctionCall { arguments, .. } => arguments.as_str(),
-        ResponseInputItem::FunctionOutput { output, .. } => match &output.content {
-            crate::protocol::types::ContentOrItems::String(s) => s.as_str(),
-            crate::protocol::types::ContentOrItems::Items(_) => return 10,
+        ResponseInputItem::FunctionCallOutput { output, .. } => match &output.body {
+            crate::protocol::types::FunctionCallOutputBody::Text(s) => s.as_str(),
+            crate::protocol::types::FunctionCallOutputBody::ContentItems(_) => return 10,
         },
+        ResponseInputItem::McpToolCallOutput { .. }
+        | ResponseInputItem::CustomToolCallOutput { .. } => return 10,
     };
     // ~4 chars per token is a common rough heuristic
     text.len().div_ceil(4)

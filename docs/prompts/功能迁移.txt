@@ -1,0 +1,2 @@
+对比源代码项目'/Users/zhaojimo/Downloads/codex-main'和文档'/Users/zhaojimo/Documents/git/Mosaic-Desktop/docs/capability-analysis.md' 中的  三、Agent 系统中的| Guards (并发守卫) | ❌ 缺失 | 源项目有 14KB 的 guards 模块 |
+| Role 系统 | ❌ 缺失 | 源项目有 30KB 的角色权限体系 |部分,如果你害怕上下文限制无法一次完成,你自行规则创建todo.md 文件,依照任务清单和源项目依次完成,必须保证这所有任务都完整并通过测试.

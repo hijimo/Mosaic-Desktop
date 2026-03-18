@@ -968,18 +968,37 @@ pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> 
                 "arguments": arguments
             })
         }
-        crate::protocol::types::ResponseInputItem::FunctionOutput { call_id, output } => {
-            let content = match &output.content {
-                crate::protocol::types::ContentOrItems::String(s) => s.clone(),
-                crate::protocol::types::ContentOrItems::Items(items) => items
+        crate::protocol::types::ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            let content = match &output.body {
+                crate::protocol::types::FunctionCallOutputBody::Text(s) => s.clone(),
+                crate::protocol::types::FunctionCallOutputBody::ContentItems(items) => items
                     .iter()
                     .filter_map(|i| match i {
-                        crate::protocol::types::ContentItem::Text { text } => Some(text.clone()),
+                        crate::protocol::types::FunctionCallOutputContentItem::InputText { text } => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
             };
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": content
+            })
+        }
+        crate::protocol::types::ResponseInputItem::McpToolCallOutput { call_id, result } => {
+            let output = match result {
+                Ok(r) => serde_json::to_string(r).unwrap_or_default(),
+                Err(e) => e.clone(),
+            };
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output
+            })
+        }
+        crate::protocol::types::ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+            let content = output.text_content().unwrap_or_default().to_string();
             serde_json::json!({
                 "type": "function_call_output",
                 "call_id": call_id,

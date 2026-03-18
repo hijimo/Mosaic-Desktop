@@ -946,11 +946,9 @@ impl Codex {
                                     Err(e) => format!("Error: {}", e.message),
                                 };
                                 session.add_to_history(vec![
-                                    crate::protocol::types::ResponseInputItem::FunctionOutput {
+                                    crate::protocol::types::ResponseInputItem::FunctionCallOutput {
                                         call_id: call_id.clone(),
-                                        output: crate::protocol::types::FunctionCallOutputPayload {
-                                            content: crate::protocol::types::ContentOrItems::String(output_str),
-                                        },
+                                        output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
                                     },
                                 ]).await;
 
@@ -1156,13 +1154,11 @@ impl Codex {
                 // Store function output in history
                 session
                     .add_to_history(vec![
-                        crate::protocol::types::ResponseInputItem::FunctionOutput {
+                        crate::protocol::types::ResponseInputItem::FunctionCallOutput {
                             call_id: call_id.to_string(),
-                            output: crate::protocol::types::FunctionCallOutputPayload {
-                                content: crate::protocol::types::ContentOrItems::String(
+                            output: crate::protocol::types::FunctionCallOutputPayload::from_text(
                                     value.to_string(),
-                                ),
-                            },
+                            ),
                         },
                     ])
                     .await;

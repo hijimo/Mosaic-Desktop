@@ -1,4 +1,5 @@
 use crate::protocol::types::{ContentOrItems, FunctionCallOutputPayload, ResponseInputItem};
+use crate::protocol::types::FunctionCallOutputBody;
 
 use super::normalize;
 
@@ -169,7 +170,9 @@ fn is_api_item(item: &ResponseInputItem) -> bool {
         item,
         ResponseInputItem::Message { .. }
             | ResponseInputItem::FunctionCall { .. }
-            | ResponseInputItem::FunctionOutput { .. }
+            | ResponseInputItem::FunctionCallOutput { .. }
+            | ResponseInputItem::McpToolCallOutput { .. }
+            | ResponseInputItem::CustomToolCallOutput { .. }
     )
 }
 
@@ -187,17 +190,18 @@ fn estimate_item_bytes(item: &ResponseInputItem) -> i64 {
         ResponseInputItem::FunctionCall {
             name, arguments, ..
         } => name.len() + arguments.len(),
-        ResponseInputItem::FunctionOutput { output, .. } => match &output.content {
-            ContentOrItems::String(s) => s.len(),
-            ContentOrItems::Items(items) => items
+        ResponseInputItem::FunctionCallOutput { output, .. } => match &output.body {
+            FunctionCallOutputBody::Text(s) => s.len(),
+            FunctionCallOutputBody::ContentItems(items) => items
                 .iter()
                 .map(|ci| match ci {
-                    crate::protocol::types::ContentItem::Text { text } => text.len(),
-                    crate::protocol::types::ContentItem::Image { .. } => 7373, // fixed image cost
-                    crate::protocol::types::ContentItem::InputAudio { data } => data.len(),
+                    crate::protocol::types::FunctionCallOutputContentItem::InputText { text } => text.len(),
+                    crate::protocol::types::FunctionCallOutputContentItem::InputImage { .. } => 7373,
                 })
                 .sum(),
         },
+        ResponseInputItem::McpToolCallOutput { .. }
+        | ResponseInputItem::CustomToolCallOutput { .. } => 100,
     };
     text_len as i64
 }
@@ -213,16 +217,17 @@ const MAX_OUTPUT_BYTES: usize = 128 * 1024; // 128 KiB
 /// Truncate oversized function outputs to keep context manageable.
 fn truncate_output_if_needed(item: ResponseInputItem) -> ResponseInputItem {
     match item {
-        ResponseInputItem::FunctionOutput { call_id, output } => {
-            let truncated = match &output.content {
-                ContentOrItems::String(s) if s.len() > MAX_OUTPUT_BYTES => {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            let truncated = match &output.body {
+                FunctionCallOutputBody::Text(s) if s.len() > MAX_OUTPUT_BYTES => {
                     FunctionCallOutputPayload {
-                        content: ContentOrItems::String(truncate_str(s, MAX_OUTPUT_BYTES)),
+                        body: FunctionCallOutputBody::Text(truncate_str(s, MAX_OUTPUT_BYTES)),
+                        success: None,
                     }
                 }
                 _ => output,
             };
-            ResponseInputItem::FunctionOutput {
+            ResponseInputItem::FunctionCallOutput {
                 call_id,
                 output: truncated,
             }
@@ -273,11 +278,9 @@ mod tests {
     }
 
     fn func_output(call_id: &str, text: &str) -> ResponseInputItem {
-        ResponseInputItem::FunctionOutput {
+        ResponseInputItem::FunctionCallOutput {
             call_id: call_id.into(),
-            output: FunctionCallOutputPayload {
-                content: ContentOrItems::String(text.into()),
-            },
+            output: FunctionCallOutputPayload::from_text(text.into()),
         }
     }
 
@@ -308,7 +311,7 @@ mod tests {
         let prompt = cm.for_prompt();
         // Should have 3 items: user msg, func call, synthetic output
         assert_eq!(prompt.len(), 3);
-        assert!(matches!(&prompt[2], ResponseInputItem::FunctionOutput { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&prompt[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
     }
 
     #[test]
@@ -404,17 +407,15 @@ mod tests {
     #[test]
     fn truncate_large_output() {
         let big = "x".repeat(200_000);
-        let item = ResponseInputItem::FunctionOutput {
+        let item = ResponseInputItem::FunctionCallOutput {
             call_id: "c1".into(),
-            output: FunctionCallOutputPayload {
-                content: ContentOrItems::String(big),
-            },
+            output: FunctionCallOutputPayload::from_text(big),
         };
         let mut cm = ContextManager::new();
         cm.record_items(vec![item]);
         match &cm.raw_items()[0] {
-            ResponseInputItem::FunctionOutput { output, .. } => match &output.content {
-                ContentOrItems::String(s) => {
+            ResponseInputItem::FunctionCallOutput { output, .. } => match &output.body {
+                FunctionCallOutputBody::Text(s) => {
                     assert!(s.len() < 200_000);
                     assert!(s.ends_with("[truncated]"));
                 }

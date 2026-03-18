@@ -9,18 +9,16 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseInputItem>) {
         if let ResponseInputItem::FunctionCall { call_id, .. } = item {
             let has_output = items.iter().any(|i| matches!(
                 i,
-                ResponseInputItem::FunctionOutput { call_id: cid, .. } if cid == call_id
+                ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
             ));
             if !has_output {
                 inserts.push((
                     idx,
-                    ResponseInputItem::FunctionOutput {
+                    ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
-                        output: crate::protocol::types::FunctionCallOutputPayload {
-                            content: crate::protocol::types::ContentOrItems::String(
-                                "aborted".into(),
-                            ),
-                        },
+                        output: crate::protocol::types::FunctionCallOutputPayload::from_text(
+                            "aborted".into(),
+                        ),
                     },
                 ));
             }
@@ -44,7 +42,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseInputItem>) {
         .collect();
 
     items.retain(|item| match item {
-        ResponseInputItem::FunctionOutput { call_id, .. } => call_ids.contains(call_id),
+        ResponseInputItem::FunctionCallOutput { call_id, .. } => call_ids.contains(call_id),
         _ => true,
     });
 }
@@ -58,10 +56,10 @@ pub(crate) fn remove_corresponding(
         ResponseInputItem::FunctionCall { call_id, .. } => {
             items.retain(|i| !matches!(
                 i,
-                ResponseInputItem::FunctionOutput { call_id: cid, .. } if cid == call_id
+                ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
             ));
         }
-        ResponseInputItem::FunctionOutput { call_id, .. } => {
+        ResponseInputItem::FunctionCallOutput { call_id, .. } => {
             items.retain(|i| !matches!(
                 i,
                 ResponseInputItem::FunctionCall { call_id: cid, .. } if cid == call_id
@@ -85,11 +83,9 @@ mod tests {
     }
 
     fn func_output(id: &str, text: &str) -> ResponseInputItem {
-        ResponseInputItem::FunctionOutput {
+        ResponseInputItem::FunctionCallOutput {
             call_id: id.into(),
-            output: FunctionCallOutputPayload {
-                content: ContentOrItems::String(text.into()),
-            },
+            output: FunctionCallOutputPayload::from_text(text.into()),
         }
     }
 
@@ -105,7 +101,7 @@ mod tests {
         let mut items = vec![user_msg("hi"), func_call("c1")];
         ensure_call_outputs_present(&mut items);
         assert_eq!(items.len(), 3);
-        assert!(matches!(&items[2], ResponseInputItem::FunctionOutput { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&items[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
     }
 
     #[test]

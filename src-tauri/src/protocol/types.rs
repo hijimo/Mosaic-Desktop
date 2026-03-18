@@ -515,49 +515,317 @@ pub enum UserInput {
     },
 }
 
-// ── Response / History Items ─────────────────────────────────────
+// ── Content Items ────────────────────────────────────────────────
 
-/// Items in the conversation history / model response.
+/// Multi-modal content item (matches source project's ContentItem).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentItem {
+    InputText { text: String },
+    InputImage { image_url: String },
+    OutputText { text: String },
+}
+
+// ── ResponseItem (model output) ──────────────────────────────────
+
+/// Structured model output item — matches source project's `ResponseItem`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseItem {
+    Message {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        role: String,
+        content: Vec<ContentItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_turn: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<MessagePhase>,
+    },
+    Reasoning {
+        #[serde(default)]
+        id: String,
+        summary: Vec<ReasoningSummaryItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<ReasoningContentItem>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encrypted_content: Option<String>,
+    },
+    FunctionCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        name: String,
+        arguments: String,
+        call_id: String,
+    },
+    FunctionCallOutput {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    LocalShellCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        status: String,
+        action: serde_json::Value,
+    },
+    CustomToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        call_id: String,
+        name: String,
+        input: String,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    WebSearchCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<WebSearchAction>,
+    },
+    #[serde(alias = "compaction_summary")]
+    Compaction {
+        encrypted_content: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+/// Reasoning summary entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningSummaryItem {
+    SummaryText { text: String },
+}
+
+/// Reasoning content entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningContentItem {
+    ReasoningText { text: String },
+    Text { text: String },
+}
+
+/// Web search action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebSearchAction {
+    Search {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queries: Option<Vec<String>>,
+    },
+    OpenPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    FindInPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+// ── ResponseInputItem (conversation history) ─────────────────────
+
+/// Items in the conversation history sent back to the API.
+/// Retains legacy variants (FunctionCall, FunctionOutput) for backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
     Message {
         role: String,
+        /// Plain text content (legacy). For multi-modal, use ResponseItem.
         content: String,
     },
+    /// Function call from the model.
     FunctionCall {
         call_id: String,
         name: String,
         arguments: String,
     },
-    FunctionOutput {
+    /// Function call output. Also deserializes from legacy "function_output" type tag.
+    #[serde(alias = "function_output")]
+    FunctionCallOutput {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    McpToolCallOutput {
+        call_id: String,
+        result: Result<CallToolResult, String>,
+    },
+    CustomToolCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
     },
 }
 
+impl ResponseInputItem {
+    /// Convenience: create a text message.
+    pub fn text_message(role: &str, text: String) -> Self {
+        Self::Message {
+            role: role.to_string(),
+            content: text,
+        }
+    }
+
+    /// Extract plain text from a Message's content.
+    pub fn message_text(&self) -> Option<&str> {
+        match self {
+            Self::Message { content, .. } if !content.is_empty() => Some(content),
+            _ => None,
+        }
+    }
+}
+
+/// Legacy alias: FunctionOutput → FunctionCallOutput
+impl ResponseInputItem {
+    /// Legacy constructor matching old `FunctionOutput` variant.
+    pub fn function_output(call_id: String, output: FunctionCallOutputPayload) -> Self {
+        Self::FunctionCallOutput { call_id, output }
+    }
+}
+
+impl From<ResponseItem> for ResponseInputItem {
+    fn from(item: ResponseItem) -> Self {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentItem::OutputText { text } | ContentItem::InputText { text } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                Self::Message {
+                    role,
+                    content: text,
+                }
+            }
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => Self::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            },
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                Self::FunctionCallOutput { call_id, output }
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                Self::CustomToolCallOutput { call_id, output }
+            }
+            _ => Self::Message {
+                role: "system".to_string(),
+                content: "[unhandled item]".to_string(),
+            },
+        }
+    }
+}
+
 /// Payload for function call output.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// On the wire: either a plain string or an array of content items.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionCallOutputPayload {
-    pub content: ContentOrItems,
+    pub body: FunctionCallOutputBody,
+    pub success: Option<bool>,
 }
 
-/// Multi-modal content item for function outputs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentItem {
-    Text { text: String },
-    Image { url: String },
-    InputAudio { data: Vec<u8> },
+impl FunctionCallOutputPayload {
+    pub fn from_text(content: String) -> Self {
+        Self {
+            body: FunctionCallOutputBody::Text(content),
+            success: None,
+        }
+    }
+
+    pub fn text_content(&self) -> Option<&str> {
+        match &self.body {
+            FunctionCallOutputBody::Text(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
-/// Either a plain string or a list of content items (untagged).
+impl Default for FunctionCallOutputPayload {
+    fn default() -> Self {
+        Self {
+            body: FunctionCallOutputBody::Text(String::new()),
+            success: None,
+        }
+    }
+}
+
+/// The wire body of a function call output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ContentOrItems {
-    String(String),
-    Items(Vec<ContentItem>),
+pub enum FunctionCallOutputBody {
+    Text(String),
+    ContentItems(Vec<FunctionCallOutputContentItem>),
 }
+
+impl Default for FunctionCallOutputBody {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+/// Content items that can appear in function call output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FunctionCallOutputContentItem {
+    InputText { text: String },
+    InputImage { image_url: String },
+}
+
+// Custom serde for FunctionCallOutputPayload: serialize body directly
+impl Serialize for FunctionCallOutputPayload {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.body.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let body = FunctionCallOutputBody::deserialize(deserializer)?;
+        Ok(Self {
+            body,
+            success: None,
+        })
+    }
+}
+
+impl std::fmt::Display for FunctionCallOutputPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.body {
+            FunctionCallOutputBody::Text(s) => f.write_str(s),
+            FunctionCallOutputBody::ContentItems(items) => {
+                write!(f, "{}", serde_json::to_string(items).unwrap_or_default())
+            }
+        }
+    }
+}
+
+/// Legacy type alias — kept for backward compatibility during migration.
+pub type ContentOrItems = FunctionCallOutputBody;
 
 // ── Dynamic Tools ────────────────────────────────────────────────
 
