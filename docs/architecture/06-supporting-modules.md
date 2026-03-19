@@ -12,6 +12,13 @@
 | `toml_types.rs` | TOML 到 Rust 类型映射 |
 | `permissions.rs` | 权限相关配置 |
 | `diagnostics.rs` | 配置诊断和校验 |
+| `edit.rs` | 配置编辑操作 |
+| `fingerprint.rs` | 配置指纹（变更检测） |
+| `constraint.rs` | 配置约束验证 |
+| `overrides.rs` | 配置覆盖机制 |
+| `service.rs` | 配置服务层 |
+| `config_requirements.rs` | 配置依赖需求 |
+| `layer_stack.rs` | 配置层栈实现 |
 
 ## 认证 (`auth/`)
 
@@ -46,6 +53,10 @@
 | `permissions.rs` | Skill 权限控制 (文件访问、网络等) |
 | `remote.rs` | 远程 Skill 下载和安装 |
 | `model.rs` | Skill 数据模型 (`SkillMetadata`, `SkillInterface`) |
+| `render.rs` | Skill 渲染 — 将 Skill 内容渲染为 prompt 片段 |
+| `system.rs` | 系统内置 Skill 管理 |
+| `env_var_dependencies.rs` | Skill 环境变量依赖收集 |
+| `invocation_utils.rs` | Skill 调用辅助工具 |
 
 ## 记忆系统 (`core/memories/`)
 
@@ -58,7 +69,9 @@
 |------|------|
 | `storage.rs` | 记忆文件存储 |
 | `prompts.rs` | 记忆相关的 prompt 模板 |
-| `start.rs` | 启动时加载记忆 |
+| `start.rs` | 启动时加载记忆 (`start_memories_startup_task`) |
+| `phase1.rs` | Phase 1 — 原始记忆收集 |
+| `phase2.rs` | Phase 2 — 记忆摘要和压缩 |
 
 ## 上下文管理 (`core/context_manager/`)
 
@@ -87,22 +100,34 @@
 | 模块 | 说明 |
 |------|------|
 | `recorder.rs` | `RolloutRecorder` — 录制器 |
-| `policy.rs` | 录制策略 (何时录制) |
+| `policy.rs` | 录制策略 (何时录制, `EventPersistenceMode`, `SessionSource`) |
 | `session_index.rs` | 会话索引 |
 | `truncation.rs` | 录制数据截断 |
+| `list.rs` | 会话列表查询 |
+| `metadata.rs` | 会话元数据 |
+| `error.rs` | Rollout 错误类型 |
 
 ## 其他辅助模块
 
 | 模块 | 说明 |
 |------|------|
 | `hooks.rs` | Hook 系统 — 事件钩子注册和触发 |
-| `git_info.rs` | Git 仓库信息收集 (分支、commit、diff) |
+| `git_info.rs` | Git 仓库信息收集 (分支、commit、diff、remote URLs) |
 | `project_doc.rs` | 项目文档发现 (AGENTS.md 等) |
 | `file_watcher.rs` | 文件变更监听 |
-| `realtime.rs` | 实时对话 (语音/文本) |
-| `patch.rs` | Unified diff 补丁应用器 |
-| `seatbelt.rs` | macOS Seatbelt 沙箱 |
-| `analytics_client.rs` | 分析事件上报 |
+| `realtime.rs` | 实时对话 (语音/文本)，`RealtimeConversationManager` |
+| `patch.rs` | Unified diff 补丁应用器，`PatchApplicator` |
+| `seatbelt.rs` | macOS Seatbelt 沙箱 (仅 macOS) |
+| `analytics_client.rs` | 分析事件上报，`AnalyticsEventsClient` |
 | `netproxy/` | SOCKS5/HTTP 网络代理 |
 | `file_search/` | BM25 文件搜索 |
 | `shell_escalation/` | Shell 权限提升 |
+| `message_history.rs` | 对话历史持久化 (`HistoryEntry`, `HistoryPersistence`) |
+| `external_agent_config.rs` | 外部 Agent 配置检测与迁移 (`ExternalAgentConfigService`) |
+| `network_policy_decision.rs` | 网络策略决策 (`NetworkPolicyDecision`, `BlockedRequest`) |
+| `shell.rs` | Shell 检测与管理 (`Shell`, `ShellType`, `detect_shell_type`) |
+| `shell_snapshot.rs` | Shell 环境快照 (`ShellSnapshot`) |
+| `state_db.rs` | 状态数据库封装 (`StateDb`) |
+| `turn_diff_tracker.rs` | Turn 变更追踪 (`TurnDiffTracker`) |
+| `text_encoding.rs` | 文本编码处理 (`bytes_to_string_smart`) |
+| `truncation.rs` | 截断策略 (`TruncationPolicy`) |

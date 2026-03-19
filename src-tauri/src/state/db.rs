@@ -130,100 +130,99 @@ pub struct AgentJob {
 /// Backfill state for incremental processing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BackfillState {
-    pub last_processed_id: Option<String>,
-    pub total_processed: u64,
+    pub status: BackfillStatus,
+    pub last_watermark: Option<String>,
+    pub last_success_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Migration scripts for the state database.
-const MIGRATIONS: &[&str] = &[
-    // 1. Sessions table
-    "CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        last_activity TEXT NOT NULL,
-        config_profile TEXT
-    )",
-    // 2. Rollouts table
-    "CREATE TABLE IF NOT EXISTS rollouts (
-        session_id TEXT PRIMARY KEY,
-        events_json TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    )",
-    // 3. Threads table
-    "CREATE TABLE IF NOT EXISTS threads (
-        thread_id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        title TEXT,
-        model TEXT
-    )",
-    // 4. Agent jobs table
-    "CREATE TABLE IF NOT EXISTS agent_jobs (
-        job_id TEXT PRIMARY KEY,
-        thread_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        items_json TEXT NOT NULL
-    )",
-    // 5. Backfill state table
-    "CREATE TABLE IF NOT EXISTS backfill_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        last_processed_id TEXT,
-        total_processed INTEGER NOT NULL DEFAULT 0
-    )",
-    // 6. Memories table
-    "CREATE TABLE IF NOT EXISTS memories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        phase TEXT NOT NULL,
-        content TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        relevance_score REAL NOT NULL
-    )",
-    // 7-18: Reserved for future migrations (indexes, etc.)
-    "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions(last_activity)",
-    "CREATE INDEX IF NOT EXISTS idx_agent_jobs_thread ON agent_jobs(thread_id)",
-    "CREATE INDEX IF NOT EXISTS idx_memories_phase ON memories(phase)",
-    "CREATE INDEX IF NOT EXISTS idx_memories_relevance ON memories(relevance_score)",
-    "CREATE INDEX IF NOT EXISTS idx_threads_created ON threads(created_at)",
-    // Placeholder migrations to reach 18 total (no-op CREATE TABLE IF NOT EXISTS)
-    "CREATE TABLE IF NOT EXISTS _migration_placeholder_12 (id INTEGER PRIMARY KEY)",
-    // 13. stage1_outputs table for memory extraction results
-    "CREATE TABLE IF NOT EXISTS stage1_outputs (
-        thread_id TEXT PRIMARY KEY,
-        source_updated_at INTEGER NOT NULL,
-        raw_memory TEXT NOT NULL,
-        rollout_summary TEXT NOT NULL,
-        rollout_slug TEXT,
-        generated_at INTEGER NOT NULL,
-        usage_count INTEGER,
-        last_usage INTEGER,
-        selected_for_phase2 INTEGER NOT NULL DEFAULT 0,
-        selected_for_phase2_source_updated_at INTEGER
-    )",
-    // 14. jobs table for memory pipeline job tracking
-    "CREATE TABLE IF NOT EXISTS jobs (
-        kind TEXT NOT NULL,
-        job_key TEXT NOT NULL,
-        status TEXT NOT NULL,
-        worker_id TEXT,
-        ownership_token TEXT,
-        started_at INTEGER,
-        finished_at INTEGER,
-        lease_until INTEGER,
-        retry_at INTEGER,
-        retry_remaining INTEGER NOT NULL,
-        last_error TEXT,
-        input_watermark INTEGER,
-        last_success_watermark INTEGER,
-        PRIMARY KEY (kind, job_key)
-    )",
-    // 15. indexes for stage1_outputs and jobs
-    "CREATE INDEX IF NOT EXISTS idx_stage1_outputs_source_updated_at ON stage1_outputs(source_updated_at DESC, thread_id DESC)",
-    // 16. index for jobs
-    "CREATE INDEX IF NOT EXISTS idx_jobs_kind_status ON jobs(kind, status, retry_at, lease_until)",
-    // 17. memory_mode column on threads
-    "ALTER TABLE threads ADD COLUMN memory_mode TEXT DEFAULT 'enabled'",
-    // 18. updated_at and rollout_path columns on threads for memory pipeline
-    "ALTER TABLE threads ADD COLUMN updated_at TEXT",
-];
+impl Default for BackfillState {
+    fn default() -> Self {
+        Self {
+            status: BackfillStatus::Pending,
+            last_watermark: None,
+            last_success_at: None,
+        }
+    }
+}
+
+/// Backfill lifecycle status.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BackfillStatus {
+    Pending,
+    Running,
+    Complete,
+}
+
+impl BackfillStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Complete => "complete",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, CodexError> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "complete" => Ok(Self::Complete),
+            _ => Err(CodexError::new(
+                ErrorCode::InternalError,
+                format!("invalid backfill status: {value}"),
+            )),
+        }
+    }
+}
+
+/// Log entry for writing to the database.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogEntry {
+    pub ts: i64,
+    pub ts_nanos: i64,
+    pub level: String,
+    pub target: String,
+    pub message: Option<String>,
+    pub thread_id: Option<String>,
+    pub process_uuid: Option<String>,
+    pub module_path: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<i64>,
+}
+
+/// Log row read from the database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogRow {
+    pub id: i64,
+    pub ts: i64,
+    pub ts_nanos: i64,
+    pub level: String,
+    pub target: String,
+    pub message: Option<String>,
+    pub thread_id: Option<String>,
+    pub process_uuid: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<i64>,
+}
+
+/// Query parameters for log retrieval.
+#[derive(Debug, Clone, Default)]
+pub struct LogQuery {
+    pub level_upper: Option<String>,
+    pub from_ts: Option<i64>,
+    pub to_ts: Option<i64>,
+    pub thread_ids: Vec<String>,
+    pub search: Option<String>,
+    pub include_threadless: bool,
+    pub after_id: Option<i64>,
+    pub limit: Option<usize>,
+    pub descending: bool,
+}
+
+/// State DB filename constant.
+pub const STATE_DB_FILENAME: &str = "state";
+/// Current DB version — bump when adding migrations.
+pub const STATE_DB_VERSION: u32 = 5;
 
 /// Main state database with runtime config and log storage.
 pub struct StateDb {
@@ -235,6 +234,13 @@ impl StateDb {
     /// Open (or create) the state database at the given path.
     pub fn open(path: &Path) -> Result<Self, CodexError> {
         let log_db = LogDb::open(path)?;
+        // Enable WAL mode for better concurrency
+        log_db.connection().execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;"
+        ).map_err(|e| CodexError::new(
+            ErrorCode::InternalError,
+            format!("failed to set pragmas: {e}"),
+        ))?;
         let runtime = StateRuntime {
             config: StateConfig {
                 db_path: path.to_path_buf(),
@@ -247,69 +253,35 @@ impl StateDb {
         Ok(db)
     }
 
-    /// Execute all migration scripts in order.
+    /// Open the versioned state database inside the given home directory.
+    /// Creates the directory if needed and cleans up legacy DB files.
+    pub fn open_versioned(home_dir: &Path) -> Result<Self, CodexError> {
+        std::fs::create_dir_all(home_dir).map_err(|e| CodexError::new(
+            ErrorCode::InternalError,
+            format!("failed to create home dir: {e}"),
+        ))?;
+        remove_legacy_state_files(home_dir);
+        let db_path = state_db_path(home_dir);
+        Self::open(&db_path)
+    }
+
+    /// Execute all pending migrations.
     pub fn run_migrations(&self) -> Result<(), CodexError> {
-        // Create migration tracking table
-        self.log_db
-            .connection()
-            .execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )",
-                [],
-            )
-            .map_err(|e| {
-                CodexError::new(
-                    ErrorCode::InternalError,
-                    format!("failed to create migrations table: {e}"),
-                )
-            })?;
-
-        for (i, sql) in MIGRATIONS.iter().enumerate() {
-            let version = (i + 1) as i64;
-            let already_applied: bool = self
-                .log_db
-                .connection()
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM schema_migrations WHERE version = ?1",
-                    [version],
-                    |row| row.get(0),
-                )
-                .map_err(|e| {
-                    CodexError::new(
-                        ErrorCode::InternalError,
-                        format!("failed to check migration {version}: {e}"),
-                    )
-                })?;
-
-            if !already_applied {
-                self.log_db.connection().execute(sql, []).map_err(|e| {
-                    CodexError::new(
-                        ErrorCode::InternalError,
-                        format!("migration {version} failed: {e}"),
-                    )
-                })?;
-                let now = chrono::Utc::now().to_rfc3339();
-                self.log_db
-                    .connection()
-                    .execute(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                        rusqlite::params![version, now],
-                    )
-                    .map_err(|e| {
-                        CodexError::new(
-                            ErrorCode::InternalError,
-                            format!("failed to record migration {version}: {e}"),
-                        )
-                    })?;
-            }
-        }
-        Ok(())
+        super::migration_runner::run_migrations(self.log_db.connection())
     }
 
     /// Save session metadata.
     pub fn save_session_meta(&mut self, meta: &SessionMeta) -> Result<(), CodexError> {
+        // Ensure sessions table exists (for backward compat with old DBs)
+        self.log_db.connection().execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                last_activity TEXT NOT NULL,
+                config_profile TEXT
+            )"
+        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+
         self.log_db
             .connection()
             .execute(
@@ -335,6 +307,17 @@ impl StateDb {
     /// Load session metadata by ID.
     pub fn load_session_meta(&mut self, id: &str) -> Result<Option<SessionMeta>, CodexError> {
         self.runtime.metrics.total_reads += 1;
+
+        // Check if sessions table exists
+        let exists: bool = self.log_db.connection().query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='sessions'",
+            [],
+            |r| r.get(0),
+        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+        if !exists {
+            return Ok(None);
+        }
+
         let result = self.log_db.connection().query_row(
             "SELECT id, created_at, last_activity, config_profile FROM sessions WHERE id = ?1",
             [id],
@@ -375,18 +358,27 @@ impl StateDb {
         }
     }
 
-    /// Save thread metadata.
+    /// Save thread metadata (using the new Codex-aligned schema).
     pub fn save_thread_metadata(&mut self, meta: &ThreadMetadata) -> Result<(), CodexError> {
+        let now = chrono::Utc::now().timestamp();
+        let created_at = meta.created_at.timestamp();
         self.log_db
             .connection()
             .execute(
-                "INSERT OR REPLACE INTO threads (thread_id, created_at, title, model)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO threads (id, rollout_path, created_at, updated_at, source,
+                 model_provider, cwd, title, sandbox_policy, approval_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     meta.thread_id,
-                    meta.created_at.to_rfc3339(),
-                    meta.title,
-                    meta.model,
+                    "",
+                    created_at,
+                    now,
+                    "gui",
+                    meta.model.as_deref().unwrap_or(""),
+                    "",
+                    meta.title.as_deref().unwrap_or(""),
+                    "read_only",
+                    "on_request",
                 ],
             )
             .map_err(|e| {
@@ -413,10 +405,20 @@ impl StateDb {
                 format!("failed to serialize agent job status: {e}"),
             )
         })?;
+        // Use the legacy agent_jobs table format for backward compat
+        self.log_db.connection().execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_jobs_legacy (
+                job_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                items_json TEXT NOT NULL
+            )"
+        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+
         self.log_db
             .connection()
             .execute(
-                "INSERT OR REPLACE INTO agent_jobs (job_id, thread_id, status, items_json)
+                "INSERT OR REPLACE INTO agent_jobs_legacy (job_id, thread_id, status, items_json)
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![job.job_id, job.thread_id, status_str, items_json],
             )
@@ -433,8 +435,18 @@ impl StateDb {
     /// Load an agent job by ID.
     pub fn load_agent_job(&mut self, job_id: &str) -> Result<Option<AgentJob>, CodexError> {
         self.runtime.metrics.total_reads += 1;
+
+        let exists: bool = self.log_db.connection().query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='agent_jobs_legacy'",
+            [],
+            |r| r.get(0),
+        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+        if !exists {
+            return Ok(None);
+        }
+
         let result = self.log_db.connection().query_row(
-            "SELECT job_id, thread_id, status, items_json FROM agent_jobs WHERE job_id = ?1",
+            "SELECT job_id, thread_id, status, items_json FROM agent_jobs_legacy WHERE job_id = ?1",
             [job_id],
             |row| {
                 let status_str: String = row.get(2)?;
@@ -481,28 +493,206 @@ impl StateDb {
     pub fn get_backfill_state(&mut self) -> Result<BackfillState, CodexError> {
         self.runtime.metrics.total_reads += 1;
         let result = self.log_db.connection().query_row(
-            "SELECT last_processed_id, total_processed FROM backfill_state WHERE id = 1",
+            "SELECT status, last_watermark, last_success_at FROM backfill_state WHERE id = 1",
             [],
             |row| {
-                Ok(BackfillState {
-                    last_processed_id: row.get(0)?,
-                    total_processed: row.get::<_, i64>(1)? as u64,
-                })
+                let status_str: String = row.get(0)?;
+                let last_watermark: Option<String> = row.get(1)?;
+                let last_success_at: Option<i64> = row.get(2)?;
+                Ok((status_str, last_watermark, last_success_at))
             },
         );
 
         match result {
-            Ok(state) => Ok(state),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(BackfillState {
-                last_processed_id: None,
-                total_processed: 0,
-            }),
+            Ok((status_str, last_watermark, last_success_at)) => {
+                let status = BackfillStatus::parse(&status_str)?;
+                let last_success_at = last_success_at.and_then(|secs| {
+                    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+                });
+                Ok(BackfillState { status, last_watermark, last_success_at })
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(BackfillState::default()),
             Err(e) => Err(CodexError::new(
                 ErrorCode::InternalError,
                 format!("failed to get backfill state: {e}"),
             )),
         }
     }
+
+    /// Update the backfill state.
+    pub fn update_backfill_state(&mut self, state: &BackfillState) -> Result<(), CodexError> {
+        let now = chrono::Utc::now().timestamp();
+        let last_success_at = state.last_success_at.map(|dt| dt.timestamp());
+        self.log_db
+            .connection()
+            .execute(
+                "UPDATE backfill_state SET status = ?1, last_watermark = ?2,
+                 last_success_at = ?3, updated_at = ?4 WHERE id = 1",
+                rusqlite::params![state.status.as_str(), state.last_watermark, last_success_at, now],
+            )
+            .map_err(|e| CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to update backfill state: {e}"),
+            ))?;
+        self.runtime.metrics.total_writes += 1;
+        Ok(())
+    }
+
+    /// Write a log entry.
+    pub fn write_log(&mut self, entry: &LogEntry) -> Result<(), CodexError> {
+        let estimated_bytes = entry.message.as_deref().map_or(0, |m| m.len())
+            + entry.level.len()
+            + entry.target.len()
+            + entry.module_path.as_deref().map_or(0, |m| m.len())
+            + entry.file.as_deref().map_or(0, |f| f.len());
+
+        self.log_db
+            .connection()
+            .execute(
+                "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id,
+                 process_uuid, module_path, file, line, estimated_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    entry.ts, entry.ts_nanos, entry.level, entry.target,
+                    entry.message, entry.thread_id, entry.process_uuid,
+                    entry.module_path, entry.file, entry.line, estimated_bytes as i64,
+                ],
+            )
+            .map_err(|e| CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to write log: {e}"),
+            ))?;
+        self.runtime.metrics.total_writes += 1;
+        Ok(())
+    }
+
+    /// Query logs with filtering.
+    pub fn query_logs(&mut self, query: &LogQuery) -> Result<Vec<LogRow>, CodexError> {
+        self.runtime.metrics.total_reads += 1;
+        let mut sql = String::from(
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid, file, line FROM logs WHERE 1=1"
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref level) = query.level_upper {
+            sql.push_str(" AND level <= ?");
+            params.push(Box::new(level.clone()));
+        }
+        if let Some(from_ts) = query.from_ts {
+            sql.push_str(" AND ts >= ?");
+            params.push(Box::new(from_ts));
+        }
+        if let Some(to_ts) = query.to_ts {
+            sql.push_str(" AND ts <= ?");
+            params.push(Box::new(to_ts));
+        }
+        if let Some(after_id) = query.after_id {
+            sql.push_str(" AND id > ?");
+            params.push(Box::new(after_id));
+        }
+        if !query.thread_ids.is_empty() {
+            let placeholders: Vec<String> = query.thread_ids.iter().enumerate()
+                .map(|(_, _)| "?".to_string()).collect();
+            sql.push_str(&format!(" AND thread_id IN ({})", placeholders.join(",")));
+            for tid in &query.thread_ids {
+                params.push(Box::new(tid.clone()));
+            }
+        }
+        if let Some(ref search) = query.search {
+            sql.push_str(" AND message LIKE ?");
+            params.push(Box::new(format!("%{search}%")));
+        }
+
+        if query.descending {
+            sql.push_str(" ORDER BY ts DESC, ts_nanos DESC, id DESC");
+        } else {
+            sql.push_str(" ORDER BY ts ASC, ts_nanos ASC, id ASC");
+        }
+
+        if let Some(limit) = query.limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.log_db.connection().prepare(&sql).map_err(|e| {
+            CodexError::new(ErrorCode::InternalError, format!("failed to prepare log query: {e}"))
+        })?;
+
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok(LogRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                ts_nanos: row.get(2)?,
+                level: row.get(3)?,
+                target: row.get(4)?,
+                message: row.get(5)?,
+                thread_id: row.get(6)?,
+                process_uuid: row.get(7)?,
+                file: row.get(8)?,
+                line: row.get(9)?,
+            })
+        }).map_err(|e| {
+            CodexError::new(ErrorCode::InternalError, format!("failed to query logs: {e}"))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row.map_err(|e| {
+                CodexError::new(ErrorCode::InternalError, format!("failed to read log row: {e}"))
+            })?);
+        }
+        Ok(result)
+    }
+}
+
+/// Return the versioned state DB filename.
+pub fn state_db_filename() -> String {
+    format!("{STATE_DB_FILENAME}_{STATE_DB_VERSION}.sqlite")
+}
+
+/// Return the full path to the versioned state DB.
+pub fn state_db_path(home_dir: &Path) -> std::path::PathBuf {
+    home_dir.join(state_db_filename())
+}
+
+/// Remove legacy state DB files from the home directory.
+fn remove_legacy_state_files(home_dir: &Path) {
+    let current_name = state_db_filename();
+    let entries = match std::fs::read_dir(home_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if should_remove_state_file(&name, &current_name) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn should_remove_state_file(file_name: &str, current_name: &str) -> bool {
+    let mut base_name = file_name;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if let Some(stripped) = file_name.strip_suffix(suffix) {
+            base_name = stripped;
+            break;
+        }
+    }
+    if base_name == current_name {
+        return false;
+    }
+    let unversioned = format!("{STATE_DB_FILENAME}.sqlite");
+    if base_name == unversioned {
+        return true;
+    }
+    let Some(ver_ext) = base_name.strip_prefix(&format!("{STATE_DB_FILENAME}_")) else {
+        return false;
+    };
+    let Some(ver) = ver_ext.strip_suffix(".sqlite") else {
+        return false;
+    };
+    !ver.is_empty() && ver.chars().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -538,30 +728,18 @@ mod tests {
     }
 
     #[test]
-    fn open_creates_tables() {
+    fn open_runs_migrations() {
         let (_dir, db) = temp_db();
-        let count: i64 = db
-            .log_db
-            .connection()
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, MIGRATIONS.len() as i64);
+        let ver = super::super::migration_runner::current_version(db.log_db.connection()).unwrap();
+        assert_eq!(ver, super::super::migration_runner::SCHEMA_VERSION as i64);
     }
 
     #[test]
     fn migrations_are_idempotent() {
         let (_dir, db) = temp_db();
         db.run_migrations().unwrap();
-        let count: i64 = db
-            .log_db
-            .connection()
-            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, MIGRATIONS.len() as i64);
+        let ver = super::super::migration_runner::current_version(db.log_db.connection()).unwrap();
+        assert_eq!(ver, super::super::migration_runner::SCHEMA_VERSION as i64);
     }
 
     #[test]
@@ -644,13 +822,23 @@ mod tests {
     fn backfill_state_default() {
         let (_dir, mut db) = temp_db();
         let state = db.get_backfill_state().unwrap();
-        assert_eq!(
-            state,
-            BackfillState {
-                last_processed_id: None,
-                total_processed: 0,
-            }
-        );
+        assert_eq!(state.status, BackfillStatus::Pending);
+        assert!(state.last_watermark.is_none());
+    }
+
+    #[test]
+    fn backfill_state_update() {
+        let (_dir, mut db) = temp_db();
+        let now = chrono::Utc::now();
+        let state = BackfillState {
+            status: BackfillStatus::Complete,
+            last_watermark: Some("wm-1".to_string()),
+            last_success_at: Some(now),
+        };
+        db.update_backfill_state(&state).unwrap();
+        let loaded = db.get_backfill_state().unwrap();
+        assert_eq!(loaded.status, BackfillStatus::Complete);
+        assert_eq!(loaded.last_watermark, Some("wm-1".to_string()));
     }
 
     #[test]
@@ -661,5 +849,91 @@ mod tests {
         db.load_session_meta("s1").unwrap();
         assert_eq!(db.runtime.metrics.total_writes, 1);
         assert_eq!(db.runtime.metrics.total_reads, 1);
+    }
+
+    #[test]
+    fn log_write_and_query() {
+        let (_dir, mut db) = temp_db();
+        let entry = LogEntry {
+            ts: 1000,
+            ts_nanos: 500,
+            level: "INFO".to_string(),
+            target: "test".to_string(),
+            message: Some("hello world".to_string()),
+            thread_id: Some("t1".to_string()),
+            process_uuid: None,
+            module_path: None,
+            file: None,
+            line: None,
+        };
+        db.write_log(&entry).unwrap();
+
+        let rows = db.query_logs(&LogQuery {
+            thread_ids: vec!["t1".to_string()],
+            limit: Some(10),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn log_query_search() {
+        let (_dir, mut db) = temp_db();
+        for i in 0..3 {
+            db.write_log(&LogEntry {
+                ts: 1000 + i,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "test".to_string(),
+                message: Some(format!("msg-{i}")),
+                thread_id: None,
+                process_uuid: None,
+                module_path: None,
+                file: None,
+                line: None,
+            }).unwrap();
+        }
+
+        let rows = db.query_logs(&LogQuery {
+            search: Some("msg-1".to_string()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message, Some("msg-1".to_string()));
+    }
+
+    #[test]
+    fn versioned_db_filename() {
+        let name = state_db_filename();
+        assert_eq!(name, format!("state_{STATE_DB_VERSION}.sqlite"));
+    }
+
+    #[test]
+    fn should_remove_state_file_logic() {
+        let current = "state_5.sqlite";
+        assert!(!should_remove_state_file("state_5.sqlite", current));
+        assert!(!should_remove_state_file("state_5.sqlite-wal", current));
+        assert!(should_remove_state_file("state.sqlite", current));
+        assert!(should_remove_state_file("state_4.sqlite", current));
+        assert!(should_remove_state_file("state_4.sqlite-wal", current));
+        assert!(should_remove_state_file("state_3.sqlite-shm", current));
+        assert!(!should_remove_state_file("other.sqlite", current));
+    }
+
+    #[test]
+    fn open_versioned_creates_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = StateDb::open_versioned(dir.path()).unwrap();
+        let expected_path = dir.path().join(state_db_filename());
+        assert_eq!(db.runtime.config.db_path, expected_path);
+    }
+
+    #[test]
+    fn backfill_status_parse() {
+        assert_eq!(BackfillStatus::parse("pending").unwrap(), BackfillStatus::Pending);
+        assert_eq!(BackfillStatus::parse("running").unwrap(), BackfillStatus::Running);
+        assert_eq!(BackfillStatus::parse("complete").unwrap(), BackfillStatus::Complete);
+        assert!(BackfillStatus::parse("invalid").is_err());
     }
 }

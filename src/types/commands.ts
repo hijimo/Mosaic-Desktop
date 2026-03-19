@@ -15,14 +15,24 @@ export interface CodexEventPayload {
 // ── Thread management ────────────────────────────────────────────
 
 export interface ThreadStartParams {
-  thread_id: string;
   cwd?: string;
 }
 
 export interface ThreadForkParams {
   source_thread_id: string;
-  new_thread_id: string;
   cwd?: string;
+}
+
+/** Metadata for a thread, returned by thread_get_info. */
+export interface ThreadMeta {
+  thread_id: string;
+  cwd: string;
+  /** Populated after session_configured event is received. */
+  model: string | null;
+  model_provider_id: string | null;
+  name: string | null;
+  created_at: string; // ISO 8601
+  forked_from: string | null;
 }
 
 // ── Submit op ────────────────────────────────────────────────────

@@ -118,17 +118,17 @@ impl StateDb {
         let conn = self.log_db.connection();
         let mut stmt = conn
             .prepare(
-                "SELECT t.thread_id, COALESCE(t.updated_at, t.created_at) AS upd,
-                        t.created_at, t.title, t.model
+                "SELECT t.id, COALESCE(t.updated_at, t.created_at) AS upd,
+                        t.created_at, t.title, t.model_provider
                  FROM threads t
-                 LEFT JOIN stage1_outputs so ON so.thread_id = t.thread_id
-                 LEFT JOIN jobs j ON j.kind = ?1 AND j.job_key = t.thread_id
+                 LEFT JOIN stage1_outputs so ON so.thread_id = t.id
+                 LEFT JOIN jobs j ON j.kind = ?1 AND j.job_key = t.id
                  WHERE COALESCE(t.memory_mode, 'enabled') = 'enabled'
-                   AND t.thread_id != ?2
-                   AND CAST(strftime('%s', COALESCE(t.updated_at, t.created_at)) AS INTEGER) >= ?3
-                   AND CAST(strftime('%s', COALESCE(t.updated_at, t.created_at)) AS INTEGER) <= ?4
-                   AND COALESCE(so.source_updated_at, -1) < CAST(strftime('%s', COALESCE(t.updated_at, t.created_at)) AS INTEGER)
-                   AND COALESCE(j.last_success_watermark, -1) < CAST(strftime('%s', COALESCE(t.updated_at, t.created_at)) AS INTEGER)
+                   AND t.id != ?2
+                   AND COALESCE(t.updated_at, t.created_at) >= ?3
+                   AND COALESCE(t.updated_at, t.created_at) <= ?4
+                   AND COALESCE(so.source_updated_at, -1) < COALESCE(t.updated_at, t.created_at)
+                   AND COALESCE(j.last_success_watermark, -1) < COALESCE(t.updated_at, t.created_at)
                  ORDER BY upd DESC
                  LIMIT 5000",
             )
@@ -389,10 +389,10 @@ impl StateDb {
             .prepare(
                 "SELECT so.thread_id, so.source_updated_at, so.raw_memory,
                         so.rollout_summary, so.rollout_slug, so.generated_at,
-                        COALESCE(t.title, '') AS cwd,
-                        t.model AS git_branch
+                        COALESCE(t.cwd, '') AS cwd,
+                        t.git_branch AS git_branch
                  FROM stage1_outputs so
-                 LEFT JOIN threads t ON t.thread_id = so.thread_id
+                 LEFT JOIN threads t ON t.id = so.thread_id
                  WHERE COALESCE(t.memory_mode, 'enabled') = 'enabled'
                    AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
                  ORDER BY so.source_updated_at DESC, so.thread_id DESC
@@ -660,7 +660,7 @@ impl StateDb {
                         so.rollout_summary, so.rollout_slug, so.generated_at,
                         so.selected_for_phase2, so.selected_for_phase2_source_updated_at
                  FROM stage1_outputs so
-                 LEFT JOIN threads t ON t.thread_id = so.thread_id
+                 LEFT JOIN threads t ON t.id = so.thread_id
                  WHERE COALESCE(t.memory_mode, 'enabled') = 'enabled'
                    AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
                    AND ((so.last_usage IS NOT NULL AND so.last_usage >= ?1)
@@ -831,8 +831,10 @@ mod tests {
         db.log_db
             .connection()
             .execute(
-                "INSERT INTO threads (thread_id, created_at, title, model) VALUES (?1, ?2, NULL, NULL)",
-                params![tid.to_string(), Utc::now().to_rfc3339()],
+                "INSERT INTO threads (id, rollout_path, created_at, updated_at, source,
+                 model_provider, cwd, title, sandbox_policy, approval_mode)
+                 VALUES (?1, '', ?2, ?2, 'gui', '', '', '', 'read_only', 'on_request')",
+                params![tid.to_string(), Utc::now().timestamp()],
             )
             .unwrap();
 

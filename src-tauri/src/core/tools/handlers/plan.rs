@@ -81,8 +81,8 @@ impl ToolHandler for PlanHandler {
 
         // Source Codex rejects update_plan in Plan mode (it's a TODO/checklist tool)
         // TODO: wire current_mode from actual session collaboration_mode
-        let current_mode = super::request_user_input::ModeKind::Default;
-        if current_mode == super::request_user_input::ModeKind::Plan {
+        let current_mode = crate::protocol::types::ModeKind::Default;
+        if current_mode == crate::protocol::types::ModeKind::Plan {
             return Err(CodexError::new(
                 ErrorCode::InvalidInput,
                 "update_plan is a TODO/checklist tool and is not allowed in Plan mode",

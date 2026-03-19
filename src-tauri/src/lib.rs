@@ -5,15 +5,19 @@ pub mod core;
 pub mod exec;
 pub mod execpolicy;
 pub mod file_search;
+pub mod mosaic_api;
+pub mod mosaic_client;
 pub mod netproxy;
 pub mod protocol;
 pub mod provider;
 pub mod pty;
 pub mod responses_api_proxy;
+pub mod rmcp_client;
 pub mod secrets;
 pub mod shell_command;
 pub mod shell_escalation;
 pub mod state;
+pub mod stream_parser;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,6 +41,7 @@ pub fn run() {
 
     let app_state = AppState {
         threads: Arc::new(Mutex::new(HashMap::new())),
+        thread_meta: Arc::new(Mutex::new(HashMap::new())),
         config: Arc::new(Mutex::new(config)),
     };
 
@@ -47,6 +52,7 @@ pub fn run() {
             commands::submit_op,
             commands::thread_start,
             commands::thread_list,
+            commands::thread_get_info,
             commands::thread_archive,
             commands::thread_fork,
             commands::fuzzy_file_search,

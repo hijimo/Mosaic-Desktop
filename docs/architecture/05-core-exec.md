@@ -79,7 +79,7 @@ struct ProcessEntry {
 
 | 文件 | 职责 |
 |------|------|
-| `manager.rs` | `ExecPolicyManager` — 策略管理器 |
+| `manager.rs` | `ExecPolicyManager` — 策略管理器，提供 `ExecApprovalRequirement` |
 | `bash.rs` | Bash 命令解析和分类 |
 | `heuristics.rs` | 安全启发式规则 (识别危险命令) |
 

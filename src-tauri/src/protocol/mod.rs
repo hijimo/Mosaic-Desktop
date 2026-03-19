@@ -24,7 +24,7 @@ pub use types::{
     ForcedLoginMethod, FunctionCallOutputBody, FunctionCallOutputContentItem,
     FunctionCallOutputPayload, LocalShellAction, LocalShellExecAction, LocalShellStatus,
     McpInvocation, McpServerRefreshConfig,
-    McpStartupFailure, McpStartupStatus, MessagePhase, ModeKind, ModelRerouteReason,
+    McpStartupFailure, McpStartupStatus, MessagePhase, ModeKind, CollaborationModeMask, ModelRerouteReason,
     NetworkAccess, NetworkApprovalContext, NetworkApprovalProtocol, NetworkPolicyAmendment,
     NetworkPolicyRuleAction, ParsedCommand, PatchApplyStatus, Personality, ReadOnlyAccess,
     ReasoningContentItem, ReasoningSummary, ReasoningSummaryItem, RejectConfig,

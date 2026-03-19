@@ -3,30 +3,7 @@ use serde::Deserialize;
 
 use crate::core::tools::{ToolHandler, ToolKind};
 use crate::protocol::error::{CodexError, ErrorCode};
-
-/// Mode kinds that control tool availability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModeKind {
-    Default,
-    Plan,
-    Execute,
-    PairProgramming,
-}
-
-impl ModeKind {
-    pub fn allows_request_user_input(self) -> bool {
-        matches!(self, ModeKind::Plan)
-    }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            ModeKind::Default => "Default",
-            ModeKind::Plan => "Plan",
-            ModeKind::Execute => "Execute",
-            ModeKind::PairProgramming => "Pair Programming",
-        }
-    }
-}
+use crate::protocol::types::ModeKind;
 
 fn request_user_input_is_available(mode: ModeKind, default_mode_enabled: bool) -> bool {
     mode.allows_request_user_input() || (default_mode_enabled && mode == ModeKind::Default)

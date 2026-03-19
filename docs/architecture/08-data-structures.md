@@ -187,4 +187,88 @@ enum McpStartupStatus { Starting, Ready, Failed { error }, Cancelled }
 | `ExecCommandStatus` | Completed, Failed, Declined | 命令执行状态 |
 | `ElicitationAction` | Accept, Decline, Cancel | MCP 请求用户输入的决策 |
 | `NetworkAccess` | Restricted, Enabled | 网络访问权限 |
-| `MessagePhase` | Planning, Executing, Summarizing | 消息阶段 |
+| `MessagePhase` | Commentary, FinalAnswer | 消息阶段 |
+
+## 前端共享基础类型 (`src/types/events.ts`)
+
+以下类型在前端 TypeScript 中定义，用于事件 payload 的组合：
+
+### RateLimitSnapshot
+
+```typescript
+interface RateLimitWindow {
+  limit: number;
+  remaining: number;
+  reset: string;
+}
+
+interface CreditsSnapshot {
+  remaining: number;
+  granted: number;
+}
+
+interface RateLimitSnapshot {
+  limit_id?: string;
+  limit_name?: string;
+  primary?: RateLimitWindow;
+  secondary?: RateLimitWindow;
+  credits?: CreditsSnapshot;
+}
+```
+
+### TextElement
+
+```typescript
+interface ByteRange { start: number; end: number; }
+interface TextElement { byte_range: ByteRange; placeholder?: string; }
+```
+
+### ContentItem
+
+```typescript
+type ContentItem =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string }
+  | { type: "output_text"; text: string };
+```
+
+### WebSearchAction
+
+```typescript
+type WebSearchAction =
+  | { type: "search"; query?: string; queries?: string[] }
+  | { type: "open_page"; url?: string }
+  | { type: "find_in_page"; url?: string; pattern?: string }
+  | { type: "other" };
+```
+
+### LocalShellAction
+
+```typescript
+type LocalShellAction = { type: "exec" } & {
+  command: string[];
+  timeout_ms?: number;
+  working_directory?: string;
+  env?: Record<string, string>;
+  user?: string;
+};
+```
+
+### FunctionCallOutputPayload
+
+```typescript
+type FunctionCallOutputBody = string | FunctionCallOutputContentItem[];
+interface FunctionCallOutputPayload { body: FunctionCallOutputBody; success: boolean; }
+```
+
+### AgentMessageContent
+
+```typescript
+interface AgentMessageContent { type: "Text"; text: string; }
+```
+
+### ParsedCommand
+
+```typescript
+interface ParsedCommand { program: string; args: string[]; }
+```

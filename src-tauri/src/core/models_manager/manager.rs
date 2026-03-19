@@ -9,6 +9,9 @@ use tracing::{error, info};
 use crate::provider::ModelProviderInfo;
 
 use super::cache::ModelsCacheManager;
+use super::collaboration_mode_presets::{
+    builtin_collaboration_mode_presets, CollaborationModesConfig,
+};
 use super::model_info::{ModelDescriptor, ModelsResponse};
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
@@ -32,6 +35,7 @@ pub struct ModelsManager {
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
     mosaic_home: PathBuf,
+    collaboration_modes_config: CollaborationModesConfig,
 }
 
 impl ModelsManager {
@@ -55,6 +59,7 @@ impl ModelsManager {
             cache_manager,
             provider,
             mosaic_home,
+            collaboration_modes_config: CollaborationModesConfig::default(),
         }
     }
 
@@ -111,6 +116,21 @@ impl ModelsManager {
     /// Get the current provider info.
     pub fn provider(&self) -> &ModelProviderInfo {
         &self.provider
+    }
+
+    /// List collaboration mode presets.
+    pub fn list_collaboration_modes(
+        &self,
+    ) -> Vec<crate::protocol::types::CollaborationModeMask> {
+        builtin_collaboration_mode_presets(self.collaboration_modes_config)
+    }
+
+    /// List collaboration mode presets with a custom config.
+    pub fn list_collaboration_modes_for_config(
+        &self,
+        config: CollaborationModesConfig,
+    ) -> Vec<crate::protocol::types::CollaborationModeMask> {
+        builtin_collaboration_mode_presets(config)
     }
 
     // ── Internal ─────────────────────────────────────────────────

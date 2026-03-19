@@ -1,6 +1,8 @@
 pub mod cache;
+pub mod collaboration_mode_presets;
 pub mod manager;
 pub mod model_info;
+pub mod model_presets;
 
 /// Convert the crate version to a `MAJOR.MINOR.PATCH` string.
 pub fn client_version_to_whole() -> String {

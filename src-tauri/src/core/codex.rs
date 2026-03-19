@@ -559,9 +559,20 @@ impl Codex {
                 .await;
             }
             Op::ListCustomPrompts => {
+                let prompts = if let Some(dir) = crate::core::custom_prompts::default_prompts_dir() {
+                    crate::core::custom_prompts::discover_prompts_in(&dir).await
+                } else {
+                    vec![]
+                };
+                let custom_prompts = prompts
+                    .into_iter()
+                    .filter_map(|p| {
+                        serde_json::to_value(&p).ok()
+                    })
+                    .collect();
                 self.emit(EventMsg::ListCustomPromptsResponse(
                     crate::protocol::event::ListCustomPromptsResponseEvent {
-                        custom_prompts: vec![],
+                        custom_prompts,
                     },
                 ))
                 .await;

@@ -112,8 +112,11 @@ impl TurnContext {
 // ── SessionState ─────────────────────────────────────────────────
 
 /// Mutable state protected by a Mutex inside Session.
+/// This tracks per-turn lifecycle (active turn, pending approval, etc.)
+/// as opposed to `state::SessionState` which tracks session-wide data
+/// (history, token usage, MCP selections).
 #[derive(Debug)]
-pub struct SessionState {
+pub struct SessionInternalState {
     /// Ordered conversation history.
     pub history: Vec<ResponseInputItem>,
     /// Whether a turn is currently active.
@@ -128,7 +131,7 @@ pub struct SessionState {
     pub exec_allow_list: Vec<Vec<String>>,
 }
 
-impl SessionState {
+impl SessionInternalState {
     pub fn new() -> Self {
         Self {
             history: Vec::new(),
@@ -141,7 +144,7 @@ impl SessionState {
     }
 }
 
-impl Default for SessionState {
+impl Default for SessionInternalState {
     fn default() -> Self {
         Self::new()
     }
@@ -154,7 +157,7 @@ pub struct Session {
     /// Unique session identifier.
     id: String,
     /// Protected mutable state.
-    state: tokio::sync::Mutex<SessionState>,
+    state: tokio::sync::Mutex<SessionInternalState>,
     /// Configuration stack for resolving layered config.
     config: ConfigLayerStack,
     /// Active profile name (if any).
@@ -181,7 +184,7 @@ impl Session {
     ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            state: tokio::sync::Mutex::new(SessionState::new()),
+            state: tokio::sync::Mutex::new(SessionInternalState::new()),
             config,
             active_profile: None,
             tool_router: tokio::sync::Mutex::new(ToolRouter::new(

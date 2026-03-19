@@ -1,0 +1,63 @@
+use crate::mosaic_api::auth::AuthProvider;
+use crate::mosaic_api::common::CompactionInput;
+use crate::mosaic_api::endpoint::session::EndpointSession;
+use crate::mosaic_api::error::ApiError;
+use crate::mosaic_api::provider::Provider;
+use crate::mosaic_client::{HttpTransport, RequestTelemetry};
+use crate::protocol::types::ResponseItem;
+use http::{HeaderMap, Method};
+use serde::Deserialize;
+use serde_json::to_value;
+use std::sync::Arc;
+
+pub struct CompactClient<T: HttpTransport, A: AuthProvider> {
+    session: EndpointSession<T, A>,
+}
+
+impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
+    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+        Self {
+            session: EndpointSession::new(transport, provider, auth),
+        }
+    }
+
+    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
+        Self {
+            session: self.session.with_request_telemetry(request),
+        }
+    }
+
+    fn path() -> &'static str {
+        "responses/compact"
+    }
+
+    pub async fn compact(
+        &self,
+        body: serde_json::Value,
+        extra_headers: HeaderMap,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
+        let resp = self
+            .session
+            .execute(Method::POST, Self::path(), extra_headers, Some(body))
+            .await
+            .map_err(ApiError::Transport)?;
+        let parsed: CompactHistoryResponse =
+            serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
+        Ok(parsed.output)
+    }
+
+    pub async fn compact_input(
+        &self,
+        input: &CompactionInput<'_>,
+        extra_headers: HeaderMap,
+    ) -> Result<Vec<ResponseItem>, ApiError> {
+        let body = to_value(input)
+            .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
+        self.compact(body, extra_headers).await
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CompactHistoryResponse {
+    output: Vec<ResponseItem>,
+}

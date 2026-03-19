@@ -3,6 +3,7 @@ pub mod analytics_client;
 pub mod client;
 pub mod codex;
 pub mod compact;
+pub mod custom_prompts;
 pub mod context_manager;
 pub mod exec_policy;
 pub mod external_agent_config;
@@ -19,11 +20,14 @@ pub mod network_policy_decision;
 pub mod patch;
 pub mod project_doc;
 pub mod realtime;
+pub mod review_format;
+pub mod review_prompts;
 pub mod rollout;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 pub mod session;
 pub mod shell;
+pub mod state;
 pub mod shell_snapshot;
 pub mod skills;
 pub mod tasks;
@@ -71,6 +75,9 @@ pub use memories::{memory_root, read_memory_summary, start_memories_startup_task
 pub use models_manager::manager::{ModelsManager, RefreshStrategy};
 pub use models_manager::model_info::{ModelDescriptor, ModelsResponse};
 pub use models_manager::cache::ModelsCacheManager;
+pub use models_manager::collaboration_mode_presets::{
+    builtin_collaboration_mode_presets, CollaborationModesConfig,
+};
 pub use message_history::{
     append_entry as append_history_entry, history_metadata, lookup as lookup_history,
     HistoryConfig, HistoryEntry, HistoryPersistence,
@@ -84,6 +91,8 @@ pub use project_doc::{
     DEFAULT_PROJECT_DOC_FILENAME, LOCAL_PROJECT_DOC_FILENAME,
 };
 pub use realtime::{RealtimeConversationManager, RealtimeSession};
+pub use review_format::{format_review_findings_block, render_review_output_text};
+pub use review_prompts::{resolve_review_request, review_prompt, user_facing_hint, ResolvedReviewRequest};
 pub use rollout::{
     RolloutRecorder, RolloutRecorderParams,
     append_thread_name, find_thread_name_by_id, find_thread_path_by_name_str,
@@ -93,7 +102,8 @@ pub use seatbelt::{
     create_seatbelt_command_args, spawn_command_under_seatbelt,
     MACOS_PATH_TO_SEATBELT_EXECUTABLE,
 };
-pub use session::{ModelInfo, PendingApproval, Session, SessionState, TurnContext};
+pub use session::{ModelInfo, PendingApproval, Session, SessionInternalState, TurnContext};
+pub use state::{ActiveTurn, RunningTask, SessionServices, SessionState, TurnState};
 pub use skills::{
     load_skills_from_roots, render_skills_section, install_system_skills, system_cache_root_dir,
     skill_roots_for_cwd,

@@ -10,7 +10,7 @@ graph TB
     end
 
     subgraph Tauri["Tauri IPC 层"]
-        CMD[Tauri Commands<br/>submit_op / poll_events / get_config]
+        CMD[Tauri Commands<br/>submit_op / thread_start / thread_get_info / get_config]
     end
 
     subgraph Backend["后端 (Rust)"]

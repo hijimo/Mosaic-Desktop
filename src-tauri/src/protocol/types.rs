@@ -411,6 +411,45 @@ pub enum ModeKind {
     Execute,
 }
 
+/// The modes visible in the TUI collaboration mode picker.
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] = [ModeKind::Default, ModeKind::Plan];
+
+impl ModeKind {
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Plan => "Plan",
+            Self::Default => "Default",
+            Self::PairProgramming => "Pair Programming",
+            Self::Execute => "Execute",
+        }
+    }
+
+    pub const fn is_tui_visible(self) -> bool {
+        matches!(self, Self::Plan | Self::Default)
+    }
+
+    pub const fn allows_request_user_input(self) -> bool {
+        matches!(self, Self::Plan)
+    }
+}
+
+/// A mask for collaboration mode settings, allowing partial updates.
+/// All fields except `name` are optional, enabling selective overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollaborationModeMask {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ModeKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// `Some(Some(effort))` = set, `Some(None)` = clear, `None` = keep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<Option<Effort>>,
+    /// `Some(Some(text))` = set, `Some(None)` = clear, `None` = keep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<Option<String>>,
+}
+
 /// Settings for a collaboration mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollaborationModeSettings {

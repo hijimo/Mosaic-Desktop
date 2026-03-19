@@ -80,6 +80,10 @@ enum RouteResult {
 | `plan` | `handlers/plan.rs` | 计划工具 |
 | `view_image` | `handlers/view_image.rs` | 图片查看 |
 | `search_tool_bm25` | `handlers/search_tool_bm25.rs` | BM25 文件搜索 |
+| `presentation_artifact` | `handlers/presentation_artifact.rs` | 演示文稿 artifact |
+| `request_user_input` | `handlers/request_user_input.rs` | 请求用户输入 |
+| `test_sync` | `handlers/test_sync.rs` | 测试同步 |
+| `shell_command` | `handlers/shell_command.rs` | Shell 命令（高级封装） |
 
 ## 基础设施模块
 
@@ -92,3 +96,12 @@ enum RouteResult {
 | `context.rs` | 执行上下文 — 传递 cwd、sandbox 等信息 |
 | `events.rs` | 事件发射 — 工具执行前后的事件通知 |
 | `spec.rs` | 工具规格 — 工具定义和 schema |
+| `router.rs` | 工具路由器 — `ToolRouter` 实现 |
+
+### 运行时子模块 (`handlers/runtimes/`)
+
+| 模块 | 说明 |
+|------|------|
+| `shell.rs` | Shell 运行时 — 命令执行的底层实现 |
+| `apply_patch.rs` | 补丁运行时 — 补丁应用的底层实现 |
+| `unified_exec.rs` | 统一执行运行时 — PTY/Pipe 执行封装 |

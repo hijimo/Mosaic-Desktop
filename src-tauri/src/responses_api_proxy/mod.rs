@@ -3,6 +3,9 @@
 //! Listens on a local port and forwards `POST /v1/responses` requests to an upstream
 //! OpenAI-compatible endpoint, injecting the Authorization header read from the caller.
 
+pub mod process_hardening;
+pub mod read_api_key;
+
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};

@@ -9,6 +9,8 @@ mod phase2;
 pub(crate) mod prompts;
 mod start;
 pub mod storage;
+pub(crate) mod citations;
+pub(crate) mod usage;
 
 pub use start::start_memories_startup_task;
 

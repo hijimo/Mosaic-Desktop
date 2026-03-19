@@ -13,7 +13,7 @@ Mosaic 同时作为 MCP 客户端（连接外部 MCP 服务器获取工具）和
 | `connection_manager.rs` | `McpConnectionManager` — 管理多个 MCP 服务器连接 |
 | `tool_call.rs` | MCP 工具调用执行 |
 | `auth.rs` | OAuth 认证流程 |
-| `skill_dependencies.rs` | Skill 对 MCP 工具的依赖解析 |
+| `skill_dependencies.rs` | Skill 对 MCP 工具的依赖解析 (`SkillDependencies`) |
 
 ### McpConnectionManager
 

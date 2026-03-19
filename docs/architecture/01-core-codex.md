@@ -39,6 +39,7 @@ sequenceDiagram
 |------|------|
 | `Codex::new()` | 创建引擎，接收 SQ/EQ channel + config + cwd |
 | `Codex::run()` | 主事件循环，持续消费 Submission |
+| `Codex::spawn()` | 静态方法，创建引擎并返回 `CodexHandle`（含 tx_sub + rx_event channel） |
 | `run_turn()` | 执行一轮对话（含 agentic loop） |
 | `dispatch_tool_call()` | 分发工具调用到 ToolRouter |
 | `emit()` | 向 Event Queue 发射事件 |
