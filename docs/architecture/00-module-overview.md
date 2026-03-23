@@ -65,6 +65,10 @@ graph TB
         ShellEsc[shell_escalation/]
         McpCli[mcp_client/]
         RespProxy[responses_api_proxy/]
+        StreamParser[stream_parser/]
+        RmcpCli[rmcp_client/]
+        MosaicApi[mosaic_api/]
+        MosaicCli[mosaic_client/]
     end
 
     AppTsx -->|invoke| Commands
@@ -83,6 +87,9 @@ graph TB
     Provider --> Auth
     Rollout --> State
     Skills --> McpCli
+    Client --> MosaicApi
+    MosaicApi --> MosaicCli
+    McpCli --> RmcpCli
 ```
 
 ## 模块清单
@@ -98,18 +105,22 @@ graph TB
 | `core/tools/` | 工具注册、路由、执行 | `ToolRegistry`, `ToolRouter` | 2,500+ |
 | `core/agent/` | 多智能体生成与控制 | `AgentControl`, `Guards` | 1,663 |
 | `core/skills/` | 技能加载、注入、管理 | `SkillsManager`, `SkillMetadata` | 2,800+ |
-| `core/memories/` | 长期记忆 (两阶段) | `ProviderContext`, `StageOneOutput` | 1,023 |
+| `core/memories/` | 长期记忆 (两阶段) | `ProviderContext`, `StageOneOutput`, `MemoryUsage`, `MemoryCitation` | 1,023 |
 | `core/rollout/` | 会话持久化 (JSONL) | `RolloutRecorder`, `ThreadItem` | 1,373 |
 | `core/tasks/` | 后台任务 | `TaskContext`, `RegularTask` | 250 |
+| `core/state/` | 会话状态分层管理（service/session/turn） | `SessionServices`, `SessionState`, `TurnState`, `ActiveTurn` | 600+ |
+| `core/review_prompts.rs` | 代码审查 prompt 模板 | `ResolvedReviewRequest` | 500+ |
+| `core/review_format.rs` | 代码审查输出格式化 | `render_review_output_text` | 250+ |
+| `core/custom_prompts.rs` | 自定义 prompt 管理 | `CustomPrompt` | 300+ |
 | `core/exec_policy/` | 命令执行策略 | `ExecPolicyManager` | 865 |
-| `core/models_manager/` | 模型列表与缓存 | `ModelsManager`, `ModelDescriptor` | 541 |
+| `core/models_manager/` | 模型列表与缓存 | `ModelsManager`, `ModelDescriptor`, `CollaborationModesConfig` | 541 |
 | `core/features/` | 特性开关 | `Features`, `FeatureSpec` | 464 |
 | `protocol/` | 前后端通信协议 | `Event`, `EventMsg`, `Op` | 4,135 |
 | `config/` | 分层配置系统 | `ConfigLayerStack`, `ConfigToml` | 2,270 |
 | `provider/` | 模型提供商注册 | `ProviderRegistry`, `Provider` | 629 |
 | `auth/` | 认证管理 | `AuthManager`, `CodexAuth` | 624 |
 | `secrets/` | 密钥存储与脱敏 | `SecretsManager`, `SecretScope` | 748 |
-| `state/` | SQLite 持久化 | `StateDb`, `LogDb` | 2,025 |
+| `state/` | SQLite 持久化 | `StateDb`, `LogDb`, `MemoryThreadMeta`, `MigrationRunner` | 2,025 |
 | `execpolicy/` | 策略引擎 (Starlark) | `Policy`, `PrefixRule` | 1,912 |
 | `exec/sandbox.rs` | 命令沙箱 | `CommandExecutor`, `ExecResult` | 564 |
 | `pty/` | 伪终端管理 | `SpawnedProcess`, `ProcessHandle` | 591 |
@@ -120,7 +131,11 @@ graph TB
 | `shell_escalation/` | 权限提升 | `EscalationExecution` | 282 |
 | `core/mcp_client/` | MCP 客户端 | `McpConnectionManager` | 1,122 |
 | `core/mcp_server.rs` | MCP 服务端 | `McpServer`, `McpToolDescriptor` | 618 |
-| `responses_api_proxy/` | API 反向代理 | `ProxyConfig` | 219 |
+| `responses_api_proxy/` | API 反向代理 | `ProxyConfig`, `ProcessHardening`, `ReadApiKey` | 219 |
+| `stream_parser/` | 流式文本解析（UTF-8 流、引用、计划、隐藏标签） | `AssistantTextStreamParser`, `Utf8StreamParser`, `CitationStreamParser` | 1,200+ |
+| `rmcp_client/` | RMCP MCP 客户端（OAuth 认证、工具发现） | `RmcpClient`, `McpAuthStatus`, `OauthLoginHandle` | 2,800+ |
+| `mosaic_api/` | Mosaic API 抽象层（Responses/Compact/Memories/Models） | `ResponsesClient`, `CompactClient`, `MemoriesClient`, `ModelsClient` | 3,500+ |
+| `mosaic_client/` | HTTP 传输层（SSE 流、重试、压缩） | `HttpTransport`, `ReqwestTransport`, `RetryPolicy` | 800+ |
 | `core/message_history.rs` | 对话历史持久化 | `HistoryEntry`, `HistoryPersistence` | — |
 | `core/external_agent_config.rs` | 外部 Agent 配置迁移 | `ExternalAgentConfigService` | — |
 | `core/network_policy_decision.rs` | 网络策略决策 | `NetworkPolicyDecision`, `BlockedRequest` | — |

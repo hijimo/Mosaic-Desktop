@@ -46,6 +46,13 @@ graph TB
             Memories[Memories]
             State[State DB]
             Secrets[Secrets Manager]
+            StreamParser[Stream Parser]
+        end
+
+        subgraph ApiLayer["API 通信层"]
+            MosaicApi[Mosaic API<br/>Responses/Compact/Memories/Models]
+            MosaicClient[Mosaic HTTP Client<br/>SSE/Retry/Transport]
+            RmcpClient[RMCP Client<br/>OAuth/Elicitation]
         end
     end
 
@@ -66,14 +73,18 @@ graph TB
     Codex --> Client
     Codex --> Router
 
-    Client --> API
+    Client --> MosaicApi
+    MosaicApi --> MosaicClient
+    MosaicClient --> API
     Router --> Registry
     Router --> MCPClient
     Router --> DynTools
     Registry --> Handlers
-    MCPClient --> MCPServers
+    MCPClient --> RmcpClient
+    RmcpClient --> MCPServers
     Handlers --> Exec
     Exec --> Policy
+    Client --> StreamParser
 
     Codex --> Control
     Control --> Instances

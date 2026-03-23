@@ -19,6 +19,12 @@ pub mod shell_escalation;
 pub mod state;
 pub mod stream_parser;
 
+#[cfg(test)]
+mod frontend_compat_tests;
+
+#[cfg(test)]
+mod e2e_smoke_tests;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -33,7 +39,30 @@ pub fn run() {
     if let Some(home) = std::env::var_os("HOME") {
         let path = std::path::Path::new(&home).join(".codex/config.toml");
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = config::deserialize_toml(&content) {
+            // Strip sections that cause parse errors (e.g. shell_environment_policy
+            // with scalar value instead of expected array, mcp_servers with inline tables)
+            let mut skip = false;
+            let mut cleaned = Vec::new();
+            for line in content.lines() {
+                if line.starts_with("[shell_environment_policy")
+                    || line.starts_with("[mcp_servers")
+                {
+                    skip = true;
+                    continue;
+                }
+                if skip {
+                    if line.starts_with('[')
+                        && !line.starts_with("[shell_environment_policy")
+                        && !line.starts_with("[mcp_servers")
+                    {
+                        skip = false;
+                    } else {
+                        continue;
+                    }
+                }
+                cleaned.push(line);
+            }
+            if let Ok(parsed) = config::deserialize_toml(&cleaned.join("\n")) {
                 config.add_layer(config::ConfigLayer::User, parsed);
             }
         }

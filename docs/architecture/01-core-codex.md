@@ -90,3 +90,21 @@ enum ResponseEvent {
 |------|------|
 | `stream_response()` | 发起流式请求，返回 `Stream<ResponseEvent>` |
 | `history_item_to_api()` | 将内部 history 转换为 API 格式 |
+
+## 代码审查系统 (`core/review_prompts.rs`, `core/review_format.rs`)
+
+代码审查功能通过 `review` Op 触发，支持对 Git diff 进行 AI 辅助审查。
+
+| 模块 | 说明 |
+|------|------|
+| `review_prompts.rs` | 审查 prompt 构建 — `resolve_review_request()` 解析审查请求，`review_prompt()` 生成系统 prompt |
+| `review_format.rs` | 审查输出格式化 — `render_review_output_text()` 将审查结果渲染为结构化文本，`format_review_findings_block()` 格式化发现项 |
+
+### 关键类型
+
+- `ResolvedReviewRequest` — 解析后的审查请求（包含 diff、文件列表等）
+- `ReviewOutput` — 审查输出结构
+
+## 自定义 Prompts (`core/custom_prompts.rs`)
+
+管理用户自定义的 prompt 模板，支持从文件系统加载和列出。通过 `list_custom_prompts` Op 触发。

@@ -673,7 +673,6 @@ async fn try_stream_request(
     idle_timeout: Duration,
 ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, RetryableError> {
     let mut req = reqwest::Client::builder()
-        .timeout(Duration::from_secs(0)) // no overall timeout for streaming
         .build()
         .map_err(|e| RetryableError::Fatal(CodexError::new(
             ErrorCode::InternalError,
@@ -934,10 +933,19 @@ fn build_text_param(output_schema: &Option<Value>) -> Option<Value> {
 pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> Value {
     match item {
         crate::protocol::types::ResponseInputItem::Message { role, content } => {
+            // Responses API requires: user → input_text, assistant → output_text
+            let api_content: Vec<Value> = content.iter().map(|item| {
+                match item {
+                    crate::protocol::types::ContentItem::InputText { text } if role == "assistant" => {
+                        serde_json::json!({"type": "output_text", "text": text})
+                    }
+                    other => serde_json::to_value(other).unwrap_or(Value::Null),
+                }
+            }).collect();
             serde_json::json!({
                 "type": "message",
                 "role": role,
-                "content": [{"type": "input_text", "text": content}]
+                "content": api_content
             })
         }
         crate::protocol::types::ResponseInputItem::FunctionCall {

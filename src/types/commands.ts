@@ -19,7 +19,7 @@ export interface ThreadStartParams {
 }
 
 export interface ThreadForkParams {
-  source_thread_id: string;
+  sourceThreadId: string;
   cwd?: string;
 }
 
@@ -38,7 +38,7 @@ export interface ThreadMeta {
 // ── Submit op ────────────────────────────────────────────────────
 
 export interface SubmitOpParams {
-  thread_id: string;
+  threadId: string;
   id: string;
   op: Record<string, unknown>;
 }

@@ -40,6 +40,7 @@
 | `memories_db.rs` | 记忆专用数据库 |
 | `memory.rs` | 内存状态管理 |
 | `rollout.rs` | Rollout 状态持久化 |
+| `migration_runner.rs` | 数据库迁移运行器 — 管理 SQLite schema 版本升级 (`SCHEMA_VERSION`) |
 
 ## Skills 系统 (`core/skills/`)
 
@@ -72,6 +73,8 @@
 | `start.rs` | 启动时加载记忆 (`start_memories_startup_task`) |
 | `phase1.rs` | Phase 1 — 原始记忆收集 |
 | `phase2.rs` | Phase 2 — 记忆摘要和压缩 |
+| `usage.rs` | 记忆使用统计 — 追踪记忆的使用频率和效果 |
+| `citations.rs` | 记忆引用 — 管理记忆在对话中的引用关系 |
 
 ## 上下文管理 (`core/context_manager/`)
 
@@ -92,6 +95,8 @@
 | `manager.rs` | `ModelsManager` — 模型列表刷新和选择 |
 | `model_info.rs` | `ModelDescriptor` — 模型元信息 |
 | `cache.rs` | 模型列表缓存 |
+| `collaboration_mode_presets.rs` | 协作模式预设 — 内置的协作模式配置 (`CollaborationModesConfig`) |
+| `model_presets.rs` | 模型预设 — 预定义的模型配置 |
 
 ## Rollout 系统 (`core/rollout/`)
 
@@ -131,3 +136,55 @@
 | `turn_diff_tracker.rs` | Turn 变更追踪 (`TurnDiffTracker`) |
 | `text_encoding.rs` | 文本编码处理 (`bytes_to_string_smart`) |
 | `truncation.rs` | 截断策略 (`TruncationPolicy`) |
+| `core/state/` | 会话状态分层管理 — service（长期服务）、session（会话状态）、turn（Turn 状态） |
+| `core/review_prompts.rs` | 代码审查 prompt 模板 (`ResolvedReviewRequest`, `review_prompt`) |
+| `core/review_format.rs` | 代码审查输出格式化 (`render_review_output_text`) |
+| `core/custom_prompts.rs` | 自定义 prompt 管理 — 加载和列出用户自定义 prompt |
+| `core/compact.rs` | 上下文压缩 — 压缩对话历史以节省 token (`compact`, `compact_remote`) |
+| `responses_api_proxy/` | API 反向代理 — 含进程加固 (`process_hardening.rs`) 和 API Key 读取 (`read_api_key.rs`) |
+
+## 流式文本解析 (`stream_parser/`)
+
+处理 AI 模型流式输出的文本解析，支持多种内容格式的实时提取。
+
+| 模块 | 说明 |
+|------|------|
+| `utf8_stream.rs` | UTF-8 流解析器 — 处理不完整的 UTF-8 字节序列 (`Utf8StreamParser`) |
+| `assistant_text.rs` | 助手文本解析 — 提取助手消息文本块 (`AssistantTextStreamParser`) |
+| `citation.rs` | 引用解析 — 从流式文本中提取和剥离引用标记 (`CitationStreamParser`) |
+| `inline_hidden_tag.rs` | 内联隐藏标签 — 解析流中的隐藏标签（如工具调用标记）(`InlineHiddenTagParser`) |
+| `proposed_plan.rs` | 计划解析 — 提取 AI 提出的执行计划 (`ProposedPlanParser`) |
+| `tagged_line_parser.rs` | 标签行解析 — 按标签分类解析输出行 |
+| `stream_text.rs` | 流式文本 — 基础文本流处理 (`StreamTextParser`) |
+
+## Mosaic API 层 (`mosaic_api/`)
+
+对 OpenAI Responses API 的高层抽象，提供类型安全的 API 客户端。
+
+| 模块 | 说明 |
+|------|------|
+| `endpoint/responses.rs` | Responses API 客户端 (`ResponsesClient`) — SSE/WebSocket 流式请求 |
+| `endpoint/compact.rs` | Compact API 客户端 (`CompactClient`) — 上下文压缩 |
+| `endpoint/memories.rs` | Memories API 客户端 (`MemoriesClient`) — 记忆摘要 |
+| `endpoint/models.rs` | Models API 客户端 (`ModelsClient`) — 模型列表 |
+| `sse/` | SSE 流处理 |
+| `requests/` | 请求构建（含 headers 构建） |
+| `common.rs` | 共享类型 (`ResponseEvent`, `ResponseStream`, `CompactionInput` 等) |
+| `rate_limits.rs` | 速率限制解析和追踪 |
+| `telemetry.rs` | 请求遥测 (`SseTelemetry`, `WebsocketTelemetry`) |
+| `provider.rs` | Provider 抽象 — 支持 OpenAI 和 Azure |
+| `auth.rs` | 认证提供者 (`AuthProvider`) |
+| `error.rs` | API 错误类型 (`ApiError`) |
+
+## Mosaic HTTP 客户端 (`mosaic_client/`)
+
+底层 HTTP 传输层，为 `mosaic_api/` 提供网络通信能力。
+
+| 模块 | 说明 |
+|------|------|
+| `transport.rs` | HTTP 传输抽象 (`HttpTransport`, `ReqwestTransport`) — 支持流式响应 |
+| `sse.rs` | SSE 流解析 — 将 HTTP 响应转换为 SSE 事件流 |
+| `request.rs` | 请求/响应类型 (`Request`, `Response`, `RequestCompression`) |
+| `retry.rs` | 重试策略 (`RetryPolicy`, `RetryOn`) — 指数退避重试 |
+| `error.rs` | 错误类型 (`StreamError`, `TransportError`) |
+| `telemetry.rs` | 请求遥测 (`RequestTelemetry`) |

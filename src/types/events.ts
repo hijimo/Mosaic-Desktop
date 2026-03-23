@@ -606,3 +606,43 @@ export interface Event {
   id: string;
   msg: EventMsg;
 }
+
+// ── Op (submission operations) ───────────────────────────────────
+
+export type Op =
+  | {
+      type: 'user_turn';
+      items: UserInput[];
+      cwd: string;
+      model: string;
+      approval_policy: ApprovalPolicy;
+      sandbox_policy: SandboxPolicy;
+      effort?: string;
+      summary?: string;
+      service_tier?: string;
+      collaboration_mode?: unknown;
+      personality?: string;
+    }
+  | { type: 'user_input'; items: UserInput[]; final_output_json_schema?: unknown }
+  | { type: 'interrupt' }
+  | { type: 'shutdown' }
+  | { type: 'exec_approval'; id: string; turn_id?: string; decision: string; custom_instructions?: string }
+  | { type: 'patch_approval'; id: string; decision: string; custom_instructions?: string }
+  | { type: 'compact' }
+  | { type: 'undo' }
+  | { type: 'thread_rollback'; num_turns: number }
+  | { type: 'set_thread_name'; name: string }
+  | { type: 'list_mcp_tools' }
+  | { type: 'list_skills'; cwds?: string[]; force_reload?: boolean }
+  | { type: 'list_models' }
+  | { type: 'reload_user_config' };
+
+// ── Approval & Sandbox policies (kebab-case to match Rust serde) ─
+
+export type ApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
+
+export type SandboxPolicy =
+  | { type: 'danger-full-access' }
+  | { type: 'read-only'; access: unknown }
+  | { type: 'external-sandbox'; network_access: unknown }
+  | { type: 'workspace-write'; writable_roots: string[]; read_only_access: unknown; network_access: boolean };

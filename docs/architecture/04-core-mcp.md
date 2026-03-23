@@ -50,3 +50,59 @@ MCP 工具使用双下划线分隔的命名格式：`mcp__{server}__{tool}`
 | `McpToolCallEnd` | MCP 工具调用结束 (含结果和耗时) |
 | `McpListToolsResponse` | 工具列表响应 |
 | `ElicitationRequest` | MCP 服务器请求用户输入 |
+
+## RMCP 客户端 (`rmcp_client/`)
+
+基于 RMCP SDK 的 MCP 客户端实现，支持 Streamable HTTP 传输和 OAuth 2.1 认证。与 `core/mcp_client/` 的区别在于：`core/mcp_client/` 是高层连接管理器，`rmcp_client/` 是底层 RMCP 协议客户端。
+
+### 模块结构
+
+| 文件 | 职责 |
+|------|------|
+| `rmcp_client.rs` | `RmcpClient` — RMCP 协议客户端，管理工具调用和 Elicitation |
+| `oauth.rs` | OAuth 2.1 token 管理（存储、刷新、删除） |
+| `perform_oauth_login.rs` | OAuth 登录流程（启动本地回调服务器，打开浏览器授权） |
+| `auth_status.rs` | 认证状态检测 (`McpAuthStatus`) — 判断服务器是否需要 OAuth |
+| `logging_client_handler.rs` | 日志记录客户端处理器 |
+| `program_resolver.rs` | MCP 服务器程序路径解析 |
+| `utils.rs` | 工具函数 |
+
+### 核心类型
+
+```rust
+struct RmcpClient { /* RMCP 协议客户端 */ }
+
+enum McpAuthStatus {
+    NoAuthRequired,
+    OAuthRequired { authorization_url: String },
+    TokenValid,
+    TokenExpired,
+}
+
+struct OauthLoginHandle {
+    // 管理 OAuth 登录生命周期
+    // 启动本地 HTTP 服务器接收回调
+}
+
+struct Elicitation { /* MCP 服务器请求用户输入 */ }
+enum ElicitationResponse { Accept, Decline, Cancel }
+```
+
+### OAuth 2.1 登录流程
+
+```mermaid
+sequenceDiagram
+    participant App as Mosaic
+    participant Browser as 浏览器
+    participant Server as MCP Server
+    participant Callback as 本地回调服务器
+
+    App->>App: determine_auth_status()
+    App->>Callback: 启动本地 HTTP 服务器 (随机端口)
+    App->>Browser: 打开授权 URL
+    Browser->>Server: 用户授权
+    Server->>Callback: 重定向回调 (authorization_code)
+    Callback->>App: 收到 code
+    App->>Server: 交换 token (code → access_token)
+    App->>App: save_oauth_tokens()
+```

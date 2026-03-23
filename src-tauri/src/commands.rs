@@ -179,9 +179,9 @@ pub async fn thread_start(
 
 /// List active thread IDs.
 #[tauri::command]
-pub async fn thread_list(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let threads = state.threads.lock().await;
-    Ok(threads.keys().cloned().collect())
+pub async fn thread_list(state: State<'_, AppState>) -> Result<Vec<ThreadMeta>, String> {
+    let meta = state.thread_meta.lock().await;
+    Ok(meta.values().cloned().collect())
 }
 
 /// Get metadata for a specific thread.

@@ -1,0 +1,67 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { useMessageStore } from '@/stores/messageStore';
+import type { TurnItem } from '@/types';
+
+const userMsg: TurnItem = {
+  type: 'UserMessage',
+  id: 'u1',
+  content: [{ type: 'text', text: 'hello', text_elements: [] }],
+};
+
+const agentMsg: TurnItem = {
+  type: 'AgentMessage',
+  id: 'a1',
+  content: [{ type: 'Text', text: 'hi there' }],
+};
+
+describe('messageStore', () => {
+  beforeEach(() => {
+    useMessageStore.setState({
+      messagesByThread: new Map(),
+      streamingTurn: null,
+    });
+  });
+
+  it('appendMessage adds to correct thread', () => {
+    const { appendMessage } = useMessageStore.getState();
+    appendMessage('t1', userMsg);
+    appendMessage('t1', agentMsg);
+    appendMessage('t2', userMsg);
+
+    const state = useMessageStore.getState();
+    expect(state.messagesByThread.get('t1')).toHaveLength(2);
+    expect(state.messagesByThread.get('t2')).toHaveLength(1);
+  });
+
+  it('startStreaming sets streamingTurn', () => {
+    useMessageStore.getState().startStreaming('turn-1');
+    const st = useMessageStore.getState().streamingTurn;
+    expect(st).toEqual({ turnId: 'turn-1', agentText: '', isStreaming: true });
+  });
+
+  it('updateStreamingDelta accumulates text', () => {
+    const { startStreaming, updateStreamingDelta } = useMessageStore.getState();
+    startStreaming('turn-1');
+    updateStreamingDelta('Hello');
+    updateStreamingDelta(' world');
+
+    expect(useMessageStore.getState().streamingTurn?.agentText).toBe('Hello world');
+  });
+
+  it('updateStreamingDelta is no-op when not streaming', () => {
+    useMessageStore.getState().updateStreamingDelta('ignored');
+    expect(useMessageStore.getState().streamingTurn).toBeNull();
+  });
+
+  it('stopStreaming clears streamingTurn', () => {
+    useMessageStore.getState().startStreaming('turn-1');
+    useMessageStore.getState().stopStreaming();
+    expect(useMessageStore.getState().streamingTurn).toBeNull();
+  });
+
+  it('clearThread removes messages for a thread', () => {
+    useMessageStore.getState().appendMessage('t1', userMsg);
+    useMessageStore.getState().clearThread('t1');
+    expect(useMessageStore.getState().messagesByThread.has('t1')).toBe(false);
+  });
+});
