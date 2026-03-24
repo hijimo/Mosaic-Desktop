@@ -710,7 +710,7 @@ impl Codex {
             .join("\n");
         if !user_text.is_empty() {
             session
-                .add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", user_text)])
+                .add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", user_text.clone())])
                 .await;
         }
 
@@ -1077,6 +1077,34 @@ impl Codex {
             },
         ))
         .await;
+
+        // Auto-generate thread name on first turn
+        if turn_id == "turn-1" && !user_text.is_empty() {
+            let eq_tx = self.eq_tx.clone();
+            let session_id = session.id().to_string();
+            let base_url_clone = base_url.clone();
+            let api_key_clone = api_key.clone();
+            let model_clone = model.clone();
+            let user_text_clone = user_text.clone();
+            tokio::spawn(async move {
+                if let Some(name) = generate_thread_name(
+                    &base_url_clone,
+                    &api_key_clone,
+                    &model_clone,
+                    &user_text_clone,
+                ).await {
+                    let _ = eq_tx.send(Event {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        msg: EventMsg::ThreadNameUpdated(
+                            crate::protocol::event::ThreadNameUpdatedEvent {
+                                thread_id: session_id,
+                                thread_name: Some(name),
+                            },
+                        ),
+                    }).await;
+                }
+            });
+        }
     }
 
     /// Dispatch a single tool call through the ToolRouter, emitting bracket events.
@@ -2287,4 +2315,40 @@ mod tests {
 
         handle.await.unwrap().unwrap();
     }
+}
+
+/// Generate a short thread name (≤10 chars) from the user's first message via a non-streaming API call.
+async fn generate_thread_name(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    user_text: &str,
+) -> Option<String> {
+    // Truncate input to avoid wasting tokens
+    let truncated: String = user_text.chars().take(200).collect();
+    let body = serde_json::json!({
+        "model": model,
+        "input": [
+            { "role": "user", "content": truncated }
+        ],
+        "instructions": "用10个字以内的中文总结用户消息的主题，作为会话标题。只输出标题，不要任何解释或标点。",
+        "stream": false,
+    });
+
+    let resp = reqwest::Client::new()
+        .post(base_url)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let text = json
+        .pointer("/output/0/content/0/text")
+        .or_else(|| json.pointer("/output_text"))
+        .and_then(|v| v.as_str())?;
+
+    let name: String = text.trim().chars().take(15).collect();
+    if name.is_empty() { None } else { Some(name) }
 }
