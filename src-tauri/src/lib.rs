@@ -31,6 +31,7 @@ use tokio::sync::Mutex;
 
 use commands::AppState;
 use config::ConfigLayerStack;
+use core::state_db::StateDb;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -68,10 +69,17 @@ pub fn run() {
         }
     }
 
+    let mosaic_home = dirs::home_dir()
+        .map(|h| h.join(".mosaic"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".mosaic"));
+    let db = StateDb::open(&mosaic_home.join("state.db"))
+        .expect("failed to open state database");
+
     let app_state = AppState {
         threads: Arc::new(Mutex::new(HashMap::new())),
         thread_meta: Arc::new(Mutex::new(HashMap::new())),
         config: Arc::new(Mutex::new(config)),
+        db,
     };
 
     tauri::Builder::default()

@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use crate::config::{deserialize_toml, ConfigLayerStack};
 use crate::core::rollout::{RolloutRecorder, RolloutRecorderParams};
 use crate::core::rollout::policy::{EventPersistenceMode, RolloutItem};
+use crate::core::state_db::{StateDb, PersistedThreadMeta};
 use crate::protocol::event::{Event, EventMsg};
 use crate::protocol::submission::{Op, Submission};
 
@@ -38,6 +39,7 @@ pub struct AppState {
     pub threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pub thread_meta: Arc<Mutex<HashMap<String, ThreadMeta>>>,
     pub config: Arc<Mutex<ConfigLayerStack>>,
+    pub db: StateDb,
 }
 
 // ── Event bridge ─────────────────────────────────────────────────
@@ -50,6 +52,7 @@ pub fn spawn_event_bridge(
     eq_rx: async_channel::Receiver<Event>,
     thread_meta: Arc<Mutex<HashMap<String, ThreadMeta>>>,
     recorder: RolloutRecorder,
+    db: StateDb,
 ) {
     tauri::async_runtime::spawn(async move {
         while let Ok(event) = eq_rx.recv().await {
@@ -59,18 +62,29 @@ pub fn spawn_event_bridge(
             // Update thread metadata from session_configured event
             if let EventMsg::SessionConfigured(ref cfg) = event.msg {
                 let _ = recorder.persist().await;
+                let rp = recorder.rollout_path.to_string_lossy().into_owned();
                 let mut meta = thread_meta.lock().await;
                 if let Some(m) = meta.get_mut(&thread_id) {
                     m.model = Some(cfg.model.clone());
                     m.model_provider_id = Some(cfg.model_provider_id.clone());
-                    m.rollout_path = Some(recorder.rollout_path.to_string_lossy().into_owned());
+                    m.rollout_path = Some(rp.clone());
                 }
+                let _ = db.update_thread_fields(
+                    &thread_id,
+                    Some(&cfg.model),
+                    Some(&cfg.model_provider_id),
+                    None,
+                    Some(&rp),
+                ).await;
             }
             // Update thread name
             if let EventMsg::ThreadNameUpdated(ref upd) = event.msg {
                 let mut meta = thread_meta.lock().await;
                 if let Some(m) = meta.get_mut(&thread_id) {
                     m.name = upd.thread_name.clone();
+                }
+                if let Some(name) = &upd.thread_name {
+                    let _ = db.update_thread_fields(&thread_id, None, None, Some(name), None).await;
                 }
             }
 
@@ -152,19 +166,32 @@ pub async fn thread_start(
 
     let rollout_path = recorder.rollout_path.to_string_lossy().into_owned();
 
+    let now = chrono::Utc::now();
     let meta = ThreadMeta {
         thread_id: thread_id.clone(),
         cwd: work_dir.to_string_lossy().into_owned(),
         model: None,
         model_provider_id: None,
         name: None,
-        created_at: chrono::Utc::now(),
+        created_at: now,
         forked_from: None,
-        rollout_path: Some(rollout_path),
+        rollout_path: Some(rollout_path.clone()),
     };
     state.thread_meta.lock().await.insert(thread_id.clone(), meta);
 
-    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder);
+    // Persist to DB
+    let _ = state.db.upsert_thread(&PersistedThreadMeta {
+        thread_id: thread_id.clone(),
+        cwd: work_dir.to_string_lossy().into_owned(),
+        model: None,
+        model_provider_id: None,
+        name: None,
+        created_at: now.to_rfc3339(),
+        forked_from: None,
+        rollout_path: Some(rollout_path),
+    }).await;
+
+    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder, state.db.clone());
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -177,11 +204,39 @@ pub async fn thread_start(
     Ok(thread_id)
 }
 
-/// List active thread IDs.
+/// List all threads (persisted history + active in-memory).
 #[tauri::command]
 pub async fn thread_list(state: State<'_, AppState>) -> Result<Vec<ThreadMeta>, String> {
-    let meta = state.thread_meta.lock().await;
-    Ok(meta.values().cloned().collect())
+    let persisted = state.db.list_threads(200).await;
+    let in_mem = state.thread_meta.lock().await;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+
+    // In-memory threads first (most up-to-date)
+    for m in in_mem.values() {
+        seen.insert(m.thread_id.clone());
+        result.push(m.clone());
+    }
+    // Then persisted threads not currently active
+    for p in persisted {
+        if seen.contains(&p.thread_id) {
+            continue;
+        }
+        result.push(ThreadMeta {
+            thread_id: p.thread_id,
+            cwd: p.cwd,
+            model: p.model,
+            model_provider_id: p.model_provider_id,
+            name: p.name,
+            created_at: p.created_at.parse().unwrap_or_else(|_| chrono::Utc::now()),
+            forked_from: p.forked_from,
+            rollout_path: p.rollout_path,
+        });
+    }
+
+    result.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(result)
 }
 
 /// Get metadata for a specific thread.
@@ -212,6 +267,7 @@ pub async fn thread_archive(
         op: Op::Shutdown,
     }).await;
     state.thread_meta.lock().await.remove(&thread_id);
+    let _ = state.db.delete_thread(&thread_id).await;
     Ok(())
 }
 
@@ -256,19 +312,31 @@ pub async fn thread_fork(
 
     let rollout_path = recorder.rollout_path.to_string_lossy().into_owned();
 
+    let now = chrono::Utc::now();
     let meta = ThreadMeta {
         thread_id: new_thread_id.clone(),
         cwd: work_dir.to_string_lossy().into_owned(),
         model: None,
         model_provider_id: None,
         name: None,
-        created_at: chrono::Utc::now(),
-        forked_from: Some(source_thread_id),
-        rollout_path: Some(rollout_path),
+        created_at: now,
+        forked_from: Some(source_thread_id.clone()),
+        rollout_path: Some(rollout_path.clone()),
     };
     state.thread_meta.lock().await.insert(new_thread_id.clone(), meta);
 
-    spawn_event_bridge(app, new_thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder);
+    let _ = state.db.upsert_thread(&PersistedThreadMeta {
+        thread_id: new_thread_id.clone(),
+        cwd: work_dir.to_string_lossy().into_owned(),
+        model: None,
+        model_provider_id: None,
+        name: None,
+        created_at: now.to_rfc3339(),
+        forked_from: Some(source_thread_id),
+        rollout_path: Some(rollout_path),
+    }).await;
+
+    spawn_event_bridge(app, new_thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder, state.db.clone());
 
     let mut threads = state.threads.lock().await;
     threads.insert(
