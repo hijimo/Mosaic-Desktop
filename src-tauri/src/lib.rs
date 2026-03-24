@@ -91,6 +91,7 @@ pub fn run() {
             commands::thread_list,
             commands::thread_get_info,
             commands::thread_archive,
+            commands::thread_resume,
             commands::thread_fork,
             commands::fuzzy_file_search,
             commands::get_config,

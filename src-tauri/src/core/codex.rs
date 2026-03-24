@@ -44,6 +44,10 @@ pub struct Codex {
     dynamic_tool_handler: Arc<DynamicToolHandler>,
 }
 
+use super::initial_history::InitialHistory;
+use super::rollout::reconstruction::{PreviousTurnSettings, RolloutReconstruction, reconstruct_history_from_rollout};
+use super::rollout::recorder::ResumedHistory;
+
 impl Codex {
     pub fn new(
         sq_rx: Receiver<Submission>,
@@ -69,18 +73,23 @@ impl Codex {
     }
 
     /// Spawn a new Codex engine, returning a handle with SQ/EQ channels.
-    ///
-    /// The engine runs its submission_loop on a background Tokio task.
-    /// The caller communicates via the returned `CodexHandle`.
     pub async fn spawn(config: ConfigLayerStack, cwd: PathBuf) -> Result<CodexHandle, CodexError> {
+        Self::spawn_with_history(config, cwd, InitialHistory::New).await
+    }
+
+    /// Spawn a Codex engine with initial history.
+    pub async fn spawn_with_history(
+        config: ConfigLayerStack,
+        cwd: PathBuf,
+        initial_history: InitialHistory,
+    ) -> Result<CodexHandle, CodexError> {
         let (sq_tx, sq_rx) = async_channel::unbounded();
         let (eq_tx, eq_rx) = async_channel::unbounded();
 
         let codex = Self::new(sq_rx, eq_tx, config, cwd);
 
         tokio::spawn(async move {
-            if let Err(e) = codex.run().await {
-                // Engine crashed — try to emit a final error event if possible.
+            if let Err(e) = codex.run_with_history(initial_history).await {
                 let _ = codex
                     .emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                         message: format!("engine crashed: {}", e.message),
@@ -98,6 +107,11 @@ impl Codex {
 
     /// Start the SQ/EQ processing loop.
     pub async fn run(&self) -> Result<(), CodexError> {
+        self.run_with_history(InitialHistory::New).await
+    }
+
+    /// Start the SQ/EQ processing loop with initial history.
+    async fn run_with_history(&self, initial_history: InitialHistory) -> Result<(), CodexError> {
         {
             let mut running = self.running.lock().await;
             *running = true;
@@ -110,26 +124,81 @@ impl Codex {
         session.set_active_profile(merged_config.profile.clone());
         let session_id = session.id().to_string();
 
+        let current_model = merged_config
+            .model
+            .clone()
+            .unwrap_or_else(|| "default".into());
+
+        let history_entry_count = match &initial_history {
+            InitialHistory::Resumed(rh) => rh.history.len(),
+            InitialHistory::Forked(items) => items.len(),
+            InitialHistory::New => 0,
+        };
+        let can_append = !matches!(initial_history, InitialHistory::New);
+
         self.emit(EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: session_id.clone(),
             forked_from_id: None,
             thread_name: None,
-            model: merged_config
-                .model
-                .clone()
-                .unwrap_or_else(|| "default".into()),
+            model: current_model.clone(),
             model_provider_id: merged_config.model_provider.clone().unwrap_or_default(),
             approval_policy: merged_config.approval_policy.clone(),
             sandbox_policy: None,
             cwd: self.cwd.clone(),
             history_log_id: 0,
-            history_entry_count: 0,
+            history_entry_count,
             mode: crate::protocol::types::ModeKind::Default,
             reasoning_effort: None,
             reasoning_summary: None,
-            can_append: false,
+            can_append,
         }))
         .await;
+
+        // Inject initial history into session BEFORE storing it.
+        {
+            let rollout_items = match &initial_history {
+                InitialHistory::Resumed(rh) => Some(rh.history.as_slice()),
+                InitialHistory::Forked(items) => Some(items.as_slice()),
+                InitialHistory::New => None,
+            };
+
+            if let Some(items) = rollout_items {
+                // Clear MCP tool selection before restoring from rollout
+                // (matching codex-main's clear_mcp_tool_selection at start of record_initial_history).
+                session.clear_mcp_tool_selection().await;
+
+                let reconstruction = reconstruct_history_from_rollout(items, Default::default());
+
+                // Model consistency check
+                if let Some(ref prev) = reconstruction.previous_turn_settings {
+                    if prev.model != current_model {
+                        self.emit(EventMsg::Warning(crate::protocol::event::WarningEvent {
+                            message: format!(
+                                "This session was recorded with model `{}` but is resuming with `{}`. \
+                                 Consider switching back to `{}` as it may affect performance.",
+                                prev.model, current_model, prev.model
+                            ),
+                        }))
+                        .await;
+                    }
+                }
+
+                session.set_previous_turn_settings(reconstruction.previous_turn_settings).await;
+                session.set_reference_context_item(reconstruction.reference_context_item).await;
+
+                if !reconstruction.history.is_empty() {
+                    session.add_to_history(reconstruction.history).await;
+                }
+
+                if let Some(info) = reconstruction.last_token_info {
+                    session.set_token_info(Some(info)).await;
+                }
+
+                if let Some(tools) = extract_mcp_tool_selection_from_rollout(items) {
+                    session.set_mcp_tool_selection(tools).await;
+                }
+            }
+        }
 
         {
             let mut s = self.session.lock().await;
@@ -407,12 +476,25 @@ impl Codex {
                     let _ = s.apply_turn_context_overrides(&overrides).await;
                 }
             }
-            Op::AddToHistory { text } => {
+            Op::AddToHistory { text, role } => {
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
-                    s.add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", text)])
+                    s.add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message(&role, text.clone())])
                     .await;
                 }
+                // Emit as RawResponseItem so user messages are persisted as
+                // RolloutItem::ResponseItem (matching assistant messages).
+                self.emit(EventMsg::RawResponseItem(
+                    crate::protocol::event::RawResponseItemEvent {
+                        item: crate::protocol::types::ResponseItem::Message {
+                            id: None,
+                            role: role.clone(),
+                            content: vec![crate::protocol::types::ContentItem::InputText { text }],
+                            end_turn: None,
+                            phase: None,
+                        },
+                    },
+                )).await;
             }
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let session_guard = self.session.lock().await;
@@ -937,9 +1019,26 @@ impl Codex {
                                         arguments: arguments.clone(),
                                     },
                                 ]).await;
+                                // Emit as RawResponseItem so it gets persisted in rollout
+                                self.emit(EventMsg::RawResponseItem(
+                                    crate::protocol::event::RawResponseItemEvent {
+                                        item: crate::protocol::types::ResponseItem::FunctionCall {
+                                            id: None,
+                                            name: name.clone(),
+                                            arguments: arguments.clone(),
+                                            call_id: call_id.clone(),
+                                        },
+                                    },
+                                )).await;
                                 pending_calls.push((call_id, name, arguments));
                             }
                             Ok(crate::core::client::ResponseEvent::OutputItemDone(item)) => {
+                                // Emit as RawResponseItem so it gets persisted in rollout
+                                self.emit(EventMsg::RawResponseItem(
+                                    crate::protocol::event::RawResponseItemEvent {
+                                        item: item.clone(),
+                                    },
+                                )).await;
                                 if let crate::protocol::types::ResponseItem::Message { role, content, .. } = &item {
                                     if role == "assistant" {
                                         let text: String = content.iter().filter_map(|c| {
@@ -1051,10 +1150,19 @@ impl Codex {
                     };
                     session.add_to_history(vec![
                         crate::protocol::types::ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
+                            call_id: call_id.clone(),
+                            output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str.clone()),
                         },
                     ]).await;
+                    // Persist function call output in rollout
+                    self.emit(EventMsg::RawResponseItem(
+                        crate::protocol::event::RawResponseItemEvent {
+                            item: crate::protocol::types::ResponseItem::FunctionCallOutput {
+                                call_id,
+                                output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
+                            },
+                        },
+                    )).await;
                 }
                 needs_follow_up = true;
             }
@@ -1500,6 +1608,7 @@ mod tests {
                 id: "h1".into(),
                 op: Op::AddToHistory {
                     text: "test message".into(),
+                    role: "user".into(),
                 },
             })
             .await
@@ -2351,4 +2460,42 @@ async fn generate_thread_name(
 
     let name: String = text.trim().chars().take(15).collect();
     if name.is_empty() { None } else { Some(name) }
+}
+
+/// Extract the last MCP tool selection state from a rollout.
+///
+/// Scans for `search_bm25` function calls and parses `active_selected_tools`
+/// from their outputs.
+fn extract_mcp_tool_selection_from_rollout(
+    rollout_items: &[crate::core::rollout::policy::RolloutItem],
+) -> Option<Vec<String>> {
+    use crate::core::rollout::policy::RolloutItem;
+    use std::collections::HashSet;
+
+    let mut search_call_ids = HashSet::new();
+    let mut active_selected_tools: Option<Vec<String>> = None;
+
+    for item in rollout_items {
+        let RolloutItem::ResponseItem(response_item) = item else { continue };
+        match response_item {
+            crate::protocol::types::ResponseItem::FunctionCall { name, call_id, .. }
+                if name == "search_bm25" =>
+            {
+                search_call_ids.insert(call_id.clone());
+            }
+            crate::protocol::types::ResponseItem::FunctionCallOutput { call_id, output } => {
+                if !search_call_ids.contains(call_id) { continue; }
+                let Some(content) = output.text_content() else { continue; };
+                let Ok(payload) = serde_json::from_str::<serde_json::Value>(content) else { continue; };
+                let Some(tools) = payload.get("active_selected_tools")
+                    .and_then(|v| v.as_array()) else { continue; };
+                let Some(tools) = tools.iter()
+                    .map(|v| v.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>() else { continue; };
+                active_selected_tools = Some(tools);
+            }
+            _ => {}
+        }
+    }
+    active_selected_tools
 }

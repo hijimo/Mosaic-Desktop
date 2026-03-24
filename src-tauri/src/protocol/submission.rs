@@ -8,6 +8,10 @@ use super::types::{
     ReviewDecision, ReviewRequest, SandboxPolicy, ServiceTier, UserInput,
 };
 
+fn default_user_role() -> String {
+    "user".to_string()
+}
+
 /// Submission Queue Entry — requests from user.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Submission {
@@ -111,6 +115,8 @@ pub enum Op {
     // --- History management ---
     AddToHistory {
         text: String,
+        #[serde(default = "default_user_role")]
+        role: String,
     },
     GetHistoryEntryRequest {
         offset: usize,

@@ -24,6 +24,8 @@ pub enum RolloutItem {
     Compacted(CompactedItem),
     /// Turn context snapshot.
     TurnContext(TurnContextItem),
+    /// A structured response item (message, function call, function output).
+    ResponseItem(crate::protocol::types::ResponseItem),
 }
 
 /// Session metadata written as the first line of a rollout file.
@@ -72,6 +74,10 @@ pub use crate::core::git_info::GitInfo;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct CompactedItem {
     pub message: String,
+    /// Structured replacement history (if available). When present, this
+    /// replaces the entire conversation history up to this point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_history: Option<Vec<crate::protocol::types::ResponseInputItem>>,
 }
 
 /// Snapshot of turn context at the start of each turn.
@@ -81,6 +87,8 @@ pub struct TurnContextItem {
     pub turn_id: Option<String>,
     pub cwd: std::path::PathBuf,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_active: Option<bool>,
 }
 
 /// A single line in a rollout JSONL file.
@@ -94,7 +102,8 @@ pub struct RolloutLine {
 /// Whether a rollout item should be persisted for the given mode.
 pub fn is_persisted(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
-        RolloutItem::SessionMeta(_) | RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) => {
+        RolloutItem::SessionMeta(_) | RolloutItem::Compacted(_) | RolloutItem::TurnContext(_)
+        | RolloutItem::ResponseItem(_) => {
             true
         }
         RolloutItem::EventMsg(ev) => should_persist_event(ev, mode),

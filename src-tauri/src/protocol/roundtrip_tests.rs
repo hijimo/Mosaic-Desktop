@@ -699,7 +699,7 @@ mod tests {
             (arb_safe_string(), arb_dynamic_tool_response())
                 .prop_map(|(id, response)| Op::DynamicToolResponse { id, response }),
             // AddToHistory
-            arb_safe_string().prop_map(|text| Op::AddToHistory { text }),
+            arb_safe_string().prop_map(|text| Op::AddToHistory { text, role: "user".to_string() }),
             Just(Op::ListMcpTools),
             arb_mcp_server_refresh_config().prop_map(|config| Op::RefreshMcpServers { config }),
             Just(Op::ReloadUserConfig),

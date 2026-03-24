@@ -1,4 +1,4 @@
-mod history;
+pub mod history;
 mod normalize;
 pub mod updates;
 

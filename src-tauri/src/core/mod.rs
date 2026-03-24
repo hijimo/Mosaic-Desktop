@@ -11,6 +11,7 @@ pub mod file_watcher;
 pub mod git_info;
 pub mod features;
 pub mod hooks;
+pub mod initial_history;
 pub mod mcp_client;
 pub mod mcp_server;
 pub mod memories;

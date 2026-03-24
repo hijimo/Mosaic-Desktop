@@ -1,15 +1,24 @@
 //! Rollout truncation helpers based on user-turn boundaries.
 
 use crate::protocol::event::EventMsg;
+use crate::protocol::types::ResponseInputItem;
 use super::policy::RolloutItem;
 
 /// Return indices of user message boundaries in a rollout.
 ///
+/// Detects user messages from both `RolloutItem::ResponseItem` (new format)
+/// and `EventMsg::UserMessage` (legacy format).
 /// `ThreadRolledBack` markers are applied so indexing uses post-rollback history.
 pub fn user_message_positions(items: &[RolloutItem]) -> Vec<usize> {
     let mut positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         match item {
+            RolloutItem::ResponseItem(resp) => {
+                let input: ResponseInputItem = resp.clone().into();
+                if matches!(&input, ResponseInputItem::Message { role, .. } if role == "user") {
+                    positions.push(idx);
+                }
+            }
             RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
                 positions.push(idx);
             }

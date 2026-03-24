@@ -2,14 +2,17 @@ use std::path::PathBuf;
 
 use crate::config::toml_types::ConfigToml;
 use crate::config::ConfigLayerStack;
+use crate::core::context_manager::history::ContextManager;
 use crate::core::hooks::HookRegistry;
 use crate::core::mcp_client::McpConnectionManager;
+use crate::core::rollout::policy::TurnContextItem;
+use crate::core::rollout::reconstruction::PreviousTurnSettings;
 use crate::core::tools::router::ToolRouter;
 use crate::protocol::error::{CodexError, ErrorCode};
 use crate::protocol::event::{ErrorEvent, Event, EventMsg};
 use crate::protocol::types::{
     AskForApproval, CollaborationMode, Effort, Personality, ReasoningSummary, ResponseInputItem,
-    SandboxPolicy, ServiceTier, TurnContextOverrides,
+    SandboxPolicy, ServiceTier, TokenUsageInfo, TurnContextOverrides,
 };
 
 // ── ModelInfo ────────────────────────────────────────────────────
@@ -112,13 +115,11 @@ impl TurnContext {
 // ── SessionState ─────────────────────────────────────────────────
 
 /// Mutable state protected by a Mutex inside Session.
-/// This tracks per-turn lifecycle (active turn, pending approval, etc.)
-/// as opposed to `state::SessionState` which tracks session-wide data
-/// (history, token usage, MCP selections).
+/// Tracks per-turn lifecycle and conversation history via ContextManager.
 #[derive(Debug)]
 pub struct SessionInternalState {
-    /// Ordered conversation history.
-    pub history: Vec<ResponseInputItem>,
+    /// Conversation history managed by ContextManager (truncation + normalization).
+    pub history: ContextManager,
     /// Whether a turn is currently active.
     pub turn_active: bool,
     /// Pending approval request, if any.
@@ -129,17 +130,23 @@ pub struct SessionInternalState {
     pub custom_instructions: Option<String>,
     /// Session-level command allow list (command prefixes approved via `ApprovedForSession`).
     pub exec_allow_list: Vec<Vec<String>>,
+    /// Settings from the last surviving user turn (for resume/fork).
+    pub previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Active MCP tool selection (restored on resume).
+    pub active_mcp_tool_selection: Option<Vec<String>>,
 }
 
 impl SessionInternalState {
     pub fn new() -> Self {
         Self {
-            history: Vec::new(),
+            history: ContextManager::new(),
             turn_active: false,
             pending_approval: None,
             turn_context: None,
             custom_instructions: None,
             exec_allow_list: Vec::new(),
+            previous_turn_settings: None,
+            active_mcp_tool_selection: None,
         }
     }
 }
@@ -319,15 +326,15 @@ impl Session {
 
     // ── History management ───────────────────────────────────────
 
-    /// Append items to the conversation history, preserving insertion order.
+    /// Append items to the conversation history via ContextManager.
     pub async fn add_to_history(&self, items: Vec<ResponseInputItem>) {
         let mut state = self.state.lock().await;
-        state.history.extend(items);
+        state.history.record_items(items);
     }
 
     /// Get a snapshot of the current history.
     pub async fn history(&self) -> Vec<ResponseInputItem> {
-        self.state.lock().await.history.clone()
+        self.state.lock().await.history.raw_items().to_vec()
     }
 
     /// Get the current history length.
@@ -336,7 +343,6 @@ impl Session {
     }
 
     /// Rollback the history by removing the last `steps` entries.
-    /// Remaining entries preserve their original order.
     pub async fn rollback(&self, steps: usize) -> Result<(), CodexError> {
         let mut state = self.state.lock().await;
         let len = state.history.len();
@@ -346,7 +352,9 @@ impl Session {
                 format!("cannot rollback {steps} steps: history only has {len} entries"),
             ));
         }
-        state.history.truncate(len - steps);
+        let mut items = state.history.raw_items().to_vec();
+        items.truncate(len - steps);
+        state.history.replace(items);
         Ok(())
     }
 
@@ -372,7 +380,7 @@ impl Session {
     {
         let current_history = {
             let state = self.state.lock().await;
-            state.history.clone()
+            state.history.raw_items().to_vec()
         };
 
         let result = crate::core::compact::compact(&current_history, policy, summarize_fn).await?;
@@ -380,7 +388,7 @@ impl Session {
 
         if changed {
             let mut state = self.state.lock().await;
-            state.history = result.history;
+            state.history.replace(result.history);
         }
 
         if changed {
@@ -404,7 +412,7 @@ impl Session {
     ) -> Result<bool, CodexError> {
         let current_history = {
             let state = self.state.lock().await;
-            state.history.clone()
+            state.history.raw_items().to_vec()
         };
 
         let result =
@@ -413,7 +421,7 @@ impl Session {
 
         if changed {
             let mut state = self.state.lock().await;
-            state.history = result.history;
+            state.history.replace(result.history);
         }
 
         if changed {
@@ -427,6 +435,44 @@ impl Session {
         }
 
         Ok(changed)
+    }
+
+    // ── Resume/fork state ────────────────────────────────────────
+
+    pub async fn set_reference_context_item(&self, item: Option<TurnContextItem>) {
+        self.state.lock().await.history.set_reference_context_item(item);
+    }
+
+    pub async fn set_token_info(&self, info: Option<TokenUsageInfo>) {
+        self.state.lock().await.history.set_token_info(info);
+    }
+
+    pub async fn set_previous_turn_settings(&self, settings: Option<PreviousTurnSettings>) {
+        self.state.lock().await.previous_turn_settings = settings;
+    }
+
+    pub async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.state.lock().await.previous_turn_settings.clone()
+    }
+
+    pub async fn set_mcp_tool_selection(&self, tool_names: Vec<String>) {
+        let mut state = self.state.lock().await;
+        if tool_names.is_empty() {
+            state.active_mcp_tool_selection = None;
+        } else {
+            let mut selected = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for name in tool_names {
+                if seen.insert(name.clone()) {
+                    selected.push(name);
+                }
+            }
+            state.active_mcp_tool_selection = Some(selected);
+        }
+    }
+
+    pub async fn clear_mcp_tool_selection(&self) {
+        self.state.lock().await.active_mcp_tool_selection = None;
     }
 
     // ── Pending approval ─────────────────────────────────────────

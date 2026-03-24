@@ -8,6 +8,7 @@ pub mod error;
 pub mod list;
 pub mod metadata;
 pub mod policy;
+pub mod reconstruction;
 pub mod recorder;
 pub mod session_index;
 pub mod truncation;

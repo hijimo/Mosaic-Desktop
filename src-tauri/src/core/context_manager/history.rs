@@ -1,4 +1,5 @@
-use crate::protocol::types::{ContentItem, ContentOrItems, FunctionCallOutputBody, FunctionCallOutputPayload, ResponseInputItem};
+use crate::core::rollout::policy::TurnContextItem;
+use crate::protocol::types::{ContentItem, ContentOrItems, FunctionCallOutputBody, FunctionCallOutputPayload, ResponseInputItem, TokenUsageInfo};
 
 use super::normalize;
 
@@ -9,6 +10,10 @@ pub struct ContextManager {
     items: Vec<ResponseInputItem>,
     /// Last known total token count from the API response.
     last_api_total_tokens: i64,
+    /// Full token usage info from the last API response.
+    token_info: Option<TokenUsageInfo>,
+    /// The last surviving turn context baseline (for diff-based updates on resume).
+    reference_context_item: Option<TurnContextItem>,
 }
 
 /// Breakdown of estimated token usage.
@@ -29,11 +34,21 @@ impl ContextManager {
 
     /// Record items into the history. Non-API items are silently skipped.
     pub fn record_items(&mut self, items: impl IntoIterator<Item = ResponseInputItem>) {
+        self.record_items_with_policy(items, ItemTruncationPolicy::default());
+    }
+
+    /// Record items with explicit truncation policy.
+    pub fn record_items_with_policy(
+        &mut self,
+        items: impl IntoIterator<Item = ResponseInputItem>,
+        policy: ItemTruncationPolicy,
+    ) {
+        let max_bytes = policy.max_bytes();
         for item in items {
             if !is_api_item(&item) {
                 continue;
             }
-            let processed = truncate_output_if_needed(item);
+            let processed = truncate_output_with_limit(item, max_bytes);
             self.items.push(processed);
         }
     }
@@ -120,6 +135,22 @@ impl ContextManager {
     /// Update token info from an API response.
     pub fn update_token_usage(&mut self, total_tokens: i64) {
         self.last_api_total_tokens = total_tokens;
+    }
+
+    pub fn token_info(&self) -> Option<&TokenUsageInfo> {
+        self.token_info.as_ref()
+    }
+
+    pub fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.token_info = info;
+    }
+
+    pub fn reference_context_item(&self) -> Option<&TurnContextItem> {
+        self.reference_context_item.as_ref()
+    }
+
+    pub fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.reference_context_item = item;
     }
 
     /// Estimate total token usage including pending items.
@@ -219,20 +250,59 @@ fn estimate_item_tokens(item: &ResponseInputItem) -> i64 {
 
 const MAX_OUTPUT_BYTES: usize = 128 * 1024; // 128 KiB
 
+/// Per-item output truncation policy.
+#[derive(Debug, Clone, Copy)]
+pub enum ItemTruncationPolicy {
+    /// Truncate to at most N bytes (UTF-8 safe).
+    Bytes(usize),
+    /// Truncate to at most N estimated tokens (~4 bytes/token).
+    Tokens(usize),
+}
+
+impl ItemTruncationPolicy {
+    fn max_bytes(&self) -> usize {
+        match self {
+            Self::Bytes(b) => *b,
+            Self::Tokens(t) => t.saturating_mul(4),
+        }
+    }
+}
+
+impl Default for ItemTruncationPolicy {
+    fn default() -> Self {
+        Self::Bytes(MAX_OUTPUT_BYTES)
+    }
+}
+
 /// Truncate oversized function outputs to keep context manageable.
-fn truncate_output_if_needed(item: ResponseInputItem) -> ResponseInputItem {
+fn truncate_output_with_limit(item: ResponseInputItem, max_bytes: usize) -> ResponseInputItem {
     match item {
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             let truncated = match &output.body {
-                FunctionCallOutputBody::Text(s) if s.len() > MAX_OUTPUT_BYTES => {
+                FunctionCallOutputBody::Text(s) if s.len() > max_bytes => {
                     FunctionCallOutputPayload {
-                        body: FunctionCallOutputBody::Text(truncate_str(s, MAX_OUTPUT_BYTES)),
+                        body: FunctionCallOutputBody::Text(truncate_str(s, max_bytes)),
                         success: None,
                     }
                 }
                 _ => output,
             };
             ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: truncated,
+            }
+        }
+        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+            let truncated = match &output.body {
+                FunctionCallOutputBody::Text(s) if s.len() > max_bytes => {
+                    FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text(truncate_str(s, max_bytes)),
+                        success: None,
+                    }
+                }
+                _ => output,
+            };
+            ResponseInputItem::CustomToolCallOutput {
                 call_id,
                 output: truncated,
             }

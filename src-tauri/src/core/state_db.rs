@@ -205,6 +205,29 @@ impl StateDb {
         rows.filter_map(|r| r.ok()).collect()
     }
 
+    /// Get a single thread by ID.
+    pub async fn get_thread(&self, thread_id: &str) -> Option<PersistedThreadMeta> {
+        let conn = self.conn.lock().await;
+        conn.query_row(
+            "SELECT thread_id, cwd, model, model_provider_id, name, created_at, forked_from, rollout_path
+             FROM threads WHERE thread_id = ?1",
+            params![thread_id],
+            |row| {
+                Ok(PersistedThreadMeta {
+                    thread_id: row.get(0)?,
+                    cwd: row.get(1)?,
+                    model: row.get(2)?,
+                    model_provider_id: row.get(3)?,
+                    name: row.get(4)?,
+                    created_at: row.get(5)?,
+                    forked_from: row.get(6)?,
+                    rollout_path: row.get(7)?,
+                })
+            },
+        )
+        .ok()
+    }
+
     /// Delete a thread record.
     pub async fn delete_thread(&self, thread_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().await;
@@ -293,5 +316,31 @@ mod tests {
 
         db.delete_thread("t1").await.unwrap();
         assert!(db.list_threads(10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_thread_by_id() {
+        let tmp = TempDir::new().unwrap();
+        let db = StateDb::open(&tmp.path().join("state.db")).unwrap();
+
+        assert!(db.get_thread("nonexistent").await.is_none());
+
+        let t = PersistedThreadMeta {
+            thread_id: "t-get".into(),
+            cwd: "/home".into(),
+            model: Some("o3-mini".into()),
+            model_provider_id: None,
+            name: Some("test chat".into()),
+            created_at: "2026-03-24T00:00:00Z".into(),
+            forked_from: None,
+            rollout_path: Some("/tmp/rollout.jsonl".into()),
+        };
+        db.upsert_thread(&t).await.unwrap();
+
+        let found = db.get_thread("t-get").await.unwrap();
+        assert_eq!(found.thread_id, "t-get");
+        assert_eq!(found.model.as_deref(), Some("o3-mini"));
+        assert_eq!(found.name.as_deref(), Some("test chat"));
+        assert_eq!(found.rollout_path.as_deref(), Some("/tmp/rollout.jsonl"));
     }
 }
