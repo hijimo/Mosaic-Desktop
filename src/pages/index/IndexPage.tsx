@@ -78,7 +78,7 @@ export function IndexPage(): React.ReactElement {
   const activeThreadId = useThreadStore((s) => s.activeThreadId);
   const messages = useMessageStore((s) => s.messagesByThread);
   const streamingTurn = useMessageStore((s) => s.streamingTurn);
-  const { createThread } = useThread();
+  const { createThread, resumeThread } = useThread();
   const submitOp = useSubmitOp();
 
   const currentThreadId = routeThreadId ?? activeThreadId;
@@ -93,6 +93,9 @@ export function IndexPage(): React.ReactElement {
       let tid = currentThreadId;
       if (!tid) {
         tid = await createThread();
+      } else {
+        // Ensure the thread engine is running (resume if needed after app restart).
+        await resumeThread(tid);
       }
 
       setInputText('');
@@ -112,7 +115,7 @@ export function IndexPage(): React.ReactElement {
         sandbox_policy: { type: 'danger-full-access' },
       });
     },
-    [inputText, currentThreadId, createThread, submitOp],
+    [inputText, currentThreadId, createThread, resumeThread, submitOp],
   );
 
   const handleKeyDown = useCallback(

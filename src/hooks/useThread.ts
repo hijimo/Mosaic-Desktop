@@ -1,14 +1,15 @@
 import { useCallback } from 'react';
-import { threadStart, threadArchive, getCwd } from '@/services/api';
+import { threadStart, threadArchive, threadResume, getCwd } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
 import type { ThreadMeta } from '@/types';
 
 /**
- * Thread lifecycle management: create and archive threads.
+ * Thread lifecycle management: create, archive, and resume threads.
  */
 export function useThread(): {
   createThread: () => Promise<string>;
   archiveThread: (id: string) => Promise<void>;
+  resumeThread: (id: string) => Promise<string>;
 } {
   const addThread = useThreadStore((s) => s.addThread);
   const setActiveThread = useThreadStore((s) => s.setActiveThread);
@@ -39,5 +40,15 @@ export function useThread(): {
     [removeThread],
   );
 
-  return { createThread, archiveThread };
+  const resumeThread = useCallback(
+    async (id: string) => {
+      const meta = await threadResume(id);
+      addThread(meta);
+      setActiveThread(id);
+      return id;
+    },
+    [addThread, setActiveThread],
+  );
+
+  return { createThread, archiveThread, resumeThread };
 }

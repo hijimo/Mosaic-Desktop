@@ -18,6 +18,10 @@ export async function threadArchive(threadId: string): Promise<void> {
   return invoke<void>('thread_archive', { threadId });
 }
 
+export async function threadResume(threadId: string): Promise<ThreadMeta> {
+  return invoke<ThreadMeta>('thread_resume', { threadId });
+}
+
 export async function submitOp(threadId: string, id: string, op: Op): Promise<void> {
   return invoke<void>('submit_op', { threadId, id, op } satisfies SubmitOpParams);
 }

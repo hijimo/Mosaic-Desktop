@@ -3,7 +3,8 @@ import { Box, Typography } from '@mui/material';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import useSWR from 'swr';
 import { useThreadStore } from '@/stores/threadStore';
-import { threadList } from '@/services/api';
+import { threadList, threadResume } from '@/services/api';
+import type { ThreadMeta } from '@/types';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -84,6 +85,31 @@ export function RecentChats(): React.ReactElement {
   const setActiveThread = useThreadStore((s) => s.setActiveThread);
   const addThread = useThreadStore((s) => s.addThread);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [resuming, setResuming] = useState<string | null>(null);
+
+  useSWR('thread_list', threadList, {
+    onSuccess: (list) => {
+      for (const meta of list) {
+        if (!threads.has(meta.thread_id)) {
+          addThread(meta);
+        }
+      }
+    },
+  });
+
+  const handleSelectThread = async (threadId: string): Promise<void> => {
+    if (resuming) return;
+    setResuming(threadId);
+    try {
+      const meta = await threadResume(threadId);
+      addThread(meta);
+      setActiveThread(threadId);
+    } catch (err) {
+      console.error('Failed to resume thread:', err);
+    } finally {
+      setResuming(null);
+    }
+  };
 
   useSWR('thread_list', threadList, {
     onSuccess: (list) => {
@@ -158,7 +184,7 @@ export function RecentChats(): React.ReactElement {
                     return (
                       <Box
                         key={chat.thread_id}
-                        onClick={() => setActiveThread(chat.thread_id)}
+                        onClick={() => handleSelectThread(chat.thread_id)}
                         sx={{
                           ...chatItem,
                           ...(isActive
