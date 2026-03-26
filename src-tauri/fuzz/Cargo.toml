@@ -1,0 +1,50 @@
+[package]
+name = "tauri-app-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# NOTE: To run fuzz tests, temporarily change crate-type in ../Cargo.toml to:
+#   crate-type = ["rlib"]
+# Then run: cargo +nightly fuzz run <target> --sanitizer none
+# Restore crate-type after fuzzing:
+#   crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.tauri_app_lib]
+path = ".."
+package = "tauri-app"
+
+[[bin]]
+name = "fuzz_event_msg"
+path = "fuzz_targets/fuzz_event_msg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_op"
+path = "fuzz_targets/fuzz_op.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_response_item"
+path = "fuzz_targets/fuzz_response_item.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_turn_item"
+path = "fuzz_targets/fuzz_turn_item.rs"
+test = false
+doc = false
+bench = false
