@@ -2,7 +2,9 @@ import { useRef, useLayoutEffect, useCallback } from 'react';
 import { Box, Typography } from '@mui/material';
 import { Loader2 } from 'lucide-react';
 import { useMessageStore } from '@/stores/messageStore';
+import { useToolCallStore } from '@/stores/toolCallStore';
 import { Message } from './Message';
+import { ToolCallDisplay } from './ToolCallDisplay';
 import type { ToolCallState, ApprovalRequestState } from '@/types';
 
 interface MessageListProps {
@@ -17,6 +19,7 @@ const EMPTY_MESSAGES: never[] = [];
 export function MessageList({ threadId, toolCalls, approvalRequests, onApprovalDecision }: MessageListProps): React.ReactElement {
   const messages = useMessageStore((s) => s.messagesByThread.get(threadId) ?? EMPTY_MESSAGES);
   const streamingTurn = useMessageStore((s) => s.streamingTurn);
+  const activeToolCalls = useToolCallStore((s) => s.toolCalls);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -32,12 +35,14 @@ export function MessageList({ threadId, toolCalls, approvalRequests, onApprovalD
   // 依赖 messages.length 和 streamingTurn?.agentText 来触发
   const msgLen = messages.length;
   const streamText = streamingTurn?.agentText ?? '';
+  const streamItemCount = streamingTurn?.items.size ?? 0;
+  const toolCallCount = activeToolCalls.size;
   useLayoutEffect(() => {
     if (isAtBottomRef.current) {
       const el = containerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }
-  }, [msgLen, streamText]);
+  }, [msgLen, streamText, streamItemCount, toolCallCount]);
 
   return (
     <Box
@@ -56,32 +61,110 @@ export function MessageList({ threadId, toolCalls, approvalRequests, onApprovalD
       ))}
 
       {streamingTurn?.isStreaming && (
-        <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
-          <Box sx={{
-            width: 40, height: 40, borderRadius: '8px', flexShrink: 0,
-            background: 'linear-gradient(135deg, #005bc1 0%, #8db2ff 100%)',
-            boxShadow: '0px 10px 15px -3px rgba(0,0,0,0.1)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#fff', lineHeight: 1 }}>M</Typography>
-          </Box>
-          <Box sx={{
-            bgcolor: '#fff', border: '1px solid rgba(192,199,207,0.05)',
-            borderRadius: '0 24px 24px 24px', boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
-            p: '33px', maxWidth: 762, flex: 1,
-          }}>
-            {streamingTurn.agentText ? (
-              <Typography sx={{ fontSize: 16, color: '#41484e', lineHeight: '26px', whiteSpace: 'pre-wrap' }}>
-                {streamingTurn.agentText}
-              </Typography>
-            ) : (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Loader2 size={16} color="#005bc1" className="animate-spin" />
-                <Typography sx={{ fontSize: 14, color: '#94a3b8' }}>Thinking...</Typography>
+        <>
+          {/* Render streaming reasoning items */}
+          {Array.from(streamingTurn.items.values())
+            .filter((si) => si.itemType === 'Reasoning' && (si.reasoningSummary.some(Boolean) || si.reasoningRaw.some(Boolean)))
+            .map((si) => (
+              <Box key={si.itemId} sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+                <Box sx={{
+                  width: 40, height: 40, borderRadius: '8px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, #005bc1 0%, #8db2ff 100%)',
+                  boxShadow: '0px 10px 15px -3px rgba(0,0,0,0.1)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#fff', lineHeight: 1 }}>M</Typography>
+                </Box>
+                <Box sx={{
+                  bgcolor: '#f7f9fb', border: '1px solid rgba(192,199,207,0.05)',
+                  borderRadius: '0 24px 24px 24px', boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
+                  p: '33px', maxWidth: 762, flex: 1,
+                }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#005bc1', textTransform: 'uppercase', letterSpacing: '1.2px', mb: 1 }}>
+                    Reasoning
+                  </Typography>
+                  <Typography sx={{ fontSize: 14, color: '#41484e', lineHeight: '22px', whiteSpace: 'pre-wrap' }}>
+                    {si.reasoningSummary.filter(Boolean).join('\n')}
+                  </Typography>
+                </Box>
               </Box>
-            )}
+            ))}
+
+          {/* Render streaming plan items */}
+          {Array.from(streamingTurn.items.values())
+            .filter((si) => si.itemType === 'Plan' && si.planText)
+            .map((si) => (
+              <Box key={si.itemId} sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+                <Box sx={{
+                  width: 40, height: 40, borderRadius: '8px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, #005bc1 0%, #8db2ff 100%)',
+                  boxShadow: '0px 10px 15px -3px rgba(0,0,0,0.1)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#fff', lineHeight: 1 }}>M</Typography>
+                </Box>
+                <Box sx={{
+                  bgcolor: '#fff', border: '1px solid rgba(192,199,207,0.05)',
+                  borderRadius: '0 24px 24px 24px', boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
+                  p: '33px', maxWidth: 762, flex: 1,
+                }}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#005bc1', textTransform: 'uppercase', letterSpacing: '1.2px', mb: 1 }}>
+                    Plan
+                  </Typography>
+                  <Typography sx={{ fontSize: 14, color: '#41484e', lineHeight: '22px', whiteSpace: 'pre-wrap' }}>
+                    {si.planText}
+                  </Typography>
+                </Box>
+              </Box>
+            ))}
+
+          {/* Render active tool calls */}
+          {activeToolCalls.size > 0 && (
+            <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+              <Box sx={{
+                width: 40, height: 40, borderRadius: '8px', flexShrink: 0,
+                background: 'linear-gradient(135deg, #005bc1 0%, #8db2ff 100%)',
+                boxShadow: '0px 10px 15px -3px rgba(0,0,0,0.1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#fff', lineHeight: 1 }}>M</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 762, flex: 1 }}>
+                {Array.from(activeToolCalls.values()).map((tc) => (
+                  <ToolCallDisplay key={tc.callId} toolCall={tc} />
+                ))}
+              </Box>
+            </Box>
+          )}
+
+          {/* Render streaming agent message */}
+          <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+            <Box sx={{
+              width: 40, height: 40, borderRadius: '8px', flexShrink: 0,
+              background: 'linear-gradient(135deg, #005bc1 0%, #8db2ff 100%)',
+              boxShadow: '0px 10px 15px -3px rgba(0,0,0,0.1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#fff', lineHeight: 1 }}>M</Typography>
+            </Box>
+            <Box sx={{
+              bgcolor: '#fff', border: '1px solid rgba(192,199,207,0.05)',
+              borderRadius: '0 24px 24px 24px', boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
+              p: '33px', maxWidth: 762, flex: 1,
+            }}>
+              {streamingTurn.agentText ? (
+                <Typography sx={{ fontSize: 16, color: '#41484e', lineHeight: '26px', whiteSpace: 'pre-wrap' }}>
+                  {streamingTurn.agentText}
+                </Typography>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Loader2 size={16} color="#005bc1" className="animate-spin" />
+                  <Typography sx={{ fontSize: 14, color: '#94a3b8' }}>Thinking...</Typography>
+                </Box>
+              )}
+            </Box>
           </Box>
-        </Box>
+        </>
       )}
     </Box>
   );

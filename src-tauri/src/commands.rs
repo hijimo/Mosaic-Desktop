@@ -38,6 +38,7 @@ pub struct ThreadMeta {
 pub struct AppState {
     pub threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
     pub thread_meta: Arc<Mutex<HashMap<String, ThreadMeta>>>,
+    pub recorders: Arc<Mutex<HashMap<String, RolloutRecorder>>>,
     pub config: Arc<Mutex<ConfigLayerStack>>,
     pub db: StateDb,
 }
@@ -51,10 +52,14 @@ pub fn spawn_event_bridge(
     thread_id: String,
     eq_rx: async_channel::Receiver<Event>,
     thread_meta: Arc<Mutex<HashMap<String, ThreadMeta>>>,
+    recorders: Arc<Mutex<HashMap<String, RolloutRecorder>>>,
     recorder: RolloutRecorder,
     db: StateDb,
 ) {
     tauri::async_runtime::spawn(async move {
+        // Store recorder reference for submit_op access
+        recorders.lock().await.insert(thread_id.clone(), recorder.clone());
+
         while let Ok(event) = eq_rx.recv().await {
             // Persist event to rollout file
             let _ = recorder.record_items(&[RolloutItem::EventMsg(event.msg.clone())]).await;
@@ -101,6 +106,7 @@ pub fn spawn_event_bridge(
             let _ = app.emit("codex-event", &payload);
         }
         // Session ended — flush and close the rollout file
+        recorders.lock().await.remove(&thread_id);
         let _ = recorder.shutdown().await;
     });
 }
@@ -128,7 +134,34 @@ pub async fn submit_op(
     id: String,
     op: serde_json::Value,
 ) -> Result<(), String> {
-    let op: Op = serde_json::from_value(op).map_err(|e| format!("invalid op: {e}"))?;
+    let op: Op = serde_json::from_value(op.clone()).map_err(|e| format!("invalid op: {e}"))?;
+
+    // Persist user message to rollout before sending to engine
+    if let Some(items) = op.user_input_items() {
+        if let Some(recorder) = state.recorders.lock().await.get(&thread_id) {
+            let content: Vec<crate::protocol::types::ContentItem> = items.iter().map(|i| match i {
+                crate::protocol::types::UserInput::Text { text, .. } =>
+                    crate::protocol::types::ContentItem::InputText { text: text.clone() },
+                crate::protocol::types::UserInput::Image { image_url } =>
+                    crate::protocol::types::ContentItem::InputImage { image_url: image_url.clone() },
+                crate::protocol::types::UserInput::LocalImage { path } =>
+                    crate::protocol::types::ContentItem::InputText { text: format!("[image: {}]", path.display()) },
+                crate::protocol::types::UserInput::Skill { name, path } =>
+                    crate::protocol::types::ContentItem::InputText { text: format!("<skill>\n<name>{name}</name>\n<path>{}</path>\n</skill>", path.display()) },
+                crate::protocol::types::UserInput::Mention { name, path } =>
+                    crate::protocol::types::ContentItem::InputText { text: format!("@{name} ({path})") },
+            }).collect();
+            let response_item = crate::protocol::types::ResponseItem::Message {
+                id: Some(uuid::Uuid::new_v4().to_string()),
+                role: "user".into(),
+                content,
+                end_turn: None,
+                phase: None,
+            };
+            let _ = recorder.record_items(&[RolloutItem::ResponseItem(response_item)]).await;
+        }
+    }
+
     let threads = state.threads.lock().await;
     let handle = threads
         .get(&thread_id)
@@ -197,7 +230,7 @@ pub async fn thread_start(
         rollout_path: Some(rollout_path),
     }).await;
 
-    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder, state.db.clone());
+    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -291,6 +324,89 @@ pub async fn thread_archive(
     Ok(())
 }
 
+/// Load chat history for a thread from its rollout file, returning TurnItems
+/// suitable for rendering in the frontend.
+#[tauri::command]
+pub async fn thread_get_messages(
+    state: State<'_, AppState>,
+    thread_id: String,
+) -> Result<Vec<crate::protocol::items::TurnItem>, String> {
+    let persisted = state.db.get_thread(&thread_id).await
+        .ok_or_else(|| format!("thread not found: {thread_id}"))?;
+    let rollout_path_str = persisted.rollout_path
+        .ok_or_else(|| format!("no rollout path for thread: {thread_id}"))?;
+    let path = std::path::PathBuf::from(&rollout_path_str);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = tokio::fs::read_to_string(&path).await
+        .map_err(|e| format!("failed to read rollout: {e}"))?;
+    Ok(parse_turn_items_from_rollout(&text))
+}
+
+/// Parse TurnItems from raw rollout JSONL text.
+fn parse_turn_items_from_rollout(text: &str) -> Vec<crate::protocol::items::TurnItem> {
+    use crate::core::event_mapping::parse_turn_item;
+    use crate::protocol::items::TurnItem;
+    use crate::protocol::types::ResponseItem;
+
+    let mut turn_items = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let typ = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match typ {
+            // ResponseItem types that parse_turn_item handles
+            "message" | "reasoning" | "web_search_call" => {
+                if let Ok(ri) = serde_json::from_value::<ResponseItem>(v) {
+                    if let Some(ti) = parse_turn_item(&ri) {
+                        turn_items.push(ti);
+                    }
+                }
+            }
+            // Legacy EventMsg format: user_message
+            "user_message" => {
+                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                let text_elements: Vec<crate::protocol::types::TextElement> = v.get("text_elements")
+                    .and_then(|t| serde_json::from_value(t.clone()).ok())
+                    .unwrap_or_default();
+                turn_items.push(TurnItem::UserMessage(crate::protocol::items::UserMessageItem {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    content: vec![crate::protocol::types::UserInput::Text {
+                        text: msg,
+                        text_elements,
+                    }],
+                }));
+            }
+            // Legacy EventMsg format: agent_message
+            "agent_message" => {
+                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                let phase: Option<crate::protocol::types::MessagePhase> = v.get("phase")
+                    .and_then(|p| serde_json::from_value(p.clone()).ok());
+                turn_items.push(TurnItem::AgentMessage(crate::protocol::items::AgentMessageItem {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    content: vec![crate::protocol::items::AgentMessageContent::Text { text: msg }],
+                    phase,
+                }));
+            }
+            // Structured item_completed events (v2 protocol)
+            "item_completed" => {
+                if let Some(item_val) = v.get("item") {
+                    if let Ok(item) = serde_json::from_value::<TurnItem>(item_val.clone()) {
+                        turn_items.push(item);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    turn_items
+}
+
 /// Resume a previously persisted thread: reload history from rollout file,
 /// re-spawn the Codex engine with full conversation context, and register
 /// the thread handle so subsequent operations work normally.
@@ -369,7 +485,7 @@ pub async fn thread_resume(
     };
     state.thread_meta.lock().await.insert(thread_id.clone(), meta.clone());
 
-    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder, state.db.clone());
+    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -489,7 +605,7 @@ pub async fn thread_fork(
         rollout_path: Some(rollout_path),
     }).await;
 
-    spawn_event_bridge(app, new_thread_id.clone(), handle.rx_event, state.thread_meta.clone(), recorder, state.db.clone());
+    spawn_event_bridge(app, new_thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -567,4 +683,188 @@ pub fn get_cwd() -> Result<String, String> {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("failed to get cwd: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::items::{TurnItem, AgentMessageContent};
+    use crate::protocol::types::UserInput;
+
+    #[test]
+    fn parse_assistant_message_from_rollout() {
+        let rollout = r#"{"timestamp":"2026-03-24T03:02:52.544Z","type":"session_meta","meta":{"id":"abc","timestamp":"2026-03-24T03:02:52Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
+{"timestamp":"2026-03-24T03:02:52.545Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
+{"timestamp":"2026-03-24T08:58:04.248Z","type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hello world"}],"phase":"final_answer"}
+{"timestamp":"2026-03-24T08:58:04.300Z","type":"task_complete","turn_id":"turn-1"}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            TurnItem::AgentMessage(m) => {
+                assert_eq!(m.id, "msg_1");
+                assert_eq!(m.content.len(), 1);
+                match &m.content[0] {
+                    AgentMessageContent::Text { text } => assert_eq!(text, "Hello world"),
+                }
+            }
+            other => panic!("expected AgentMessage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_user_message_from_rollout() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"message","id":"msg_u1","role":"user","content":[{"type":"input_text","text":"Hi there"}]}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            TurnItem::UserMessage(m) => {
+                // ID is generated by UserMessageItem::new(), not preserved from rollout
+                assert!(!m.id.is_empty());
+                match &m.content[0] {
+                    UserInput::Text { text, .. } => assert_eq!(text, "Hi there"),
+                    other => panic!("expected Text, got {:?}", other),
+                }
+            }
+            other => panic!("expected UserMessage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_legacy_event_messages() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}
+{"timestamp":"2026-01-01T00:00:01Z","type":"agent_message","message":"world","phase":"final_answer"}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            TurnItem::UserMessage(m) => {
+                match &m.content[0] {
+                    UserInput::Text { text, .. } => assert_eq!(text, "hello"),
+                    other => panic!("expected Text, got {:?}", other),
+                }
+            }
+            other => panic!("expected UserMessage, got {:?}", other),
+        }
+        match &items[1] {
+            TurnItem::AgentMessage(m) => {
+                match &m.content[0] {
+                    AgentMessageContent::Text { text } => assert_eq!(text, "world"),
+                }
+            }
+            other => panic!("expected AgentMessage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_item_completed_events() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"item_completed","thread_id":"t1","turn_id":"turn-1","item":{"type":"AgentMessage","id":"am1","content":[{"type":"Text","text":"from item_completed"}]}}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            TurnItem::AgentMessage(m) => {
+                assert_eq!(m.id, "am1");
+                match &m.content[0] {
+                    AgentMessageContent::Text { text } => assert_eq!(text, "from item_completed"),
+                }
+            }
+            other => panic!("expected AgentMessage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_mixed_rollout_skips_non_message_lines() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","meta":{"id":"t1","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
+{"timestamp":"2026-01-01T00:00:01Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
+{"timestamp":"2026-01-01T00:00:02Z","type":"token_count","info":null}
+{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"msg_a","role":"assistant","content":[{"type":"output_text","text":"reply"}]}
+{"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","turn_id":"turn-1"}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], TurnItem::AgentMessage(_)));
+    }
+
+    #[test]
+    fn parse_empty_rollout() {
+        assert!(parse_turn_items_from_rollout("").is_empty());
+        assert!(parse_turn_items_from_rollout("  \n  \n").is_empty());
+    }
+
+    #[test]
+    fn parse_multi_turn_conversation() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"Q1"}]}
+{"timestamp":"2026-01-01T00:00:01Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"A1"}]}
+{"timestamp":"2026-01-01T00:00:02Z","type":"message","id":"u2","role":"user","content":[{"type":"input_text","text":"Q2"}]}
+{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"a2","role":"assistant","content":[{"type":"output_text","text":"A2"}]}
+"#;
+        let items = parse_turn_items_from_rollout(rollout);
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], TurnItem::UserMessage(_)));
+        assert!(matches!(&items[1], TurnItem::AgentMessage(_)));
+        assert!(matches!(&items[2], TurnItem::UserMessage(_)));
+        assert!(matches!(&items[3], TurnItem::AgentMessage(_)));
+    }
+
+    #[tokio::test]
+    async fn thread_get_messages_with_real_rollout_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = crate::core::state_db::StateDb::open(&tmp.path().join("state.db")).unwrap();
+
+        // Write a rollout file
+        let rollout_path = tmp.path().join("rollout.jsonl");
+        let rollout_content = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","meta":{"id":"t-test","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
+{"timestamp":"2026-01-01T00:00:01Z","type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"hello"}]}
+{"timestamp":"2026-01-01T00:00:02Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"hi there"}],"phase":"final_answer"}
+"#;
+        tokio::fs::write(&rollout_path, rollout_content).await.unwrap();
+
+        // Insert thread into DB
+        let meta = PersistedThreadMeta {
+            thread_id: "t-test".into(),
+            cwd: "/tmp".into(),
+            model: None,
+            model_provider_id: None,
+            name: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            forked_from: None,
+            rollout_path: Some(rollout_path.to_string_lossy().into_owned()),
+        };
+        db.upsert_thread(&meta).await.unwrap();
+
+        // Read the file and parse
+        let text = tokio::fs::read_to_string(&rollout_path).await.unwrap();
+        let items = parse_turn_items_from_rollout(&text);
+        assert_eq!(items.len(), 2);
+
+        match &items[0] {
+            TurnItem::UserMessage(m) => {
+                assert!(!m.id.is_empty());
+                match &m.content[0] {
+                    UserInput::Text { text, .. } => assert_eq!(text, "hello"),
+                    other => panic!("expected Text, got {:?}", other),
+                }
+            }
+            other => panic!("expected UserMessage, got {:?}", other),
+        }
+        match &items[1] {
+            TurnItem::AgentMessage(m) => {
+                assert_eq!(m.id, "a1");
+                match &m.content[0] {
+                    AgentMessageContent::Text { text } => assert_eq!(text, "hi there"),
+                }
+            }
+            other => panic!("expected AgentMessage, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_get_messages_missing_rollout_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rollout_path = tmp.path().join("nonexistent.jsonl");
+        // File doesn't exist — parse should return empty
+        assert!(!rollout_path.exists());
+    }
 }

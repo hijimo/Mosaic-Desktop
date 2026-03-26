@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { ThreadMeta, SubmitOpParams } from '@/types';
+import type { ThreadMeta, SubmitOpParams, TurnItem } from '@/types';
 import type { Op } from '@/types';
 
 export async function threadStart(cwd?: string): Promise<string> {
@@ -20,6 +20,10 @@ export async function threadArchive(threadId: string): Promise<void> {
 
 export async function threadResume(threadId: string): Promise<ThreadMeta> {
   return invoke<ThreadMeta>('thread_resume', { threadId });
+}
+
+export async function threadGetMessages(threadId: string): Promise<TurnItem[]> {
+  return invoke<TurnItem[]>('thread_get_messages', { threadId });
 }
 
 export async function submitOp(threadId: string, id: string, op: Op): Promise<void> {

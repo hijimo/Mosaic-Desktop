@@ -189,13 +189,20 @@ impl Session {
         config: ConfigLayerStack,
         tx_event: async_channel::Sender<Event>,
     ) -> Self {
+        let mut registry = crate::core::tools::ToolRegistry::new();
+        registry.register(Box::new(crate::core::tools::handlers::ShellHandler));
+        registry.register(Box::new(crate::core::tools::handlers::ApplyPatchHandler));
+        registry.register(Box::new(crate::core::tools::handlers::ListDirHandler));
+        registry.register(Box::new(crate::core::tools::handlers::ReadFileHandler));
+        registry.register(Box::new(crate::core::tools::handlers::GrepFilesHandler));
+
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             state: tokio::sync::Mutex::new(SessionInternalState::new()),
             config,
             active_profile: None,
             tool_router: tokio::sync::Mutex::new(ToolRouter::new(
-                crate::core::tools::ToolRegistry::new(),
+                registry,
                 McpConnectionManager::new(),
             )),
             mcp_manager: McpConnectionManager::new(),

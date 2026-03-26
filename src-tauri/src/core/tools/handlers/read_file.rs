@@ -96,20 +96,20 @@ impl ToolHandler for ReadFileHandler {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "file_path": {
                         "type": "string",
-                        "description": "Absolute or relative path to the file to read"
+                        "description": "Absolute path to the file"
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "Line offset to start reading from (0-based)"
+                        "description": "The line number to start reading from. Must be 1 or greater."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of lines to read"
+                        "description": "The maximum number of lines to return."
                     }
                 },
-                "required": ["path"],
+                "required": ["file_path"],
                 "additionalProperties": false
             }
         }))

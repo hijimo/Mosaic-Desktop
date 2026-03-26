@@ -178,3 +178,13 @@ pub enum Op {
     ListModels,
     CleanBackgroundTerminals,
 }
+
+impl Op {
+    /// Extract user input items from UserTurn or UserInput ops.
+    pub fn user_input_items(&self) -> Option<Vec<UserInput>> {
+        match self {
+            Op::UserTurn { items, .. } | Op::UserInput { items, .. } => Some(items.clone()),
+            _ => None,
+        }
+    }
+}

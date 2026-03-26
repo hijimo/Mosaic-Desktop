@@ -45,7 +45,7 @@ describe('MessageList', () => {
   it('shows streaming indicator when streaming', () => {
     act(() => {
       useMessageStore.setState({
-        streamingTurn: { turnId: 'turn1', agentText: '', isStreaming: true },
+        streamingTurn: { turnId: 'turn1', agentText: '', isStreaming: true, items: new Map() },
       });
     });
 
@@ -56,7 +56,7 @@ describe('MessageList', () => {
   it('shows streaming text when available', () => {
     act(() => {
       useMessageStore.setState({
-        streamingTurn: { turnId: 'turn1', agentText: 'Partial response...', isStreaming: true },
+        streamingTurn: { turnId: 'turn1', agentText: 'Partial response...', isStreaming: true, items: new Map() },
       });
     });
 

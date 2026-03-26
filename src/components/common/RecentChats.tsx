@@ -3,7 +3,8 @@ import { Box, Typography } from '@mui/material';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import useSWR from 'swr';
 import { useThreadStore } from '@/stores/threadStore';
-import { threadList, threadResume } from '@/services/api';
+import { threadList, threadResume, threadGetMessages } from '@/services/api';
+import { useMessageStore } from '@/stores/messageStore';
 import type { ThreadMeta } from '@/types';
 
 function relativeTime(iso: string): string {
@@ -84,6 +85,7 @@ export function RecentChats(): React.ReactElement {
   const activeThreadId = useThreadStore((s) => s.activeThreadId);
   const setActiveThread = useThreadStore((s) => s.setActiveThread);
   const addThread = useThreadStore((s) => s.addThread);
+  const setMessages = useMessageStore((s) => s.setMessages);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [resuming, setResuming] = useState<string | null>(null);
 
@@ -103,6 +105,8 @@ export function RecentChats(): React.ReactElement {
     try {
       const meta = await threadResume(threadId);
       addThread(meta);
+      const messages = await threadGetMessages(threadId);
+      setMessages(threadId, messages);
       setActiveThread(threadId);
     } catch (err) {
       console.error('Failed to resume thread:', err);
@@ -110,16 +114,6 @@ export function RecentChats(): React.ReactElement {
       setResuming(null);
     }
   };
-
-  useSWR('thread_list', threadList, {
-    onSuccess: (list) => {
-      for (const meta of list) {
-        if (!threads.has(meta.thread_id)) {
-          addThread(meta);
-        }
-      }
-    },
-  });
 
   const allThreads = Array.from(threads.values());
   const grouped = groupByCwd(allThreads);

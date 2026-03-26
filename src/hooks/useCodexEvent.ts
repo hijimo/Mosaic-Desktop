@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { listenCodexEvent } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
+import { useToolCallStore } from '@/stores/toolCallStore';
 import type { CodexEventPayload } from '@/types';
 
 /**
@@ -10,8 +11,19 @@ import type { CodexEventPayload } from '@/types';
  */
 export function useCodexEvent(): void {
   const updateThread = useThreadStore((s) => s.updateThread);
-  const { appendMessage, updateStreamingDelta, startStreaming, stopStreaming } =
-    useMessageStore();
+  const {
+    appendMessage,
+    startStreaming,
+    stopStreaming,
+    startStreamingItem,
+    updateAgentContentDelta,
+    updateReasoningContentDelta,
+    updateReasoningRawContentDelta,
+    updatePlanDelta,
+    completeStreamingItem,
+  } = useMessageStore();
+  const { beginToolCall, updateToolCallOutput, endToolCall, clearAll } =
+    useToolCallStore();
 
   useEffect(() => {
     const unlistenPromise = listenCodexEvent((payload: CodexEventPayload) => {
@@ -32,6 +44,7 @@ export function useCodexEvent(): void {
           break;
 
         case 'task_started':
+          clearAll();
           startStreaming(msg.turn_id);
           break;
 
@@ -43,12 +56,103 @@ export function useCodexEvent(): void {
           stopStreaming();
           break;
 
-        case 'agent_message_delta':
-          updateStreamingDelta(msg.delta);
+        // ── v2 Structured item events ──
+        case 'item_started':
+          startStreamingItem(msg.thread_id, msg.turn_id, msg.item);
           break;
 
         case 'item_completed':
-          appendMessage(thread_id, msg.item);
+          completeStreamingItem(thread_id, msg.item);
+          break;
+
+        case 'agent_message_content_delta':
+          updateAgentContentDelta(msg.item_id, msg.delta);
+          break;
+
+        case 'reasoning_content_delta':
+          updateReasoningContentDelta(msg.item_id, msg.delta, msg.summary_index);
+          break;
+
+        case 'reasoning_raw_content_delta':
+          updateReasoningRawContentDelta(msg.item_id, msg.delta, msg.content_index);
+          break;
+
+        case 'plan_delta':
+          updatePlanDelta(msg.item_id, msg.delta);
+          break;
+
+        // ── Tool call events ──
+        case 'mcp_tool_call_begin':
+          beginToolCall({
+            callId: msg.call_id,
+            type: 'mcp',
+            status: 'running',
+            name: msg.invocation.tool,
+            serverName: msg.invocation.server,
+            toolName: msg.invocation.tool,
+            arguments: msg.invocation.arguments,
+          });
+          break;
+
+        case 'mcp_tool_call_end':
+          endToolCall(msg.call_id, {
+            status: 'completed',
+            result: msg.result,
+          });
+          break;
+
+        case 'exec_command_begin':
+          beginToolCall({
+            callId: msg.call_id,
+            type: 'exec',
+            status: 'running',
+            name: msg.command?.[0] ?? 'command',
+            command: typeof msg.command === 'string' ? [msg.command] : msg.command,
+            cwd: msg.cwd,
+          });
+          break;
+
+        case 'exec_command_output_delta':
+          updateToolCallOutput(msg.call_id, msg.delta);
+          break;
+
+        case 'exec_command_end':
+          endToolCall(msg.call_id, {
+            status: msg.exit_code === 0 ? 'completed' : 'failed',
+            exitCode: msg.exit_code,
+            output: [msg.stdout, msg.stderr].filter(Boolean).join('\n') || undefined,
+          });
+          break;
+
+        case 'web_search_begin':
+          beginToolCall({
+            callId: msg.call_id,
+            type: 'web_search',
+            status: 'running',
+            name: 'Web Search',
+          });
+          break;
+
+        case 'web_search_end':
+          endToolCall(msg.call_id, {
+            status: 'completed',
+            name: msg.query || 'Web Search',
+          });
+          break;
+
+        case 'patch_apply_begin':
+          beginToolCall({
+            callId: msg.call_id,
+            type: 'patch',
+            status: 'running',
+            name: 'Apply Patch',
+          });
+          break;
+
+        case 'patch_apply_end':
+          endToolCall(msg.call_id, {
+            status: msg.success ? 'completed' : 'failed',
+          });
           break;
 
         case 'error':
@@ -62,5 +166,20 @@ export function useCodexEvent(): void {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [updateThread, appendMessage, updateStreamingDelta, startStreaming, stopStreaming]);
+  }, [
+    updateThread,
+    appendMessage,
+    startStreaming,
+    stopStreaming,
+    startStreamingItem,
+    updateAgentContentDelta,
+    updateReasoningContentDelta,
+    updateReasoningRawContentDelta,
+    updatePlanDelta,
+    completeStreamingItem,
+    beginToolCall,
+    updateToolCallOutput,
+    endToolCall,
+    clearAll,
+  ]);
 }

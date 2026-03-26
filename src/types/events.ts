@@ -433,9 +433,9 @@ export interface PatchApplyEndEvent {
 }
 
 export interface McpInvocation {
-  server_name: string;
-  tool_name: string;
-  arguments: unknown;
+  server: string;
+  tool: string;
+  arguments?: unknown;
 }
 
 export interface McpToolCallBeginEvent {

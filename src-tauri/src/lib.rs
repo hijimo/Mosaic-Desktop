@@ -33,6 +33,7 @@ use commands::AppState;
 use config::ConfigLayerStack;
 use core::state_db::StateDb;
 
+#[cfg(not(fuzzing))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load ~/.codex/config.toml as the User layer
@@ -78,6 +79,7 @@ pub fn run() {
     let app_state = AppState {
         threads: Arc::new(Mutex::new(HashMap::new())),
         thread_meta: Arc::new(Mutex::new(HashMap::new())),
+        recorders: Arc::new(Mutex::new(HashMap::new())),
         config: Arc::new(Mutex::new(config)),
         db,
     };
@@ -91,6 +93,7 @@ pub fn run() {
             commands::thread_list,
             commands::thread_get_info,
             commands::thread_archive,
+            commands::thread_get_messages,
             commands::thread_resume,
             commands::thread_fork,
             commands::fuzzy_file_search,

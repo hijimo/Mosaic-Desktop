@@ -42,20 +42,28 @@ impl ToolHandler for ListDirHandler {
         Some(serde_json::json!({
             "type": "function",
             "name": "list_dir",
-            "description": "List the contents of a directory. Returns file names, types, and sizes.",
+            "description": "Lists entries in a local directory with 1-indexed entry numbers and simple type labels.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "dir_path": {
                         "type": "string",
-                        "description": "Absolute or relative path to the directory"
+                        "description": "Absolute path to the directory to list."
                     },
-                    "max_depth": {
+                    "offset": {
                         "type": "integer",
-                        "description": "Maximum recursion depth (default: 1)"
+                        "description": "The entry number to start listing from. Must be 1 or greater."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "The maximum number of entries to return."
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "The maximum directory depth to traverse. Must be 1 or greater."
                     }
                 },
-                "required": ["path"],
+                "required": ["dir_path"],
                 "additionalProperties": false
             }
         }))

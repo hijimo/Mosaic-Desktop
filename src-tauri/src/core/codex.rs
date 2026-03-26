@@ -796,6 +796,29 @@ impl Codex {
                 .await;
         }
 
+        // Emit structured user message item events
+        {
+            let thread_id_str = session.id().to_string();
+            let turn_id_str = turn_id.to_string();
+            let user_item = crate::protocol::items::TurnItem::UserMessage(
+                crate::protocol::items::UserMessageItem::new(&items),
+            );
+            self.emit(EventMsg::ItemStarted(
+                crate::protocol::event::ItemStartedEvent {
+                    thread_id: thread_id_str.clone(),
+                    turn_id: turn_id_str.clone(),
+                    item: user_item.clone(),
+                },
+            )).await;
+            self.emit(EventMsg::ItemCompleted(
+                crate::protocol::event::ItemCompletedEvent {
+                    thread_id: thread_id_str,
+                    turn_id: turn_id_str,
+                    item: user_item,
+                },
+            )).await;
+        }
+
         // Resolve model and provider from turn context + config
         let (model, base_url, api_key, extra_headers) = {
             let ctx = session.turn_context().await;
@@ -983,6 +1006,18 @@ impl Codex {
             accumulated_text.clear();
             let mut pending_calls: Vec<(String, String, String)> = Vec::new();
 
+            // Structured item tracking for v2 events
+            let thread_id_str = session.id().to_string();
+            let turn_id_str = turn_id.to_string();
+            let agent_msg_item_id = uuid::Uuid::new_v4().to_string();
+            let reasoning_item_id = uuid::Uuid::new_v4().to_string();
+            let mut agent_msg_item_started = false;
+            let mut reasoning_item_started = false;
+            let mut accumulated_reasoning_summary: Vec<String> = Vec::new();
+            let mut accumulated_reasoning_raw: Vec<String> = Vec::new();
+            let mut current_summary_index: i64 = 0;
+            let mut current_content_index: i64 = 0;
+
             match stream_result {
                 Err(e) => {
                     self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
@@ -1004,9 +1039,35 @@ impl Codex {
                             }
                             Ok(crate::core::client::ResponseEvent::OutputTextDelta { delta }) => {
                                 if !delta.is_empty() {
+                                    // Emit ItemStarted on first text delta for this agent message
+                                    if !agent_msg_item_started {
+                                        agent_msg_item_started = true;
+                                        let placeholder_item = crate::protocol::items::TurnItem::AgentMessage(
+                                            crate::protocol::items::AgentMessageItem {
+                                                id: agent_msg_item_id.clone(),
+                                                content: Vec::new(),
+                                                phase: None,
+                                            },
+                                        );
+                                        self.emit(EventMsg::ItemStarted(
+                                            crate::protocol::event::ItemStartedEvent {
+                                                thread_id: thread_id_str.clone(),
+                                                turn_id: turn_id_str.clone(),
+                                                item: placeholder_item,
+                                            },
+                                        )).await;
+                                    }
+
                                     accumulated_text.push_str(&delta);
-                                    self.emit(EventMsg::AgentMessageDelta(
-                                        crate::protocol::event::AgentMessageDeltaEvent { delta },
+
+                                    // Structured v2 event with item-level tracking
+                                    self.emit(EventMsg::AgentMessageContentDelta(
+                                        crate::protocol::event::AgentMessageContentDeltaEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item_id: agent_msg_item_id.clone(),
+                                            delta,
+                                        },
                                     )).await;
                                 }
                             }
@@ -1039,6 +1100,18 @@ impl Codex {
                                         item: item.clone(),
                                     },
                                 )).await;
+
+                                // Convert to TurnItem for structured events
+                                if let Some(turn_item) = crate::core::event_mapping::parse_turn_item(&item) {
+                                    self.emit(EventMsg::ItemCompleted(
+                                        crate::protocol::event::ItemCompletedEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item: turn_item,
+                                        },
+                                    )).await;
+                                }
+
                                 if let crate::protocol::types::ResponseItem::Message { role, content, .. } = &item {
                                     if role == "assistant" {
                                         let text: String = content.iter().filter_map(|c| {
@@ -1054,26 +1127,111 @@ impl Codex {
                                             session.add_to_history(vec![
                                                 crate::protocol::types::ResponseInputItem::text_message("assistant", text.clone()),
                                             ]).await;
-                                            if accumulated_text.is_empty() {
-                                                self.emit(EventMsg::AgentMessage(
-                                                crate::protocol::event::AgentMessageEvent { message: text, phase: None },
-                                                )).await;
-                                            }
                                         }
                                     }
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryDelta { delta, .. }) => {
+                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryPartAdded { summary_index }) => {
+                                current_summary_index = summary_index;
+                                // Ensure reasoning item is started
+                                if !reasoning_item_started {
+                                    reasoning_item_started = true;
+                                    let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
+                                        crate::protocol::items::ReasoningItem {
+                                            id: reasoning_item_id.clone(),
+                                            summary_text: Vec::new(),
+                                            raw_content: Vec::new(),
+                                        },
+                                    );
+                                    self.emit(EventMsg::ItemStarted(
+                                        crate::protocol::event::ItemStartedEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item: placeholder_item,
+                                        },
+                                    )).await;
+                                }
+                                // Ensure the summary_text vec has enough slots
+                                while accumulated_reasoning_summary.len() <= summary_index as usize {
+                                    accumulated_reasoning_summary.push(String::new());
+                                }
+                            }
+                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryDelta { delta, summary_index }) => {
                                 if !delta.is_empty() {
-                                    self.emit(EventMsg::AgentReasoningDelta(
-                                        crate::protocol::event::AgentReasoningDeltaEvent { delta },
+                                    // Ensure reasoning item is started
+                                    if !reasoning_item_started {
+                                        reasoning_item_started = true;
+                                        let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
+                                            crate::protocol::items::ReasoningItem {
+                                                id: reasoning_item_id.clone(),
+                                                summary_text: Vec::new(),
+                                                raw_content: Vec::new(),
+                                            },
+                                        );
+                                        self.emit(EventMsg::ItemStarted(
+                                            crate::protocol::event::ItemStartedEvent {
+                                                thread_id: thread_id_str.clone(),
+                                                turn_id: turn_id_str.clone(),
+                                                item: placeholder_item,
+                                            },
+                                        )).await;
+                                    }
+
+                                    // Accumulate summary text
+                                    while accumulated_reasoning_summary.len() <= summary_index as usize {
+                                        accumulated_reasoning_summary.push(String::new());
+                                    }
+                                    accumulated_reasoning_summary[summary_index as usize].push_str(&delta);
+
+                                    // Structured v2 event
+                                    self.emit(EventMsg::ReasoningContentDelta(
+                                        crate::protocol::event::ReasoningContentDeltaEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item_id: reasoning_item_id.clone(),
+                                            delta,
+                                            summary_index,
+                                        },
                                     )).await;
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::ReasoningContentDelta { delta, .. }) => {
+                            Ok(crate::core::client::ResponseEvent::ReasoningContentDelta { delta, content_index }) => {
                                 if !delta.is_empty() {
-                                    self.emit(EventMsg::AgentReasoningDelta(
-                                        crate::protocol::event::AgentReasoningDeltaEvent { delta },
+                                    // Ensure reasoning item is started
+                                    if !reasoning_item_started {
+                                        reasoning_item_started = true;
+                                        let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
+                                            crate::protocol::items::ReasoningItem {
+                                                id: reasoning_item_id.clone(),
+                                                summary_text: Vec::new(),
+                                                raw_content: Vec::new(),
+                                            },
+                                        );
+                                        self.emit(EventMsg::ItemStarted(
+                                            crate::protocol::event::ItemStartedEvent {
+                                                thread_id: thread_id_str.clone(),
+                                                turn_id: turn_id_str.clone(),
+                                                item: placeholder_item,
+                                            },
+                                        )).await;
+                                    }
+
+                                    // Accumulate raw content
+                                    while accumulated_reasoning_raw.len() <= content_index as usize {
+                                        accumulated_reasoning_raw.push(String::new());
+                                    }
+                                    accumulated_reasoning_raw[content_index as usize].push_str(&delta);
+                                    current_content_index = content_index;
+
+                                    // Structured v2 event
+                                    self.emit(EventMsg::ReasoningRawContentDelta(
+                                        crate::protocol::event::ReasoningRawContentDeltaEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item_id: reasoning_item_id.clone(),
+                                            delta,
+                                            content_index,
+                                        },
                                     )).await;
                                 }
                             }
@@ -1102,15 +1260,46 @@ impl Codex {
                                         },
                                     )).await;
                                 }
+
+                                // Emit ItemCompleted for reasoning if we accumulated any
+                                if reasoning_item_started {
+                                    let reasoning_item = crate::protocol::items::TurnItem::Reasoning(
+                                        crate::protocol::items::ReasoningItem {
+                                            id: reasoning_item_id.clone(),
+                                            summary_text: accumulated_reasoning_summary.clone(),
+                                            raw_content: accumulated_reasoning_raw.clone(),
+                                        },
+                                    );
+                                    self.emit(EventMsg::ItemCompleted(
+                                        crate::protocol::event::ItemCompletedEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item: reasoning_item,
+                                        },
+                                    )).await;
+                                }
+
                                 if !accumulated_text.is_empty() && last_agent_message.is_none() {
                                     last_agent_message = Some(accumulated_text.clone());
                                     session.add_to_history(vec![
                                         crate::protocol::types::ResponseInputItem::text_message("assistant", accumulated_text.clone()),
                                     ]).await;
-                                    self.emit(EventMsg::AgentMessage(
-                                        crate::protocol::event::AgentMessageEvent {
-                                            message: accumulated_text.clone(),
+
+                                    // Emit ItemCompleted for the agent message built from accumulated deltas
+                                    let completed_item = crate::protocol::items::TurnItem::AgentMessage(
+                                        crate::protocol::items::AgentMessageItem {
+                                            id: agent_msg_item_id.clone(),
+                                            content: vec![crate::protocol::items::AgentMessageContent::Text {
+                                                text: accumulated_text.clone(),
+                                            }],
                                             phase: None,
+                                        },
+                                    );
+                                    self.emit(EventMsg::ItemCompleted(
+                                        crate::protocol::event::ItemCompletedEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item: completed_item,
                                         },
                                     )).await;
                                 }
@@ -1123,7 +1312,7 @@ impl Codex {
                                 })).await;
                                 break;
                             }
-                            // Created, OutputItemAdded, ReasoningSummaryPartAdded, ServerModel, RateLimits
+                            // Created, OutputItemAdded, ServerModel, RateLimits
                             _ => {}
                         }
                     }

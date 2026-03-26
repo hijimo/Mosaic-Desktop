@@ -5,6 +5,7 @@ pub mod codex;
 pub mod compact;
 pub mod custom_prompts;
 pub mod context_manager;
+pub mod event_mapping;
 pub mod exec_policy;
 pub mod external_agent_config;
 pub mod file_watcher;

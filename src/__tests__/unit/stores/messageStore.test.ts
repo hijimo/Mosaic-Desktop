@@ -36,27 +36,31 @@ describe('messageStore', () => {
   it('startStreaming sets streamingTurn', () => {
     useMessageStore.getState().startStreaming('turn-1');
     const st = useMessageStore.getState().streamingTurn;
-    expect(st).toEqual({ turnId: 'turn-1', agentText: '', isStreaming: true });
+    expect(st).toMatchObject({ turnId: 'turn-1', agentText: '', isStreaming: true });
+    expect(st?.items).toBeInstanceOf(Map);
   });
 
-  it('updateStreamingDelta accumulates text', () => {
-    const { startStreaming, updateStreamingDelta } = useMessageStore.getState();
+  it('updateAgentContentDelta accumulates text via item tracking', () => {
+    const { startStreaming, startStreamingItem, updateAgentContentDelta } = useMessageStore.getState();
     startStreaming('turn-1');
-    updateStreamingDelta('Hello');
-    updateStreamingDelta(' world');
+    startStreamingItem('t1', 'turn-1', { type: 'AgentMessage', id: 'a1', content: [] });
+    updateAgentContentDelta('a1', 'Hello');
+    updateAgentContentDelta('a1', ' world');
 
-    expect(useMessageStore.getState().streamingTurn?.agentText).toBe('Hello world');
+    const st = useMessageStore.getState().streamingTurn;
+    expect(st?.agentText).toBe('Hello world');
+    expect(st?.items.get('a1')?.agentText).toBe('Hello world');
   });
 
-  it('updateStreamingDelta is no-op when not streaming', () => {
-    useMessageStore.getState().updateStreamingDelta('ignored');
+  it('updateAgentContentDelta is no-op when not streaming', () => {
+    useMessageStore.getState().updateAgentContentDelta('a1', 'ignored');
     expect(useMessageStore.getState().streamingTurn).toBeNull();
   });
 
   it('stopStreaming clears streamingTurn', () => {
     useMessageStore.getState().startStreaming('turn-1');
     useMessageStore.getState().stopStreaming();
-    expect(useMessageStore.getState().streamingTurn).toBeNull();
+    expect(useMessageStore.getState().streamingTurn?.isStreaming).toBe(false);
   });
 
   it('clearThread removes messages for a thread', () => {

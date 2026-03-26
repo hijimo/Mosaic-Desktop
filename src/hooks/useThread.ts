@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
-import { threadStart, threadArchive, threadResume, getCwd } from '@/services/api';
+import { threadStart, threadArchive, threadResume, threadGetMessages, getCwd } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
+import { useMessageStore } from '@/stores/messageStore';
 import type { ThreadMeta } from '@/types';
 
 /**
@@ -14,6 +15,7 @@ export function useThread(): {
   const addThread = useThreadStore((s) => s.addThread);
   const setActiveThread = useThreadStore((s) => s.setActiveThread);
   const removeThread = useThreadStore((s) => s.removeThread);
+  const setMessages = useMessageStore((s) => s.setMessages);
 
   const createThread = useCallback(async () => {
     const cwd = await getCwd();
@@ -44,10 +46,12 @@ export function useThread(): {
     async (id: string) => {
       const meta = await threadResume(id);
       addThread(meta);
+      const messages = await threadGetMessages(id);
+      setMessages(id, messages);
       setActiveThread(id);
       return id;
     },
-    [addThread, setActiveThread],
+    [addThread, setActiveThread, setMessages],
   );
 
   return { createThread, archiveThread, resumeThread };

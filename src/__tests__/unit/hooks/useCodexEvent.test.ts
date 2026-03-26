@@ -72,18 +72,21 @@ describe('useCodexEvent', () => {
     renderHook(() => useCodexEvent());
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
 
-    expect(useMessageStore.getState().streamingTurn).toEqual({
+    const st = useMessageStore.getState().streamingTurn;
+    expect(st).toMatchObject({
       turnId: 'turn-1',
       agentText: '',
       isStreaming: true,
     });
+    expect(st?.items).toBeInstanceOf(Map);
   });
 
-  it('handles agent_message_delta by accumulating text', () => {
+  it('handles agent_message_content_delta by accumulating text via v2 item tracking', () => {
     renderHook(() => useCodexEvent());
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
-    emit('t1', { type: 'agent_message_delta', delta: 'Hello' });
-    emit('t1', { type: 'agent_message_delta', delta: ' world' });
+    emit('t1', { type: 'item_started', thread_id: 't1', turn_id: 'turn-1', item: { type: 'AgentMessage', id: 'a1', content: [] } });
+    emit('t1', { type: 'agent_message_content_delta', thread_id: 't1', turn_id: 'turn-1', item_id: 'a1', delta: 'Hello' });
+    emit('t1', { type: 'agent_message_content_delta', thread_id: 't1', turn_id: 'turn-1', item_id: 'a1', delta: ' world' });
 
     expect(useMessageStore.getState().streamingTurn?.agentText).toBe('Hello world');
   });
@@ -93,11 +96,13 @@ describe('useCodexEvent', () => {
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
     emit('t1', { type: 'task_complete', turn_id: 'turn-1' });
 
-    expect(useMessageStore.getState().streamingTurn).toBeNull();
+    expect(useMessageStore.getState().streamingTurn?.isStreaming).toBe(false);
   });
 
   it('handles item_completed by appending message', () => {
     renderHook(() => useCodexEvent());
+    // Start streaming first so completeStreamingItem works properly
+    emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
     emit('t1', {
       type: 'item_completed',
       thread_id: 't1',
@@ -116,7 +121,7 @@ describe('useCodexEvent', () => {
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
     emit('t1', { type: 'error', message: 'something broke' });
 
-    expect(useMessageStore.getState().streamingTurn).toBeNull();
+    expect(useMessageStore.getState().streamingTurn?.isStreaming).toBe(false);
     expect(consoleSpy).toHaveBeenCalledWith('[codex] something broke');
     consoleSpy.mockRestore();
   });
