@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { Box, Typography } from '@mui/material';
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { Box, Typography, Popover, Button } from '@mui/material';
+import { ChevronDown, ChevronRight, Sparkles, Archive } from 'lucide-react';
 import useSWR from 'swr';
 import { useThreadStore } from '@/stores/threadStore';
-import { threadList, threadResume, threadGetMessages } from '@/services/api';
+import { threadList, threadResume, threadGetMessages, threadArchive } from '@/services/api';
 import { useMessageStore } from '@/stores/messageStore';
 import type { ThreadMeta } from '@/types';
 
@@ -88,6 +88,33 @@ export function RecentChats(): React.ReactElement {
   const setMessages = useMessageStore((s) => s.setMessages);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [resuming, setResuming] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const removeThread = useThreadStore((s) => s.removeThread);
+
+  const handleArchiveClick = useCallback((e: React.MouseEvent<HTMLElement>, threadId: string) => {
+    e.stopPropagation();
+    setConfirmAnchor(e.currentTarget);
+    setConfirmId(threadId);
+  }, []);
+
+  const handleArchiveConfirm = useCallback(async () => {
+    if (!confirmId) return;
+    setConfirmAnchor(null);
+    setConfirmId(null);
+    try {
+      await threadArchive(confirmId);
+    } catch {
+      // thread may not be active on backend, still remove from UI
+    }
+    removeThread(confirmId);
+  }, [confirmId, removeThread]);
+
+  const handleArchiveCancel = useCallback(() => {
+    setConfirmAnchor(null);
+    setConfirmId(null);
+  }, []);
 
   useSWR('thread_list', threadList, {
     onSuccess: (list) => {
@@ -175,10 +202,13 @@ export function RecentChats(): React.ReactElement {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   {chats.map((chat) => {
                     const isActive = chat.thread_id === activeThreadId;
+                    const isHovered = hoveredId === chat.thread_id;
                     return (
                       <Box
                         key={chat.thread_id}
                         onClick={() => handleSelectThread(chat.thread_id)}
+                        onMouseEnter={() => setHoveredId(chat.thread_id)}
+                        onMouseLeave={() => setHoveredId(null)}
                         sx={{
                           ...chatItem,
                           ...(isActive
@@ -205,14 +235,23 @@ export function RecentChats(): React.ReactElement {
                             {chat.name || 'New Chat'}
                           </Typography>
                         </Box>
-                        <Typography
-                          sx={{
-                            ...timeLabel,
-                            color: isActive ? 'rgba(0,91,193,0.6)' : 'rgba(113,120,127,0.6)',
-                          }}
-                        >
-                          {relativeTime(chat.created_at)}
-                        </Typography>
+                        {isHovered || confirmId === chat.thread_id ? (
+                          <Box
+                            onClick={(e) => handleArchiveClick(e, chat.thread_id)}
+                            sx={{ flexShrink: 0, ml: 1, display: 'flex', cursor: 'pointer', p: '2px', borderRadius: 1, '&:hover': { bgcolor: 'rgba(0,0,0,0.08)' } }}
+                          >
+                            <Archive size={13} color="#94a3b8" />
+                          </Box>
+                        ) : (
+                          <Typography
+                            sx={{
+                              ...timeLabel,
+                              color: isActive ? 'rgba(0,91,193,0.6)' : 'rgba(113,120,127,0.6)',
+                            }}
+                          >
+                            {relativeTime(chat.created_at)}
+                          </Typography>
+                        )}
                       </Box>
                     );
                   })}
@@ -222,6 +261,23 @@ export function RecentChats(): React.ReactElement {
           );
         })}
       </Box>
+
+      {/* Archive confirm popover */}
+      <Popover
+        open={Boolean(confirmAnchor)}
+        anchorEl={confirmAnchor}
+        onClose={handleArchiveCancel}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 200 }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 500, color: '#191c1e' }}>确定归档此会话？</Typography>
+          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+            <Button size="small" onClick={handleArchiveCancel} sx={{ fontSize: 12, color: '#64748b' }}>取消</Button>
+            <Button size="small" variant="contained" onClick={handleArchiveConfirm} sx={{ fontSize: 12, bgcolor: '#dc2626', '&:hover': { bgcolor: '#b91c1c' } }}>归档</Button>
+          </Box>
+        </Box>
+      </Popover>
     </Box>
   );
 }

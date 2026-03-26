@@ -4,6 +4,14 @@ import { MessageList } from '@/components/chat/MessageList';
 import { useMessageStore } from '@/stores/messageStore';
 import type { TurnItem } from '@/types';
 
+// Mock Streamdown
+vi.mock('streamdown', () => ({
+  Streamdown: ({ children }: { children: string }) => <div>{children}</div>,
+}));
+vi.mock('@streamdown/code', () => ({ code: {} }));
+vi.mock('@streamdown/cjk', () => ({ cjk: {} }));
+vi.mock('streamdown/styles.css', () => ({}));
+
 // Mock Message component
 vi.mock('@/components/chat/Message', () => ({
   Message: ({ item }: { item: TurnItem }) => (
@@ -50,7 +58,8 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
-    expect(screen.getByText('Thinking...')).toBeInTheDocument();
+    // Now renders Chinese text
+    expect(screen.getByText('思考中...')).toBeInTheDocument();
   });
 
   it('shows streaming text when available', () => {

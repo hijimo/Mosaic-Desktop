@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Box, Typography, IconButton } from '@mui/material';
 import {
   Activity,
@@ -18,14 +18,14 @@ import {
   ChevronDown,
   FolderOpen,
   Plus,
-  Loader2,
 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
 import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
-import type { TurnItem, UserInput } from '@/types';
+import { MessageList } from '@/components/chat/MessageList';
+import type { UserInput } from '@/types';
 
 interface SkillCard {
   icon: React.ReactNode;
@@ -47,27 +47,9 @@ const SUGGESTIONS = [
   { icon: <Languages size={16} />, label: 'Translate', prompt: 'Translate this to English.' },
 ];
 
-function renderTurnItem(item: TurnItem): React.ReactNode {
-  switch (item.type) {
-    case 'UserMessage':
-      return item.content
-        .filter((c): c is UserInput & { type: 'text' } => c.type === 'text')
-        .map((c, i) => (
-          <Box key={i} sx={{ alignSelf: 'flex-end', bgcolor: '#e8f0fe', borderRadius: 3, px: 2, py: 1.5, maxWidth: '80%' }}>
-            <Typography sx={{ fontSize: 14, color: '#191c1e', whiteSpace: 'pre-wrap' }}>{c.text}</Typography>
-          </Box>
-        ));
-    case 'AgentMessage':
-      return (
-        <Box sx={{ alignSelf: 'flex-start', bgcolor: '#fff', borderRadius: 3, px: 2, py: 1.5, maxWidth: '80%', border: '1px solid #f1f5f9' }}>
-          <Typography sx={{ fontSize: 14, color: '#191c1e', whiteSpace: 'pre-wrap' }}>
-            {item.content.map((c) => c.text).join('')}
-          </Typography>
-        </Box>
-      );
-    default:
-      return null;
-  }
+function handleApprovalDecision(callId: string, decision: 'approve' | 'deny'): void {
+  // TODO: wire to submitOp with exec_approval/patch_approval
+  console.log('approval decision', callId, decision);
 }
 
 export function IndexPage(): React.ReactElement {
@@ -128,12 +110,6 @@ export function IndexPage(): React.ReactElement {
     [handleSend],
   );
 
-  // Auto-scroll on new messages
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [threadMessages.length, streamingTurn?.agentText]);
-
   // ── Chat view (has messages) ──
   if (hasMessages) {
     return (
@@ -164,19 +140,10 @@ export function IndexPage(): React.ReactElement {
         </Box>
 
         {/* Messages */}
-        <Box sx={{ flex: 1, overflow: 'auto', px: 4, py: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {threadMessages.map((item, i) => (
-            <Box key={i}>{renderTurnItem(item)}</Box>
-          ))}
-          {streamingTurn?.isStreaming && (
-            <Box sx={{ alignSelf: 'flex-start', bgcolor: '#fff', borderRadius: 3, px: 2, py: 1.5, maxWidth: '80%', border: '1px solid #f1f5f9' }}>
-              <Typography sx={{ fontSize: 14, color: '#191c1e', whiteSpace: 'pre-wrap' }}>
-                {streamingTurn.agentText || <Loader2 size={16} className="animate-spin" />}
-              </Typography>
-            </Box>
-          )}
-          <div ref={messagesEndRef} />
-        </Box>
+        <MessageList
+          threadId={currentThreadId!}
+          onApprovalDecision={handleApprovalDecision}
+        />
 
         {/* Input */}
         <Box sx={{ px: 4, pb: 3, pt: 1, flexShrink: 0 }}>
@@ -197,7 +164,7 @@ export function IndexPage(): React.ReactElement {
               value={inputText}
               onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder="输入消息..."
               rows={1}
               sx={{
                 flex: 1,

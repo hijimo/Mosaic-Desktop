@@ -16,6 +16,49 @@ body {
   color: #191c1e;
 }
 
+/* Streamdown markdown styles */
+.streamdown-root {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.streamdown-root p {
+  margin: 0 0 0.5em;
+}
+
+.streamdown-root p:last-child {
+  margin-bottom: 0;
+}
+
+.streamdown-root pre {
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.streamdown-root code {
+  font-family: "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.streamdown-root :not(pre) > code {
+  background: rgba(192,199,207,0.15);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

@@ -31,3 +31,10 @@ export interface ApprovalRequestState {
 
 /** Message role for rendering */
 export type MessageRole = 'user' | 'agent';
+
+/** Clarification request state */
+export interface ClarificationState {
+  id: string;
+  message: string;
+  schema?: unknown;
+}

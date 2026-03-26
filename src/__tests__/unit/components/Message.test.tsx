@@ -3,17 +3,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { Message } from '@/components/chat/Message';
 import type { TurnItem } from '@/types';
 
-// Mock child components
-vi.mock('@/components/chat/ToolCallDisplay', () => ({
-  ToolCallDisplay: ({ toolCall }: { toolCall: { callId: string } }) => (
-    <div data-testid={`tool-call-${toolCall.callId}`} />
-  ),
+// Mock Streamdown to avoid Tailwind dependency in tests
+vi.mock('streamdown', () => ({
+  Streamdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
-vi.mock('@/components/chat/ApprovalRequest', () => ({
-  ApprovalRequest: ({ request }: { request: { callId: string } }) => (
-    <div data-testid={`approval-${request.callId}`} />
-  ),
-}));
+vi.mock('@streamdown/code', () => ({ code: {} }));
+vi.mock('@streamdown/cjk', () => ({ cjk: {} }));
+vi.mock('streamdown/styles.css', () => ({}));
 
 describe('Message', () => {
   it('renders user message text', () => {
@@ -26,7 +22,7 @@ describe('Message', () => {
     expect(screen.getByText('Hello, AI!')).toBeInTheDocument();
   });
 
-  it('renders agent message text', () => {
+  it('renders agent message text via Streamdown', () => {
     const item: TurnItem = {
       type: 'AgentMessage',
       id: 'a1',
@@ -36,27 +32,17 @@ describe('Message', () => {
     expect(screen.getByText('Here is my response.')).toBeInTheDocument();
   });
 
-  it('renders action bar for agent messages', () => {
-    const item: TurnItem = {
-      type: 'AgentMessage',
-      id: 'a2',
-      content: [{ type: 'Text', text: 'Response' }],
-    };
-    render(<Message item={item} />);
-    expect(screen.getByText('Helpful')).toBeInTheDocument();
-    expect(screen.getByText('Not Helpful')).toBeInTheDocument();
-    expect(screen.getByText('Regenerate')).toBeInTheDocument();
-  });
-
   it('renders tool calls within agent message', () => {
     const item: TurnItem = {
       type: 'AgentMessage',
       id: 'a3',
       content: [{ type: 'Text', text: 'Running command...' }],
     };
-    const toolCalls = [{ callId: 'tc1', type: 'exec' as const, status: 'running' as const, name: 'ls' }];
+    const toolCalls = [{ callId: 'tc1', type: 'exec' as const, status: 'running' as const, name: 'ls', command: ['ls'] }];
     render(<Message item={item} toolCalls={toolCalls} />);
-    expect(screen.getByTestId('tool-call-tc1')).toBeInTheDocument();
+    // CodeExecutionBlock renders the terminal title with command name
+    expect(screen.getByText(/bash/)).toBeInTheDocument();
+    expect(screen.getByText('Running command...')).toBeInTheDocument();
   });
 
   it('renders approval requests within agent message', () => {
@@ -67,10 +53,12 @@ describe('Message', () => {
     };
     const approvalRequests = [{ callId: 'ar1', turnId: 't1', type: 'exec' as const, command: ['rm', '-rf'] }];
     render(<Message item={item} approvalRequests={approvalRequests} />);
-    expect(screen.getByTestId('approval-ar1')).toBeInTheDocument();
+    // ApprovalRequestCard renders Chinese text
+    expect(screen.getByText('需要执行审批')).toBeInTheDocument();
+    expect(screen.getByText('批准执行')).toBeInTheDocument();
   });
 
-  it('renders reasoning turn', () => {
+  it('renders reasoning turn as ThinkingPanel', () => {
     const item: TurnItem = {
       type: 'Reasoning',
       id: 'r1',
@@ -78,18 +66,19 @@ describe('Message', () => {
       raw_content: [],
     };
     render(<Message item={item} />);
-    expect(screen.getByText('Reasoning')).toBeInTheDocument();
-    expect(screen.getByText('Thinking about the problem...')).toBeInTheDocument();
+    // ThinkingPanel renders "思考过程" label
+    expect(screen.getByText('思考过程')).toBeInTheDocument();
   });
 
-  it('renders plan turn', () => {
+  it('renders plan turn via Streamdown', () => {
     const item: TurnItem = {
       type: 'Plan',
       id: 'p1',
       text: 'Step 1: Analyze\nStep 2: Implement',
     };
     render(<Message item={item} />);
-    expect(screen.getByText('Plan')).toBeInTheDocument();
+    // Plan text rendered through mocked Streamdown (preserves newlines in div)
+    expect(screen.getByText(/Step 1: Analyze/)).toBeInTheDocument();
   });
 
   it('returns null for unknown turn types', () => {

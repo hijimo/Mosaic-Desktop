@@ -3,6 +3,8 @@ import { listenCodexEvent } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
 import { useToolCallStore } from '@/stores/toolCallStore';
+import { useApprovalStore } from '@/stores/approvalStore';
+import { useClarificationStore } from '@/stores/clarificationStore';
 import type { CodexEventPayload } from '@/types';
 
 /**
@@ -24,6 +26,8 @@ export function useCodexEvent(): void {
   } = useMessageStore();
   const { beginToolCall, updateToolCallOutput, endToolCall, clearAll } =
     useToolCallStore();
+  const { addApproval, clearAll: clearApprovals } = useApprovalStore();
+  const { addRequest: addClarification, clearAll: clearClarifications } = useClarificationStore();
 
   useEffect(() => {
     const unlistenPromise = listenCodexEvent((payload: CodexEventPayload) => {
@@ -45,6 +49,8 @@ export function useCodexEvent(): void {
 
         case 'task_started':
           clearAll();
+          clearApprovals();
+          clearClarifications();
           startStreaming(msg.turn_id);
           break;
 
@@ -160,6 +166,35 @@ export function useCodexEvent(): void {
           console.error(`[codex] ${msg.message}`);
           stopStreaming();
           break;
+
+        case 'exec_approval_request':
+          addApproval({
+            callId: msg.call_id,
+            turnId: msg.turn_id,
+            type: 'exec',
+            command: msg.command,
+            cwd: msg.cwd,
+            reason: msg.reason,
+          });
+          break;
+
+        case 'apply_patch_approval_request':
+          addApproval({
+            callId: msg.call_id,
+            turnId: msg.turn_id,
+            type: 'patch',
+            reason: msg.reason,
+            changes: msg.changes as Record<string, unknown>,
+          });
+          break;
+
+        case 'request_user_input':
+          addClarification({
+            id: msg.id,
+            message: msg.message,
+            schema: msg.schema,
+          });
+          break;
       }
     });
 
@@ -181,5 +216,9 @@ export function useCodexEvent(): void {
     updateToolCallOutput,
     endToolCall,
     clearAll,
+    addApproval,
+    clearApprovals,
+    addClarification,
+    clearClarifications,
   ]);
 }
