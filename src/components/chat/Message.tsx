@@ -1,6 +1,7 @@
 import { Box, Typography } from '@mui/material';
 import type {
   TurnItem,
+  TurnGroup,
   UserInput,
   ToolCallState,
   ApprovalRequestState,
@@ -18,7 +19,7 @@ import { CodeDiffBlock } from './agent/CodeDiffBlock';
 import { ClarificationCard } from './agent/ClarificationCard';
 
 interface MessageProps {
-  item: TurnItem;
+  group: TurnGroup;
   toolCalls?: ToolCallState[];
   approvalRequests?: ApprovalRequestState[];
   clarifications?: ClarificationState[];
@@ -27,17 +28,30 @@ interface MessageProps {
 }
 
 export function Message({
-  item,
+  group,
   toolCalls,
   approvalRequests,
   clarifications,
   onApprovalDecision,
   isStreaming,
 }: MessageProps): React.ReactElement | null {
-  switch (item.type) {
-    case 'UserMessage':
-      return (
-        <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+  const { items } = group;
+  if (items.length === 0) return null;
+
+  // Separate user messages and agent-side items
+  const userItems = items.filter(
+    (i): i is TurnItem & { type: 'UserMessage' } => i.type === 'UserMessage',
+  );
+  const agentItems = items.filter((i) => i.type !== 'UserMessage');
+
+  return (
+    <>
+      {/* Render user messages */}
+      {userItems.map((item) => (
+        <Box
+          key={item.id}
+          sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}
+        >
           <Box
             sx={{
               bgcolor: '#f0f7ff',
@@ -69,17 +83,16 @@ export function Message({
           </Box>
           <UserAvatar />
         </Box>
-      );
+      ))}
 
-    case 'AgentMessage': {
-      const agentText = item.content.map((c) => c.text).join('');
-      return (
+      {/* Render agent-side items as a single block */}
+      {agentItems.length > 0 && (
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
           <AgentAvatar />
           <Box
             sx={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}
           >
-            {/* Render tool calls by type */}
+            {/* Tool calls */}
             {toolCalls?.map((tc) => {
               switch (tc.type) {
                 case 'web_search':
@@ -126,62 +139,155 @@ export function Message({
               <ClarificationCard key={cr.id} request={cr} />
             ))}
 
-            {/* Agent message content with Streamdown */}
-            {agentText && (
-              <Box
-                sx={{
-                  bgcolor: '#fff',
-                  border: '1px solid rgba(192,199,207,0.05)',
-                  borderRadius: '0 24px 24px 24px',
-                  boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
-                  p: '16px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 2,
-                }}
-              >
-                <Box
-                  sx={{ fontSize: 16, color: '#41484e', lineHeight: '26px' }}
-                >
-                  <StreamdownRenderer isStreaming={isStreaming}>
-                    {agentText}
-                  </StreamdownRenderer>
-                </Box>
-              </Box>
-            )}
+            {/* All agent-side items in order */}
+            {agentItems.map((item) => {
+              switch (item.type) {
+                case 'AgentMessage': {
+                  const text = item.content.map((c) => c.text).join('');
+                  return text ? (
+                    <Box
+                      key={item.id}
+                      sx={{
+                        bgcolor: '#fff',
+                        border: '1px solid rgba(192,199,207,0.05)',
+                        borderRadius: '0 24px 24px 24px',
+                        boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
+                        p: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 2,
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          fontSize: 16,
+                          color: '#41484e',
+                          lineHeight: '26px',
+                        }}
+                      >
+                        <StreamdownRenderer isStreaming={isStreaming}>
+                          {text}
+                        </StreamdownRenderer>
+                      </Box>
+                    </Box>
+                  ) : null;
+                }
+                case 'Reasoning':
+                  return (
+                    <ThinkingPanel
+                      key={item.id}
+                      text={item.summary_text.join('\n')}
+                    />
+                  );
+                case 'Plan':
+                  return (
+                    <Box
+                      key={item.id}
+                      sx={{
+                        flex: 1,
+                        fontSize: 14,
+                        color: '#334155',
+                        lineHeight: '22.75px',
+                      }}
+                    >
+                      <StreamdownRenderer>{item.text}</StreamdownRenderer>
+                    </Box>
+                  );
+                case 'CommandExecution':
+                  return (
+                    <CodeExecutionBlock
+                      key={item.id}
+                      toolCall={{
+                        callId: item.id,
+                        type: 'exec',
+                        status: item.status === 'Completed' ? 'completed' : item.status === 'Failed' || item.status === 'Declined' ? 'failed' : 'running',
+                        name: item.command.split(' ')[0] ?? 'command',
+                        command: item.command.split(' '),
+                        cwd: item.cwd,
+                        output: item.aggregated_output,
+                        exitCode: item.exit_code ?? undefined,
+                      }}
+                    />
+                  );
+                case 'McpToolCall':
+                  return (
+                    <McpToolCallCard
+                      key={item.id}
+                      toolCall={{
+                        callId: item.id,
+                        type: 'mcp',
+                        status: item.status === 'Completed' ? 'completed' : item.status === 'Failed' ? 'failed' : 'running',
+                        name: item.tool,
+                        serverName: item.server,
+                        toolName: item.tool,
+                        arguments: item.arguments as Record<string, unknown> | undefined,
+                        result: item.error ? { error: item.error.message } : undefined,
+                      }}
+                    />
+                  );
+                case 'DynamicToolCall':
+                  return (
+                    <McpToolCallCard
+                      key={item.id}
+                      toolCall={{
+                        callId: item.id,
+                        type: 'mcp',
+                        status: item.status === 'Completed' ? 'completed' : item.status === 'Failed' ? 'failed' : 'running',
+                        name: item.tool,
+                        serverName: 'dynamic',
+                        toolName: item.tool,
+                        arguments: item.arguments as Record<string, unknown> | undefined,
+                      }}
+                    />
+                  );
+                case 'FileChange':
+                  return item.changes.map((change) => (
+                    <CodeDiffBlock
+                      key={`${item.id}-${change.path}`}
+                      filename={change.path}
+                      patch={change.diff}
+                    />
+                  ));
+                case 'WebSearch':
+                  return (
+                    <WebSearchCard
+                      key={item.id}
+                      toolCall={{
+                        callId: item.id,
+                        type: 'web_search',
+                        status: 'completed',
+                        name: item.query || 'Web Search',
+                      }}
+                    />
+                  );
+                case 'ContextCompaction':
+                  return null;
+                case 'ImageView':
+                  return (
+                    <Box key={item.id} sx={{ fontSize: 14, color: '#64748b' }}>
+                      📷 {item.path}
+                    </Box>
+                  );
+                case 'EnteredReviewMode':
+                case 'ExitedReviewMode':
+                  return (
+                    <Box key={item.id} sx={{ fontSize: 14, color: '#64748b', fontStyle: 'italic' }}>
+                      {item.review}
+                    </Box>
+                  );
+                case 'CollabToolCall':
+                  return (
+                    <Box key={item.id} sx={{ fontSize: 14, color: '#64748b' }}>
+                      🤝 {item.tool} → {item.receiver_thread_ids.join(', ')} [{item.status}]
+                    </Box>
+                  );
+                default:
+                  return null;
+              }
+            })}
           </Box>
         </Box>
-      );
-    }
-
-    case 'Reasoning':
-      return (
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-          <AgentAvatar />
-          <Box sx={{ flex: 1 }}>
-            <ThinkingPanel text={item.summary_text.join('\n')} />
-          </Box>
-        </Box>
-      );
-
-    case 'Plan':
-      return (
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-          <AgentAvatar />
-          <Box
-            sx={{
-              flex: 1,
-              fontSize: 14,
-              color: '#334155',
-              lineHeight: '22.75px',
-            }}
-          >
-            <StreamdownRenderer>{item.text}</StreamdownRenderer>
-          </Box>
-        </Box>
-      );
-
-    default:
-      return null;
-  }
+      )}
+    </>
+  );
 }

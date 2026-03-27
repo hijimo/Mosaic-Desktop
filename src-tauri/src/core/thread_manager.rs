@@ -205,6 +205,51 @@ impl ThreadManager {
         let thread = self.get_thread(thread_id).await?;
         thread.submit(op).await
     }
+
+    /// Fork a thread by loading its rollout history and creating a new thread
+    /// with that history (optionally truncated to the nth user message).
+    pub async fn fork_thread(
+        &self,
+        rollout_path: &std::path::Path,
+        nth_user_message: usize,
+        config: ConfigLayerStack,
+        cwd: PathBuf,
+    ) -> Result<NewThread, CodexError> {
+        use super::initial_history::InitialHistory;
+        use super::rollout::truncation::truncate_before_nth_user_message;
+
+        // Enforce limit
+        {
+            let threads = self.threads.read().await;
+            if threads.len() >= self.max_threads {
+                return Err(CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("thread limit reached ({}/{})", threads.len(), self.max_threads),
+                ));
+            }
+        }
+
+        let text = tokio::fs::read_to_string(rollout_path)
+            .await
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("failed to read rollout: {e}")))?;
+        let items = crate::commands::parse_rollout_items(&text);
+
+        let truncated = truncate_before_nth_user_message(&items, nth_user_message);
+
+        let thread_id = ThreadId::new();
+        let handle = Codex::spawn_with_history(config, cwd, InitialHistory::Forked(truncated)).await?;
+        let session_configured = wait_for_session_configured(&handle).await?;
+
+        let thread = Arc::new(CodexThread::new(handle, thread_id));
+        self.threads.write().await.insert(thread_id, Arc::clone(&thread));
+        let _ = self.thread_created_tx.send(thread_id);
+
+        Ok(NewThread {
+            thread_id,
+            thread,
+            session_configured,
+        })
+    }
 }
 
 impl Default for ThreadManager {

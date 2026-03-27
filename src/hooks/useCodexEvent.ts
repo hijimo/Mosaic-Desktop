@@ -68,7 +68,7 @@ export function useCodexEvent(): void {
           break;
 
         case 'item_completed':
-          completeStreamingItem(thread_id, msg.item);
+          completeStreamingItem(thread_id, msg.turn_id, msg.item);
           break;
 
         case 'agent_message_content_delta':

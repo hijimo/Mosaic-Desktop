@@ -37,7 +37,7 @@ fn is_contextual_user_fragment(item: &ContentItem) -> bool {
     })
 }
 
-fn is_contextual_user_message(content: &[ContentItem]) -> bool {
+pub(crate) fn is_contextual_user_message(content: &[ContentItem]) -> bool {
     content.iter().any(|c| is_contextual_user_fragment(c))
 }
 
@@ -203,7 +203,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             Some(TurnItem::WebSearch(WebSearchItem {
                 id: id.clone().unwrap_or_default(),
                 query,
-                action: action_val,
+                action: Some(action_val),
             }))
         }
         // FunctionCall, FunctionCallOutput, CustomToolCall, CustomToolCallOutput,

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::types::{
-    AskForApproval, CallToolResult, CodexErrorInfo, DynamicToolCallOutputContentItem,
+    AgentStatus, AskForApproval, CallToolResult, CodexErrorInfo, DynamicToolCallOutputContentItem,
     DynamicToolCallRequest, ExecCommandSource, ExecCommandStatus, ExecOutputStream,
     ExecPolicyAmendment, FileChange, McpInvocation, McpStartupFailure, McpStartupStatus, ModeKind,
     ModelRerouteReason, NetworkApprovalContext, NetworkPolicyAmendment, ParsedCommand,
@@ -567,7 +567,16 @@ pub struct CollabAgentSpawnBeginEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabAgentSpawnEndEvent {
     pub call_id: String,
-    pub agents: Vec<serde_json::Value>,
+    pub sender_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_agent_role: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
+    pub status: AgentStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -575,6 +584,8 @@ pub struct CollabAgentInteractionBeginEvent {
     pub call_id: String,
     pub sender_thread_id: String,
     pub receiver_thread_id: String,
+    #[serde(default)]
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -582,42 +593,69 @@ pub struct CollabAgentInteractionEndEvent {
     pub call_id: String,
     pub sender_thread_id: String,
     pub receiver_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
+    pub status: AgentStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabWaitingBeginEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub receiver_thread_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabWaitingEndEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub statuses: std::collections::HashMap<String, AgentStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabCloseBeginEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub receiver_thread_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabCloseEndEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub receiver_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
+    pub status: AgentStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabResumeBeginEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub receiver_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollabResumeEndEvent {
     pub call_id: String,
-    pub thread_id: String,
+    pub sender_thread_id: String,
+    pub receiver_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
+    pub status: AgentStatus,
 }
 
 // ── EventMsg enum ────────────────────────────────────────────────

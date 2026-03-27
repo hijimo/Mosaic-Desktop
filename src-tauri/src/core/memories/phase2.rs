@@ -126,6 +126,7 @@ pub(super) async fn run(
         cwd: Some(root.clone()),
         fork: true,
         max_depth: None,
+        agent_type: None,
     };
 
     let (instance, _guards) = match agent_ctl.spawn_agent(spawn_opts, 0).await {

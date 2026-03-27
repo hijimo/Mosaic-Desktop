@@ -2,7 +2,7 @@ import { render, screen, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageList } from '@/components/chat/MessageList';
 import { useMessageStore } from '@/stores/messageStore';
-import type { TurnItem } from '@/types';
+import type { TurnGroup } from '@/types';
 
 // Mock Streamdown
 vi.mock('streamdown', () => ({
@@ -14,8 +14,12 @@ vi.mock('streamdown/styles.css', () => ({}));
 
 // Mock Message component
 vi.mock('@/components/chat/Message', () => ({
-  Message: ({ item }: { item: TurnItem }) => (
-    <div data-testid={`message-${item.id}`}>{item.type}</div>
+  Message: ({ group }: { group: TurnGroup }) => (
+    <div data-testid={`turn-${group.turn_id}`}>
+      {group.items.map((item) => (
+        <div key={item.id} data-testid={`message-${item.id}`}>{item.type}</div>
+      ))}
+    </div>
   ),
 }));
 
@@ -35,13 +39,18 @@ describe('MessageList', () => {
   });
 
   it('renders messages for a thread', () => {
-    const msgs: TurnItem[] = [
-      { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'Hi', text_elements: [] }] },
-      { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'Hello' }] },
+    const groups: TurnGroup[] = [
+      {
+        turn_id: 'turn-1',
+        items: [
+          { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'Hi', text_elements: [] }] },
+          { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'Hello' }] },
+        ],
+      },
     ];
     act(() => {
       useMessageStore.setState({
-        messagesByThread: new Map([['t1', msgs]]),
+        messagesByThread: new Map([['t1', groups]]),
       });
     });
 

@@ -189,12 +189,28 @@ impl Session {
         config: ConfigLayerStack,
         tx_event: async_channel::Sender<Event>,
     ) -> Self {
+        Self::new_with_agent_control(cwd, config, tx_event, None)
+    }
+
+    pub fn new_with_agent_control(
+        cwd: PathBuf,
+        config: ConfigLayerStack,
+        tx_event: async_channel::Sender<Event>,
+        agent_control: Option<std::sync::Arc<crate::core::agent::control::AgentControl>>,
+    ) -> Self {
         let mut registry = crate::core::tools::ToolRegistry::new();
         registry.register(Box::new(crate::core::tools::handlers::ShellHandler));
         registry.register(Box::new(crate::core::tools::handlers::ApplyPatchHandler));
         registry.register(Box::new(crate::core::tools::handlers::ListDirHandler));
         registry.register(Box::new(crate::core::tools::handlers::ReadFileHandler));
         registry.register(Box::new(crate::core::tools::handlers::GrepFilesHandler));
+
+        // Register multi-agent handler when AgentControl is available
+        if let Some(ctrl) = agent_control {
+            registry.register(Box::new(
+                crate::core::tools::handlers::multi_agents::MultiAgentHandler::new(ctrl, 0),
+            ));
+        }
 
         Self {
             id: uuid::Uuid::new_v4().to_string(),

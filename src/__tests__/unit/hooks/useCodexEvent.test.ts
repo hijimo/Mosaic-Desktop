@@ -110,9 +110,10 @@ describe('useCodexEvent', () => {
       item: { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'response' }] },
     });
 
-    const msgs = useMessageStore.getState().messagesByThread.get('t1');
-    expect(msgs).toHaveLength(1);
-    expect(msgs![0].type).toBe('AgentMessage');
+    const groups = useMessageStore.getState().messagesByThread.get('t1');
+    expect(groups).toHaveLength(1);
+    expect(groups![0].turn_id).toBe('turn-1');
+    expect(groups![0].items[0].type).toBe('AgentMessage');
   });
 
   it('handles error by stopping streaming and logging', () => {

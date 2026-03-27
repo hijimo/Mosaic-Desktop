@@ -4,7 +4,7 @@
 /// the control plane and individual agent instances.
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use tokio::sync::Mutex;
@@ -97,10 +97,10 @@ pub struct SpawnAgentOptions {
     pub model: Option<String>,
     pub sandbox_policy: Option<SandboxPolicy>,
     pub cwd: Option<PathBuf>,
-    /// When true, the agent runs in an independent execution branch.
     pub fork: bool,
-    /// Override the max recursion depth for this agent tree.
     pub max_depth: Option<usize>,
+    /// Agent role/type (e.g. "explorer", "default").
+    pub agent_type: Option<String>,
 }
 
 impl Default for SpawnAgentOptions {
@@ -111,6 +111,7 @@ impl Default for SpawnAgentOptions {
             cwd: None,
             fork: false,
             max_depth: None,
+            agent_type: None,
         }
     }
 }
@@ -120,9 +121,9 @@ impl Default for SpawnAgentOptions {
 
 // ── ThreadManagerState ───────────────────────────────────────────
 
-/// Internal state tracking all active agents via weak references.
+/// Internal state tracking all active agents.
 pub struct ThreadManagerState {
-    agents: HashMap<String, Weak<AgentInstance>>,
+    agents: HashMap<String, Arc<AgentInstance>>,
     next_nickname: u32,
 }
 
@@ -141,16 +142,19 @@ impl ThreadManagerState {
         nickname
     }
 
-    /// Prune entries whose `Weak` has been dropped.
+    /// Prune entries that have been shut down or errored.
     fn prune_dead(&mut self) {
-        self.agents.retain(|_, weak| weak.strong_count() > 0);
+        self.agents.retain(|_, instance| {
+            let status = instance.status.try_lock();
+            match status {
+                Ok(s) => !matches!(*s, AgentStatus::Shutdown | AgentStatus::NotFound),
+                Err(_) => true, // keep if we can't check
+            }
+        });
     }
 
     fn active_count(&self) -> usize {
-        self.agents
-            .values()
-            .filter(|w| w.strong_count() > 0)
-            .count()
+        self.agents.len()
     }
 }
 
@@ -250,7 +254,7 @@ impl AgentControl {
             sandbox,
         ));
 
-        mgr.agents.insert(thread_id.clone(), Arc::downgrade(&instance));
+        mgr.agents.insert(thread_id.clone(), instance.clone());
 
         // Commit the reservation, registering the thread as active.
         reservation.commit(&thread_id);
@@ -344,7 +348,7 @@ impl AgentControl {
         let mgr = self.state.lock().await;
         mgr.agents
             .get(agent_id)
-            .and_then(Weak::upgrade)
+            .cloned()
             .ok_or_else(|| {
                 CodexError::new(
                     ErrorCode::SessionError,
@@ -659,30 +663,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn weak_reference_cleanup_on_drop() {
+    async fn close_removes_agent_from_registry() {
         let ctrl = make_control(5);
         let (instance, _guards) = ctrl
             .spawn_agent(SpawnAgentOptions::default(), 0)
             .await
             .unwrap();
         let id = instance.thread_id.clone();
-
         assert_eq!(ctrl.active_count().await, 1);
 
-        // Drop the strong reference — the weak ref in the registry becomes stale.
-        drop(instance);
-        drop(_guards);
+        ctrl.close_agent(&id).await.unwrap();
+        assert_eq!(ctrl.active_count().await, 0);
 
-        // After prune, the agent should be gone.
-        let result = ctrl
-            .send_input(
-                &id,
-                UserInput::Text {
-                    text: "hello".into(),
-                    text_elements: vec![],
-                },
-            )
-            .await;
+        let result = ctrl.send_input(&id, UserInput::Text {
+            text: "hello".into(), text_elements: vec![],
+        }).await;
         assert!(result.is_err());
     }
 

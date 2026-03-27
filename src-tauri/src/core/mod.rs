@@ -35,6 +35,7 @@ pub mod skills;
 pub mod tasks;
 pub mod state_db;
 pub mod text_encoding;
+pub mod thread_history;
 pub mod thread_manager;
 pub mod tools;
 pub mod truncation;

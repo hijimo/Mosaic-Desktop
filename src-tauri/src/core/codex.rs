@@ -42,6 +42,8 @@ pub struct Codex {
     skills_manager: Arc<SkillsManager>,
     /// Dynamic tool handler for managing dynamic tool lifecycle.
     dynamic_tool_handler: Arc<DynamicToolHandler>,
+    /// Agent control for multi-agent collaboration.
+    agent_control: Arc<crate::core::agent::control::AgentControl>,
 }
 
 use super::initial_history::InitialHistory;
@@ -60,6 +62,18 @@ impl Codex {
             .unwrap_or_else(|| cwd.join(".codex"));
         let skills_manager = SkillsManager::new(codex_home);
         let dynamic_tool_handler = DynamicToolHandler::new(eq_tx.clone());
+        let agent_control = Arc::new(crate::core::agent::control::AgentControl::new(
+            3, // max recursion depth
+            cwd.clone(),
+            crate::protocol::types::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![cwd.clone()],
+                read_only_access: Default::default(),
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            eq_tx.clone(),
+        ));
         Self {
             sq_rx,
             eq_tx,
@@ -69,6 +83,7 @@ impl Codex {
             running: Arc::new(Mutex::new(false)),
             skills_manager: Arc::new(skills_manager),
             dynamic_tool_handler: Arc::new(dynamic_tool_handler),
+            agent_control,
         }
     }
 
@@ -119,7 +134,12 @@ impl Codex {
 
         // Emit SessionConfigured on startup
         let merged_config = self.config.merge();
-        let mut session = Session::new(self.cwd.clone(), self.config.clone(), self.eq_tx.clone());
+        let mut session = Session::new_with_agent_control(
+            self.cwd.clone(),
+            self.config.clone(),
+            self.eq_tx.clone(),
+            Some(self.agent_control.clone()),
+        );
         // Apply the profile from config so TurnContext picks up model_provider etc.
         session.set_active_profile(merged_config.profile.clone());
         let session_id = session.id().to_string();

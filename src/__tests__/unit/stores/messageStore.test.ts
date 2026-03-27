@@ -24,12 +24,13 @@ describe('messageStore', () => {
 
   it('appendMessage adds to correct thread', () => {
     const { appendMessage } = useMessageStore.getState();
-    appendMessage('t1', userMsg);
-    appendMessage('t1', agentMsg);
-    appendMessage('t2', userMsg);
+    appendMessage('t1', 'turn-1', userMsg);
+    appendMessage('t1', 'turn-1', agentMsg);
+    appendMessage('t2', 'turn-2', userMsg);
 
     const state = useMessageStore.getState();
-    expect(state.messagesByThread.get('t1')).toHaveLength(2);
+    expect(state.messagesByThread.get('t1')).toHaveLength(1);
+    expect(state.messagesByThread.get('t1')![0].items).toHaveLength(2);
     expect(state.messagesByThread.get('t2')).toHaveLength(1);
   });
 
@@ -64,7 +65,7 @@ describe('messageStore', () => {
   });
 
   it('clearThread removes messages for a thread', () => {
-    useMessageStore.getState().appendMessage('t1', userMsg);
+    useMessageStore.getState().appendMessage('t1', 'turn-1', userMsg);
     useMessageStore.getState().clearThread('t1');
     expect(useMessageStore.getState().messagesByThread.has('t1')).toBe(false);
   });

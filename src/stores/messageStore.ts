@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TurnItem } from '@/types';
+import type { TurnItem, TurnGroup } from '@/types';
 
 interface StreamingItem {
   threadId: string;
@@ -21,11 +21,11 @@ interface StreamingTurn {
 }
 
 interface MessageState {
-  messagesByThread: Map<string, TurnItem[]>;
+  messagesByThread: Map<string, TurnGroup[]>;
   streamingTurn: StreamingTurn | null;
 
-  appendMessage: (threadId: string, item: TurnItem) => void;
-  setMessages: (threadId: string, items: TurnItem[]) => void;
+  appendMessage: (threadId: string, turnId: string, item: TurnItem) => void;
+  setMessages: (threadId: string, groups: TurnGroup[]) => void;
   startStreaming: (turnId: string) => void;
   stopStreaming: () => void;
   clearThread: (threadId: string) => void;
@@ -36,25 +36,31 @@ interface MessageState {
   updateReasoningContentDelta: (itemId: string, delta: string, summaryIndex: number) => void;
   updateReasoningRawContentDelta: (itemId: string, delta: string, contentIndex: number) => void;
   updatePlanDelta: (itemId: string, delta: string) => void;
-  completeStreamingItem: (threadId: string, item: TurnItem) => void;
+  completeStreamingItem: (threadId: string, turnId: string, item: TurnItem) => void;
 }
 
 export const useMessageStore = create<MessageState>((set) => ({
   messagesByThread: new Map(),
   streamingTurn: null,
 
-  appendMessage: (threadId, item) =>
+  appendMessage: (threadId, turnId, item) =>
     set((state) => {
       const next = new Map(state.messagesByThread);
-      const msgs = next.get(threadId) ?? [];
-      next.set(threadId, [...msgs, item]);
+      const groups = next.get(threadId) ?? [];
+      const last = groups[groups.length - 1];
+      if (last && last.turn_id === turnId) {
+        const updated = [...groups.slice(0, -1), { ...last, items: [...last.items, item] }];
+        next.set(threadId, updated);
+      } else {
+        next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
+      }
       return { messagesByThread: next };
     }),
 
-  setMessages: (threadId, items) =>
+  setMessages: (threadId, groups) =>
     set((state) => {
       const next = new Map(state.messagesByThread);
-      next.set(threadId, items);
+      next.set(threadId, groups);
       return { messagesByThread: next };
     }),
 
@@ -165,15 +171,22 @@ export const useMessageStore = create<MessageState>((set) => ({
       };
     }),
 
-  completeStreamingItem: (threadId, item) =>
+  completeStreamingItem: (threadId, turnId, item) =>
     set((state) => {
-      // Append the completed item to the message list
+      // Append the completed item to the appropriate turn group
       const next = new Map(state.messagesByThread);
-      const msgs = next.get(threadId) ?? [];
-      // Deduplicate: don't add if an item with the same id already exists
+      const groups = next.get(threadId) ?? [];
       const itemId = getItemId(item);
-      if (!msgs.some((m) => getItemId(m) === itemId)) {
-        next.set(threadId, [...msgs, item]);
+
+      // Find or create the matching turn group
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.turn_id === turnId) {
+        if (!lastGroup.items.some((m) => getItemId(m) === itemId)) {
+          const updated = [...groups.slice(0, -1), { ...lastGroup, items: [...lastGroup.items, item] }];
+          next.set(threadId, updated);
+        }
+      } else {
+        next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
       }
       // Remove from streaming items
       if (state.streamingTurn) {

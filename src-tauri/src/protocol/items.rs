@@ -5,6 +5,8 @@ use super::event::{
     EventMsg, UserMessageEvent, WebSearchEndEvent,
 };
 use super::types::{ByteRange, MessagePhase, TextElement, UserInput, WebSearchAction};
+use std::path::PathBuf;
+use std::collections::HashMap;
 
 // ── TurnItem ─────────────────────────────────────────────────────
 
@@ -18,6 +20,14 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ContextCompaction(ContextCompactionItem),
+    CommandExecution(CommandExecutionItem),
+    McpToolCall(McpToolCallItem),
+    DynamicToolCall(DynamicToolCallItem),
+    FileChange(FileChangeItem),
+    ImageView(ImageViewItem),
+    EnteredReviewMode(EnteredReviewModeItem),
+    ExitedReviewMode(ExitedReviewModeItem),
+    CollabToolCall(CollabToolCallItem),
 }
 
 impl TurnItem {
@@ -29,6 +39,14 @@ impl TurnItem {
             Self::Reasoning(i) => &i.id,
             Self::WebSearch(i) => &i.id,
             Self::ContextCompaction(i) => &i.id,
+            Self::CommandExecution(i) => &i.id,
+            Self::McpToolCall(i) => &i.id,
+            Self::DynamicToolCall(i) => &i.id,
+            Self::FileChange(i) => &i.id,
+            Self::ImageView(i) => &i.id,
+            Self::EnteredReviewMode(i) => &i.id,
+            Self::ExitedReviewMode(i) => &i.id,
+            Self::CollabToolCall(i) => &i.id,
         }
     }
 }
@@ -73,12 +91,205 @@ pub struct ReasoningItem {
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
-    pub action: WebSearchAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<WebSearchAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextCompactionItem {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandExecutionItem {
+    pub id: String,
+    pub command: String,
+    pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<String>,
+    pub status: CommandExecutionStatus,
+    #[serde(default)]
+    pub command_actions: Vec<CommandAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregated_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CommandExecutionStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Declined,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum CommandAction {
+    Read { command: String, name: String, path: PathBuf },
+    ListFiles { command: String, path: Option<String> },
+    Search { command: String, query: Option<String>, path: Option<String> },
+    Unknown { command: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolCallItem {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub status: McpToolCallStatus,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<McpToolCallResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<McpToolCallError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum McpToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolCallResult {
+    #[serde(default)]
+    pub content: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolCallError {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DynamicToolCallItem {
+    pub id: String,
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+    pub status: DynamicToolCallStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_items: Option<Vec<crate::protocol::types::DynamicToolCallOutputContentItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DynamicToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileChangeItem {
+    pub id: String,
+    pub changes: Vec<FileUpdateChange>,
+    pub status: PatchApplyItemStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PatchApplyItemStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Declined,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileUpdateChange {
+    pub path: String,
+    pub kind: PatchChangeKind,
+    #[serde(default)]
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PatchChangeKind {
+    Add,
+    Delete,
+    Update {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        move_path: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageViewItem {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnteredReviewModeItem {
+    pub id: String,
+    pub review: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExitedReviewModeItem {
+    pub id: String,
+    pub review: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollabToolCallItem {
+    pub id: String,
+    pub tool: CollabAgentTool,
+    pub status: CollabAgentToolCallStatus,
+    pub sender_thread_id: String,
+    #[serde(default)]
+    pub receiver_thread_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub agents_states: HashMap<String, CollabAgentState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CollabAgentTool {
+    SpawnAgent,
+    SendInput,
+    ResumeAgent,
+    Wait,
+    CloseAgent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CollabAgentToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollabAgentState {
+    pub status: CollabAgentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CollabAgentStatus {
+    PendingInit,
+    Running,
+    Completed,
+    Errored,
+    Shutdown,
+    NotFound,
 }
 
 impl Default for ContextCompactionItem {
@@ -215,7 +426,7 @@ impl WebSearchItem {
         EventMsg::WebSearchEnd(WebSearchEndEvent {
             call_id: self.id.clone(),
             query: self.query.clone(),
-            action: self.action.clone(),
+            action: self.action.clone().unwrap_or(WebSearchAction::Other),
         })
     }
 }
@@ -239,6 +450,10 @@ impl TurnItem {
             Self::Reasoning(i) => i.as_legacy_events(show_raw_reasoning),
             Self::WebSearch(i) => vec![i.as_legacy_event()],
             Self::ContextCompaction(i) => vec![i.as_legacy_event()],
+            Self::CommandExecution(_) | Self::McpToolCall(_) | Self::DynamicToolCall(_)
+            | Self::FileChange(_)
+            | Self::ImageView(_) | Self::EnteredReviewMode(_) | Self::ExitedReviewMode(_)
+            | Self::CollabToolCall(_) => Vec::new(),
         }
     }
 }

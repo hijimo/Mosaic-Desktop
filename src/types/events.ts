@@ -213,9 +213,68 @@ export type TurnItem =
       type: "WebSearch";
       id: string;
       query: string;
-      action: WebSearchAction;
+      action?: WebSearchAction;
     }
-  | { type: "ContextCompaction"; id: string };
+  | { type: "ContextCompaction"; id: string }
+  | {
+      type: "CommandExecution";
+      id: string;
+      command: string;
+      cwd: string;
+      process_id?: string;
+      status: "InProgress" | "Completed" | "Failed" | "Declined";
+      command_actions: { type: string; command: string; [key: string]: unknown }[];
+      aggregated_output?: string;
+      exit_code: number | null;
+      duration_ms?: number;
+    }
+  | {
+      type: "McpToolCall";
+      id: string;
+      server: string;
+      tool: string;
+      status: "InProgress" | "Completed" | "Failed";
+      arguments: unknown;
+      result?: { content: unknown[]; structured_content?: unknown };
+      error?: { message: string };
+      duration_ms?: number;
+    }
+  | {
+      type: "DynamicToolCall";
+      id: string;
+      tool: string;
+      arguments: unknown;
+      status: "InProgress" | "Completed" | "Failed";
+      content_items?: unknown[];
+      success?: boolean;
+      duration_ms?: number;
+    }
+  | {
+      type: "FileChange";
+      id: string;
+      changes: { path: string; kind: { type: string; move_path?: string }; diff: string }[];
+      status: "InProgress" | "Completed" | "Failed" | "Declined";
+    }
+  | { type: "ImageView"; id: string; path: string }
+  | { type: "EnteredReviewMode"; id: string; review: string }
+  | { type: "ExitedReviewMode"; id: string; review: string }
+  | {
+      type: "CollabToolCall";
+      id: string;
+      tool: "SpawnAgent" | "SendInput" | "ResumeAgent" | "Wait" | "CloseAgent";
+      status: "InProgress" | "Completed" | "Failed";
+      sender_thread_id: string;
+      receiver_thread_ids: string[];
+      prompt?: string;
+      agents_states: Record<string, { status: string; message?: string }>;
+    };
+
+export interface TurnGroup {
+  turn_id: string;
+  items: TurnItem[];
+  status?: "Completed" | "Interrupted" | "Failed" | "InProgress";
+  error?: { message: string; codex_error_info?: string };
+}
 
 // ── Event payload structs ────────────────────────────────────────
 

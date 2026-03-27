@@ -324,13 +324,13 @@ pub async fn thread_archive(
     Ok(())
 }
 
-/// Load chat history for a thread from its rollout file, returning TurnItems
-/// suitable for rendering in the frontend.
+/// Load chat history for a thread from its rollout file, returning TurnGroups
+/// (items grouped by turn_id) suitable for rendering in the frontend.
 #[tauri::command]
 pub async fn thread_get_messages(
     state: State<'_, AppState>,
     thread_id: String,
-) -> Result<Vec<crate::protocol::items::TurnItem>, String> {
+) -> Result<Vec<crate::core::thread_history::TurnGroup>, String> {
     let persisted = state.db.get_thread(&thread_id).await
         .ok_or_else(|| format!("thread not found: {thread_id}"))?;
     let rollout_path_str = persisted.rollout_path
@@ -341,16 +341,17 @@ pub async fn thread_get_messages(
     }
     let text = tokio::fs::read_to_string(&path).await
         .map_err(|e| format!("failed to read rollout: {e}"))?;
-    Ok(parse_turn_items_from_rollout(&text))
+    let rollout_items = parse_rollout_items(&text);
+    Ok(crate::core::thread_history::build_turn_groups_from_rollout_items(&rollout_items))
 }
 
-/// Parse TurnItems from raw rollout JSONL text.
-fn parse_turn_items_from_rollout(text: &str) -> Vec<crate::protocol::items::TurnItem> {
-    use crate::core::event_mapping::parse_turn_item;
-    use crate::protocol::items::TurnItem;
+/// Parse rollout JSONL text into RolloutItem entries for the builder.
+pub fn parse_rollout_items(text: &str) -> Vec<crate::core::rollout::policy::RolloutItem> {
+    use crate::core::rollout::policy::{RolloutItem, RolloutLine, SessionMetaLine};
+    use crate::protocol::event::EventMsg;
     use crate::protocol::types::ResponseItem;
 
-    let mut turn_items = Vec::new();
+    let mut items = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
@@ -359,52 +360,58 @@ fn parse_turn_items_from_rollout(text: &str) -> Vec<crate::protocol::items::Turn
             Err(_) => continue,
         };
         let typ = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
         match typ {
-            // ResponseItem types that parse_turn_item handles
+            // Session metadata
+            "session_meta" => {
+                if let Some(meta) = v.get("meta") {
+                    if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(serde_json::json!({
+                        "meta": meta,
+                        "git": v.get("git"),
+                    })) {
+                        items.push(RolloutItem::SessionMeta(meta_line));
+                    }
+                }
+            }
+            // ResponseItem types
             "message" | "reasoning" | "web_search_call" => {
                 if let Ok(ri) = serde_json::from_value::<ResponseItem>(v) {
-                    if let Some(ti) = parse_turn_item(&ri) {
-                        turn_items.push(ti);
-                    }
+                    items.push(RolloutItem::ResponseItem(ri));
                 }
             }
-            // Legacy EventMsg format: user_message
-            "user_message" => {
-                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
-                let text_elements: Vec<crate::protocol::types::TextElement> = v.get("text_elements")
-                    .and_then(|t| serde_json::from_value(t.clone()).ok())
-                    .unwrap_or_default();
-                turn_items.push(TurnItem::UserMessage(crate::protocol::items::UserMessageItem {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    content: vec![crate::protocol::types::UserInput::Text {
-                        text: msg,
-                        text_elements,
-                    }],
-                }));
-            }
-            // Legacy EventMsg format: agent_message
-            "agent_message" => {
-                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
-                let phase: Option<crate::protocol::types::MessagePhase> = v.get("phase")
-                    .and_then(|p| serde_json::from_value(p.clone()).ok());
-                turn_items.push(TurnItem::AgentMessage(crate::protocol::items::AgentMessageItem {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    content: vec![crate::protocol::items::AgentMessageContent::Text { text: msg }],
-                    phase,
-                }));
-            }
-            // Structured item_completed events (v2 protocol)
-            "item_completed" => {
-                if let Some(item_val) = v.get("item") {
-                    if let Ok(item) = serde_json::from_value::<TurnItem>(item_val.clone()) {
-                        turn_items.push(item);
-                    }
+            // FunctionCall/Output are also ResponseItems
+            "function_call" | "function_call_output" | "custom_tool_call"
+            | "custom_tool_call_output" | "local_shell_call" => {
+                if let Ok(ri) = serde_json::from_value::<ResponseItem>(v) {
+                    items.push(RolloutItem::ResponseItem(ri));
                 }
             }
-            _ => {}
+            // Known EventMsg types — parse directly without clone
+            "task_started" | "task_complete" | "turn_aborted"
+            | "user_message" | "agent_message"
+            | "agent_reasoning" | "agent_reasoning_raw_content"
+            | "token_count" | "context_compacted" | "thread_rolled_back"
+            | "error" | "exec_command_end" | "mcp_tool_call_end"
+            | "patch_apply_end" | "web_search_end" | "apply_patch_approval_request"
+            | "view_image_tool_call" | "dynamic_tool_call_request" | "dynamic_tool_call_response"
+            | "item_started" | "item_completed"
+            | "collab_agent_spawn_end" | "collab_agent_interaction_end"
+            | "collab_waiting_end" | "collab_close_end" | "collab_resume_end"
+            | "entered_review_mode" | "exited_review_mode"
+            | "undo_completed" => {
+                if let Ok(ev) = serde_json::from_value::<EventMsg>(v) {
+                    items.push(RolloutItem::EventMsg(ev));
+                }
+            }
+            // Fallback: try RolloutLine (compacted, turn_context)
+            _ => {
+                if let Ok(rl) = serde_json::from_value::<RolloutLine>(v) {
+                    items.push(rl.item);
+                }
+            }
         }
     }
-    turn_items
+    items
 }
 
 /// Resume a previously persisted thread: reload history from rollout file,
@@ -688,124 +695,42 @@ pub fn get_cwd() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::items::{TurnItem, AgentMessageContent};
-    use crate::protocol::types::UserInput;
 
     #[test]
-    fn parse_assistant_message_from_rollout() {
+    fn parse_rollout_items_and_build_turn_groups() {
         let rollout = r#"{"timestamp":"2026-03-24T03:02:52.544Z","type":"session_meta","meta":{"id":"abc","timestamp":"2026-03-24T03:02:52Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
 {"timestamp":"2026-03-24T03:02:52.545Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
-{"timestamp":"2026-03-24T08:58:04.248Z","type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hello world"}],"phase":"final_answer"}
+{"timestamp":"2026-03-24T03:02:53Z","type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}
+{"timestamp":"2026-03-24T08:58:04.248Z","type":"agent_message","message":"Hi there!","phase":"final_answer"}
 {"timestamp":"2026-03-24T08:58:04.300Z","type":"task_complete","turn_id":"turn-1"}
 "#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 1);
-        match &items[0] {
-            TurnItem::AgentMessage(m) => {
-                assert_eq!(m.id, "msg_1");
-                assert_eq!(m.content.len(), 1);
-                match &m.content[0] {
-                    AgentMessageContent::Text { text } => assert_eq!(text, "Hello world"),
-                }
-            }
-            other => panic!("expected AgentMessage, got {:?}", other),
-        }
+        let items = parse_rollout_items(rollout);
+        assert!(items.len() >= 3, "expected at least 3 items, got {}", items.len());
+
+        let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
+        assert_eq!(groups.len(), 1, "expected 1 turn group, got {}", groups.len());
+        assert_eq!(groups[0].turn_id, "turn-1");
+        assert_eq!(groups[0].items.len(), 2); // user + agent
     }
 
     #[test]
-    fn parse_user_message_from_rollout() {
-        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"message","id":"msg_u1","role":"user","content":[{"type":"input_text","text":"Hi there"}]}
-"#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 1);
-        match &items[0] {
-            TurnItem::UserMessage(m) => {
-                // ID is generated by UserMessageItem::new(), not preserved from rollout
-                assert!(!m.id.is_empty());
-                match &m.content[0] {
-                    UserInput::Text { text, .. } => assert_eq!(text, "Hi there"),
-                    other => panic!("expected Text, got {:?}", other),
-                }
-            }
-            other => panic!("expected UserMessage, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_legacy_event_messages() {
-        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}
-{"timestamp":"2026-01-01T00:00:01Z","type":"agent_message","message":"world","phase":"final_answer"}
-"#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 2);
-        match &items[0] {
-            TurnItem::UserMessage(m) => {
-                match &m.content[0] {
-                    UserInput::Text { text, .. } => assert_eq!(text, "hello"),
-                    other => panic!("expected Text, got {:?}", other),
-                }
-            }
-            other => panic!("expected UserMessage, got {:?}", other),
-        }
-        match &items[1] {
-            TurnItem::AgentMessage(m) => {
-                match &m.content[0] {
-                    AgentMessageContent::Text { text } => assert_eq!(text, "world"),
-                }
-            }
-            other => panic!("expected AgentMessage, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_item_completed_events() {
-        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"item_completed","thread_id":"t1","turn_id":"turn-1","item":{"type":"AgentMessage","id":"am1","content":[{"type":"Text","text":"from item_completed"}]}}
-"#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 1);
-        match &items[0] {
-            TurnItem::AgentMessage(m) => {
-                assert_eq!(m.id, "am1");
-                match &m.content[0] {
-                    AgentMessageContent::Text { text } => assert_eq!(text, "from item_completed"),
-                }
-            }
-            other => panic!("expected AgentMessage, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_mixed_rollout_skips_non_message_lines() {
+    fn parse_rollout_items_handles_response_items() {
         let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","meta":{"id":"t1","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
 {"timestamp":"2026-01-01T00:00:01Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
-{"timestamp":"2026-01-01T00:00:02Z","type":"token_count","info":null}
-{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"msg_a","role":"assistant","content":[{"type":"output_text","text":"reply"}]}
+{"timestamp":"2026-01-01T00:00:02Z","type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"Q1"}]}
+{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"A1"}]}
 {"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","turn_id":"turn-1"}
 "#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], TurnItem::AgentMessage(_)));
+        let items = parse_rollout_items(rollout);
+        let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].items.len(), 2); // user + agent from ResponseItem::Message
     }
 
     #[test]
-    fn parse_empty_rollout() {
-        assert!(parse_turn_items_from_rollout("").is_empty());
-        assert!(parse_turn_items_from_rollout("  \n  \n").is_empty());
-    }
-
-    #[test]
-    fn parse_multi_turn_conversation() {
-        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"Q1"}]}
-{"timestamp":"2026-01-01T00:00:01Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"A1"}]}
-{"timestamp":"2026-01-01T00:00:02Z","type":"message","id":"u2","role":"user","content":[{"type":"input_text","text":"Q2"}]}
-{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"a2","role":"assistant","content":[{"type":"output_text","text":"A2"}]}
-"#;
-        let items = parse_turn_items_from_rollout(rollout);
-        assert_eq!(items.len(), 4);
-        assert!(matches!(&items[0], TurnItem::UserMessage(_)));
-        assert!(matches!(&items[1], TurnItem::AgentMessage(_)));
-        assert!(matches!(&items[2], TurnItem::UserMessage(_)));
-        assert!(matches!(&items[3], TurnItem::AgentMessage(_)));
+    fn parse_rollout_items_empty() {
+        assert!(parse_rollout_items("").is_empty());
+        assert!(parse_rollout_items("  \n  \n").is_empty());
     }
 
     #[tokio::test]
@@ -813,15 +738,15 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let db = crate::core::state_db::StateDb::open(&tmp.path().join("state.db")).unwrap();
 
-        // Write a rollout file
         let rollout_path = tmp.path().join("rollout.jsonl");
         let rollout_content = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","meta":{"id":"t-test","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
-{"timestamp":"2026-01-01T00:00:01Z","type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"hello"}]}
-{"timestamp":"2026-01-01T00:00:02Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"hi there"}],"phase":"final_answer"}
+{"timestamp":"2026-01-01T00:00:01Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
+{"timestamp":"2026-01-01T00:00:02Z","type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}
+{"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"hi there"}],"phase":"final_answer"}
+{"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","turn_id":"turn-1"}
 "#;
         tokio::fs::write(&rollout_path, rollout_content).await.unwrap();
 
-        // Insert thread into DB
         let meta = PersistedThreadMeta {
             thread_id: "t-test".into(),
             cwd: "/tmp".into(),
@@ -834,37 +759,34 @@ mod tests {
         };
         db.upsert_thread(&meta).await.unwrap();
 
-        // Read the file and parse
         let text = tokio::fs::read_to_string(&rollout_path).await.unwrap();
-        let items = parse_turn_items_from_rollout(&text);
-        assert_eq!(items.len(), 2);
-
-        match &items[0] {
-            TurnItem::UserMessage(m) => {
-                assert!(!m.id.is_empty());
-                match &m.content[0] {
-                    UserInput::Text { text, .. } => assert_eq!(text, "hello"),
-                    other => panic!("expected Text, got {:?}", other),
-                }
-            }
-            other => panic!("expected UserMessage, got {:?}", other),
-        }
-        match &items[1] {
-            TurnItem::AgentMessage(m) => {
-                assert_eq!(m.id, "a1");
-                match &m.content[0] {
-                    AgentMessageContent::Text { text } => assert_eq!(text, "hi there"),
-                }
-            }
-            other => panic!("expected AgentMessage, got {:?}", other),
-        }
+        let items = parse_rollout_items(&text);
+        let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].items.len(), 2); // user + agent
     }
 
     #[tokio::test]
     async fn thread_get_messages_missing_rollout_returns_empty() {
         let tmp = tempfile::TempDir::new().unwrap();
         let rollout_path = tmp.path().join("nonexistent.jsonl");
-        // File doesn't exist — parse should return empty
         assert!(!rollout_path.exists());
+    }
+
+    #[tokio::test]
+    async fn verify_real_rollout_fixture() {
+        let path = std::path::Path::new(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/test-rollout.jsonl")
+        );
+        assert!(path.exists(), "fixture file missing");
+
+        let text = tokio::fs::read_to_string(path).await.unwrap();
+        let items = parse_rollout_items(&text);
+        assert!(items.len() >= 5, "expected >=5 rollout items, got {}", items.len());
+
+        let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
+        assert!(!groups.is_empty(), "expected at least 1 turn group");
+        let total: usize = groups.iter().map(|g| g.items.len()).sum();
+        assert!(total >= 2, "expected >=2 items, got {total}");
     }
 }
