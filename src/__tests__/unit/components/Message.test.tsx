@@ -90,4 +90,43 @@ describe('Message', () => {
     expect(screen.getByText('思考过程')).toBeInTheDocument();
     expect(screen.getByText('The answer is 4.')).toBeInTheDocument();
   });
+
+  it('renders multiple agent segments in one assistant message flow', () => {
+    const group: TurnGroup = {
+      turn_id: 'turn-1',
+      items: [
+        { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: '我会先查找相关技能。' }] },
+        {
+          type: 'McpToolCall',
+          id: 'mcp-1',
+          server: 'filesystem',
+          tool: 'read_file',
+          status: 'Completed',
+          arguments: { path: '/tmp/example.txt' },
+        },
+        { type: 'AgentMessage', id: 'a2', content: [{ type: 'Text', text: '我现在在搜索相关技能。' }] },
+        {
+          type: 'CommandExecution',
+          id: 'cmd-1',
+          command: 'rg desktop automation',
+          cwd: '/tmp',
+          status: 'Completed',
+          command_actions: [],
+          aggregated_output: 'desktop automation',
+          exit_code: 0,
+        },
+        { type: 'AgentMessage', id: 'a3', content: [{ type: 'Text', text: '我查了几组关键词。' }] },
+      ],
+    };
+
+    render(<Message group={group} />);
+
+    expect(screen.getByTestId('agent-turn-content')).toBeInTheDocument();
+    expect(screen.getAllByTestId('agent-message-segment')).toHaveLength(3);
+    expect(screen.getByText('我会先查找相关技能。')).toBeInTheDocument();
+    expect(screen.getByText('我现在在搜索相关技能。')).toBeInTheDocument();
+    expect(screen.getByText('我查了几组关键词。')).toBeInTheDocument();
+    expect(screen.getByText(/read_file/)).toBeInTheDocument();
+    expect(screen.getByText(/bash/)).toBeInTheDocument();
+  });
 });
