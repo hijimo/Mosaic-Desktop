@@ -73,6 +73,8 @@ bytes = "1"
 http = "1"
 url = "2"
 zeroize = "1"
+tauri-plugin-vnidrop-share = "0.2.1"
+aliyun-oss-rust-sdk = "0.2.2"
 
 [dev-dependencies]
 proptest = "1"

@@ -17,6 +17,7 @@ import { CodeExecutionBlock } from './agent/CodeExecutionBlock';
 import { ApprovalRequestCard } from './agent/ApprovalRequestCard';
 import { CodeDiffBlock } from './agent/CodeDiffBlock';
 import { ClarificationCard } from './agent/ClarificationCard';
+import { MessageActionBar } from './agent/MessageActionBar';
 
 interface MessageProps {
   group: TurnGroup;
@@ -43,6 +44,9 @@ export function Message({
     (i): i is TurnItem & { type: 'UserMessage' } => i.type === 'UserMessage',
   );
   const agentItems = items.filter((i) => i.type !== 'UserMessage');
+  const firstAgentMessage = items.find(
+    (item): item is Extract<TurnItem, { type: 'AgentMessage' }> => item.type === 'AgentMessage',
+  );
 
   const renderAgentItem = (item: Exclude<TurnItem, { type: 'UserMessage' }>): React.ReactNode => {
     switch (item.type) {
@@ -285,6 +289,13 @@ export function Message({
 
             {/* All agent-side items in order */}
             {agentItems.map((item) => renderAgentItem(item))}
+
+            {firstAgentMessage ? (
+              <MessageActionBar
+                group={group}
+                messageId={firstAgentMessage.id}
+              />
+            ) : null}
           </Box>
         </Box>
       )}

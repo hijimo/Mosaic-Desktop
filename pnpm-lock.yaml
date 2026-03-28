@@ -29,6 +29,9 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2
         version: 2.5.3
+      '@vnidrop/tauri-plugin-share':
+        specifier: ^0.2.1
+        version: 0.2.1
       classnames:
         specifier: ^2.5.1
         version: 2.5.1
@@ -1166,6 +1169,9 @@ packages:
 
   '@vitest/utils@4.1.0':
     resolution: {integrity: sha512-XfPXT6a8TZY3dcGY8EdwsBulFCIw+BeeX0RZn2x/BtiY/75YGh8FeWGG8QISN/WhaqSrE2OrlDgtF8q5uhOTmw==}
+
+  '@vnidrop/tauri-plugin-share@0.2.1':
+    resolution: {integrity: sha512-nZtrAZAO9bk+kUFCF0HMxEFaUzZpta4iPrTBpIFH5E5jP4wr6MWVZk3/gotWeEKAYsbD/f4RU8kDYSPcYo49lg==}
 
   acorn@8.16.0:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
@@ -3591,6 +3597,10 @@ snapshots:
       '@vitest/pretty-format': 4.1.0
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@vnidrop/tauri-plugin-share@0.2.1':
+    dependencies:
+      '@tauri-apps/api': 2.10.1
 
   acorn@8.16.0: {}
 
