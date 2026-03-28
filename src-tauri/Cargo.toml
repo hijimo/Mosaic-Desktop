@@ -39,6 +39,8 @@ indexmap = "2"
 sha1 = "0.10"
 toml = "0.8"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+dotenvy = "0.15"
 rand = "0.9"
 thiserror = "1"
 regex = "1"
@@ -82,4 +84,3 @@ wiremock = "0.6"
 tempfile = "3"
 insta = { version = "1", features = ["json"] }
 pretty_assertions = "1"
-

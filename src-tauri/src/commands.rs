@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
+use tracing::error;
 
 use crate::config::{deserialize_toml, ConfigLayerStack};
 use crate::core::rollout::{RolloutRecorder, RolloutRecorderParams};
@@ -697,7 +698,10 @@ pub fn get_cwd() -> Result<String, String> {
 pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageResponse, String> {
     crate::share::share_message(payload)
         .await
-        .map_err(|e| format!("share message failed: {e:#}"))
+        .map_err(|e| {
+            error!("share message failed: {e:#}");
+            format!("share message failed: {e:#}")
+        })
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ mod frontend_compat_tests;
 mod e2e_smoke_tests;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -34,9 +35,34 @@ use commands::AppState;
 use config::ConfigLayerStack;
 use core::state_db::StateDb;
 
+fn load_runtime_env() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let env_path = manifest_dir.join(".env");
+    let production_env_path = manifest_dir.join(".env.production");
+
+    if env_path.is_file() {
+        if let Err(error) = dotenvy::from_path_override(&env_path) {
+            eprintln!("failed to load {}: {error}", env_path.display());
+        }
+    }
+
+    if !cfg!(debug_assertions) && production_env_path.is_file() {
+        if let Err(error) = dotenvy::from_path_override(&production_env_path) {
+            eprintln!("failed to load {}: {error}", production_env_path.display());
+        }
+    }
+}
+
 #[cfg(not(fuzzing))]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    load_runtime_env();
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false)
+        .try_init();
+
     // Load ~/.codex/config.toml as the User layer
     let mut config = ConfigLayerStack::new();
     if let Some(home) = std::env::var_os("HOME") {
