@@ -1,58 +1,108 @@
-*, *::before, *::after {
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: #f7f9fb;
+  --foreground: #191c1e;
+  --card: #ffffff;
+  --card-foreground: #191c1e;
+  --popover: #ffffff;
+  --popover-foreground: #191c1e;
+  --primary: #7cb9e8;
+  --primary-foreground: #191c1e;
+  --secondary: #8db2ff;
+  --secondary-foreground: #191c1e;
+  --muted: #f2f4f6;
+  --muted-foreground: #64748b;
+  --accent: #f2f4f6;
+  --accent-foreground: #191c1e;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: rgba(192, 199, 207, 0.2);
+  --input: rgba(192, 199, 207, 0.2);
+  --ring: #7cb9e8;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #191c1e;
+  --sidebar-primary: #7cb9e8;
+  --sidebar-primary-foreground: #191c1e;
+  --sidebar-accent: #f2f4f6;
+  --sidebar-accent-foreground: #191c1e;
+  --sidebar-border: rgba(192, 199, 207, 0.1);
+  --sidebar-ring: #7cb9e8;
+}
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
 }
 
 body {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f7f9fb;
-  color: #191c1e;
-}
-
-/* Streamdown markdown styles */
-.streamdown-root {
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-}
-
-.streamdown-root p {
-  margin: 0 0 0.5em;
-}
-
-.streamdown-root p:last-child {
-  margin-bottom: 0;
-}
-
-.streamdown-root pre {
-  background: #0f172a;
-  border-radius: 8px;
-  padding: 16px;
-  overflow-x: auto;
-  margin: 0.5em 0;
-}
-
-.streamdown-root code {
-  font-family: "Liberation Mono", monospace;
-  font-size: 0.9em;
-}
-
-.streamdown-root :not(pre) > code {
-  background: rgba(192,199,207,0.15);
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .animate-spin {
