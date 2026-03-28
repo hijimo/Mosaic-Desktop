@@ -10,6 +10,11 @@ vi.mock('streamdown', () => ({
 vi.mock('@streamdown/code', () => ({ code: {} }));
 vi.mock('@streamdown/cjk', () => ({ cjk: {} }));
 vi.mock('streamdown/styles.css', () => ({}));
+vi.mock('@/components/chat/agent/MessageActionBar', () => ({
+  MessageActionBar: ({ messageId }: { messageId: string }) => (
+    <div data-testid='message-action-bar'>{messageId}</div>
+  ),
+}));
 
 describe('Message', () => {
   it('renders user message text', () => {
@@ -128,5 +133,20 @@ describe('Message', () => {
     expect(screen.getByText('我查了几组关键词。')).toBeInTheDocument();
     expect(screen.getByText(/read_file/)).toBeInTheDocument();
     expect(screen.getByText(/bash/)).toBeInTheDocument();
+  });
+
+  it('renders action bar for the first agent message', () => {
+    const group: TurnGroup = {
+      turn_id: 'turn-1',
+      items: [
+        { type: 'Reasoning', id: 'r1', summary_text: ['思考中'], raw_content: [] },
+        { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: '最终回答' }] },
+        { type: 'AgentMessage', id: 'a2', content: [{ type: 'Text', text: '补充说明' }] },
+      ],
+    };
+
+    render(<Message group={group} />);
+
+    expect(screen.getByTestId('message-action-bar')).toHaveTextContent('a1');
   });
 });

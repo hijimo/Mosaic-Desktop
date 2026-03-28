@@ -13,3 +13,10 @@
 - `pnpm dev`
 - `pnpm build`
 - `pnpm test`
+
+## 分享功能环境变量
+
+- 分享页上传只允许 Rust/Tauri 侧读取 OSS 凭证，前端不要读取或透传 AK/SK。
+- 推荐使用 `MOSAIC_OSS_ACCESSKEY_ID`、`MOSAIC_OSS_ACCESSKEY_SECRET`、`MOSAIC_OSS_BUCKET`、`MOSAIC_OSS_REGION`、`MOSAIC_OSS_DIST`、`MOSAIC_OSS_HOST`。
+- 为了兼容现有本地配置，Rust 侧会回退读取 `VITE_OSS_ACCESSKEY_ID`、`VITE_OSS_ACCESSKEY_SECRET`、`VITE_OSS_BUCKET`、`VITE_OSS_REGION`、`VITE_OSS_DIST`、`VITE_OSS_HOST`。
+- `MOSAIC_OSS_DIST` / `VITE_OSS_DIST` 用于分享文件前缀目录，例如 `ai-share/`。

@@ -24,6 +24,7 @@
     "@streamdown/code": "^1.1.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@vnidrop/tauri-plugin-share": "^0.2.1",
     "classnames": "^2.5.1",
     "immer": "^11.1.4",
     "lucide-react": "^0.577.0",

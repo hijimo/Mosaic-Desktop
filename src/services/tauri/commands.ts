@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ThreadMeta, SubmitOpParams, TurnGroup } from '@/types';
 import type { Op } from '@/types';
+import type { ShareMessagePayload } from '@/components/chat/agent/messageShareContent';
 
 export async function threadStart(cwd?: string): Promise<string> {
   return invoke<string>('thread_start', { cwd });
@@ -36,4 +37,12 @@ export async function getCwd(): Promise<string> {
 
 export async function getConfig(): Promise<unknown> {
   return invoke<unknown>('get_config');
+}
+
+export interface ShareMessageResult {
+  url: string;
+}
+
+export async function shareMessage(payload: ShareMessagePayload): Promise<ShareMessageResult> {
+  return invoke<ShareMessageResult>('share_message', { payload });
 }

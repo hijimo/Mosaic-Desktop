@@ -11,6 +11,7 @@ use crate::core::rollout::policy::{EventPersistenceMode, RolloutItem};
 use crate::core::state_db::{StateDb, PersistedThreadMeta};
 use crate::protocol::event::{Event, EventMsg};
 use crate::protocol::submission::{Op, Submission};
+use crate::share::types::{ShareMessageRequest, ShareMessageResponse};
 
 /// Per-thread (session) handle.
 pub struct ThreadHandle {
@@ -690,6 +691,13 @@ pub fn get_cwd() -> Result<String, String> {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("failed to get cwd: {e}"))
+}
+
+#[tauri::command]
+pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageResponse, String> {
+    crate::share::share_message(payload)
+        .await
+        .map_err(|e| format!("share message failed: {e:#}"))
 }
 
 #[cfg(test)]

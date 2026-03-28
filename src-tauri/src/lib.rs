@@ -14,6 +14,7 @@ pub mod pty;
 pub mod responses_api_proxy;
 pub mod rmcp_client;
 pub mod secrets;
+pub mod share;
 pub mod shell_command;
 pub mod shell_escalation;
 pub mod state;
@@ -86,6 +87,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_vnidrop_share::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::submit_op,
@@ -100,6 +102,7 @@ pub fn run() {
             commands::get_config,
             commands::update_config,
             commands::get_cwd,
+            commands::share_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

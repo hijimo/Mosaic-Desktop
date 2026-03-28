@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "vnidrop-share:default",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
