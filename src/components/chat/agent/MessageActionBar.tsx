@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, IconButton, Menu, MenuItem, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, IconButton, Menu, MenuItem, Snackbar, Tooltip } from '@mui/material';
 import { Copy, ChevronDown, Share2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { share } from '@vnidrop/tauri-plugin-share';
 import { shareMessage } from '@/services/api';
@@ -13,12 +13,34 @@ interface MessageActionBarProps {
   messageId: string;
 }
 
+interface NoticeState {
+  open: boolean;
+  message: string;
+  severity: 'success' | 'error' | 'info' | 'warning';
+}
+
+function extractErrorMessage(error: unknown): string {
+  const normalize = (message: string) => message.replace(/^share message failed:\s*/i, '').trim();
+
+  if (error instanceof Error && error.message) {
+    return normalize(error.message);
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return normalize(error);
+  }
+  return '未知错误';
+}
+
 export function MessageActionBar({
   group,
   messageId,
 }: MessageActionBarProps): React.ReactElement {
   const [copyMenuAnchor, setCopyMenuAnchor] = useState<HTMLElement | null>(null);
-  const [feedback, setFeedback] = useState<string>('');
+  const [notice, setNotice] = useState<NoticeState>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
 
   const reaction = useMessageActionStore((state) => state.reactions[messageId] ?? 'none');
   const shareState = useMessageActionStore((state) => state.shareStates[messageId] ?? 'idle');
@@ -28,14 +50,24 @@ export function MessageActionBar({
   const copyText = useMemo(() => buildCopyText(group), [group]);
   const copyMarkdown = useMemo(() => buildCopyMarkdown(group), [group]);
 
+  const showNotice = (
+    message: string,
+    severity: NoticeState['severity'],
+  ) => {
+    setNotice({
+      open: true,
+      message,
+      severity,
+    });
+  };
+
   const copyContent = async (content: string, successMessage: string) => {
     await writeClipboardText(content);
-    setFeedback(successMessage);
+    showNotice(successMessage, 'success');
     setCopyMenuAnchor(null);
   };
 
   const handleShare = async () => {
-    setFeedback('');
     setShareState(messageId, 'preparing');
 
     try {
@@ -45,15 +77,18 @@ export function MessageActionBar({
       try {
         await share({ url: result.url });
         setShareState(messageId, 'success');
-        setFeedback('已调起系统分享');
-      } catch {
+        showNotice('已调起系统分享', 'success');
+      } catch (error) {
+        console.warn('系统分享调起失败，回退为复制链接。', error);
         await writeClipboardText(result.url);
         setShareState(messageId, 'success');
-        setFeedback('已复制分享链接');
+        showNotice('已复制分享链接', 'success');
       }
-    } catch {
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      console.error('消息分享失败。', errorMessage, error);
       setShareState(messageId, 'failed');
-      setFeedback('分享失败');
+      showNotice(`分享失败：${errorMessage}`, 'error');
     }
   };
 
@@ -157,15 +192,27 @@ export function MessageActionBar({
         </Tooltip>
       </Box>
 
-      <Typography
-        variant='caption'
-        sx={{
-          minHeight: 20,
-          color: feedback === '分享失败' ? 'error.main' : 'text.secondary',
+      <Snackbar
+        open={notice.open}
+        autoHideDuration={3000}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        sx={{ top: '150px !important' }}
+        onClose={(_, reason) => {
+          if (reason === 'clickaway') {
+            return;
+          }
+          setNotice((current) => ({ ...current, open: false }));
         }}
       >
-        {feedback}
-      </Typography>
+        <Alert
+          onClose={() => setNotice((current) => ({ ...current, open: false }))}
+          severity={notice.severity}
+          variant='filled'
+          sx={{ width: '100%' }}
+        >
+          {notice.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

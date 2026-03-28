@@ -7,12 +7,14 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+.pnpm-store/
 node_modules
 dist
 dist-ssr
 *.local
 .worktrees/
-
+.env
+.env.production
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

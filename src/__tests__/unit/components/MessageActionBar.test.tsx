@@ -8,6 +8,8 @@ import type { TurnGroup } from '@/types';
 const shareMessageMock = vi.fn();
 const shareMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
+const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 vi.mock('@/services/api', () => ({
   shareMessage: (...args: unknown[]) => shareMessageMock(...args),
@@ -43,6 +45,8 @@ describe('MessageActionBar', () => {
     shareMessageMock.mockReset();
     shareMock.mockReset();
     clipboardWriteTextMock.mockReset().mockResolvedValue(undefined);
+    consoleErrorSpy.mockClear();
+    consoleWarnSpy.mockClear();
   });
 
   it('copies plain text by default', async () => {
@@ -60,6 +64,7 @@ describe('MessageActionBar', () => {
       expect(clipboardWriteTextMock).toHaveBeenCalledTimes(1);
     });
     expect(clipboardWriteTextMock.mock.calls[0]?.[0]).toContain('这里是回答。');
+    expect(await screen.findByText('已复制')).toBeInTheDocument();
   });
 
   it('copies markdown through the menu option', async () => {
@@ -78,6 +83,7 @@ describe('MessageActionBar', () => {
       expect(clipboardWriteTextMock).toHaveBeenCalledTimes(1);
     });
     expect(clipboardWriteTextMock.mock.calls[0]?.[0]).toContain('## 助手回答');
+    expect(await screen.findByText('已复制 Markdown')).toBeInTheDocument();
   });
 
   it('toggles thumbs up and thumbs down reactions', async () => {
@@ -123,6 +129,27 @@ describe('MessageActionBar', () => {
     await waitFor(() => {
       expect(clipboardWriteTextMock).toHaveBeenCalledWith('https://example.com/share/turn-share-1');
     });
+    expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('已复制分享链接')).toBeInTheDocument();
+  });
+
+  it('logs the share failure and shows snackbar alert when shareMessage rejects', async () => {
+    const user = userEvent.setup();
+    shareMessageMock.mockRejectedValue(new Error('share message failed: missing oss config'));
+
+    render(
+      <MessageActionBar
+        group={group}
+        messageId='agent-1'
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '分享' }));
+
+    await waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(consoleErrorSpy.mock.calls[0]?.[0]).toContain('消息分享失败');
+    expect(await screen.findByText('分享失败：missing oss config')).toBeInTheDocument();
   });
 });
