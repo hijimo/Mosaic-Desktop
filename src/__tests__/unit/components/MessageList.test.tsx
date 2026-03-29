@@ -4,6 +4,12 @@ import { MessageList } from '@/components/chat/MessageList';
 import { useMessageStore } from '@/stores/messageStore';
 import type { TurnGroup } from '@/types';
 
+vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+  callback(0);
+  return 1;
+});
+vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
 // Mock Streamdown
 vi.mock('streamdown', () => ({
   Streamdown: ({ children }: { children: string }) => <div>{children}</div>,
@@ -29,6 +35,8 @@ describe('MessageList', () => {
       useMessageStore.setState({
         messagesByThread: new Map(),
         streamingTurn: null,
+        streamingBuffer: null,
+        streamingView: null,
       });
     });
   });
@@ -63,6 +71,7 @@ describe('MessageList', () => {
     act(() => {
       useMessageStore.setState({
         streamingTurn: { turnId: 'turn1', agentText: '', isStreaming: true, items: new Map() },
+        streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 0 },
       });
     });
 
@@ -75,10 +84,167 @@ describe('MessageList', () => {
     act(() => {
       useMessageStore.setState({
         streamingTurn: { turnId: 'turn1', agentText: 'Partial response...', isStreaming: true, items: new Map() },
+        streamingView: {
+          turnId: 'turn1',
+          isStreaming: true,
+          revision: 1,
+          items: new Map([
+            ['a1', {
+              threadId: 't1',
+              turnId: 'turn1',
+              itemId: 'a1',
+              itemType: 'AgentMessage',
+              agentText: 'Partial response...',
+              reasoningSummary: [],
+              reasoningRaw: [],
+              planText: '',
+            }],
+          ]),
+        },
       });
     });
 
     render(<MessageList threadId="t1" />);
     expect(screen.getByText('Partial response...')).toBeInTheDocument();
+  });
+
+  it('does not force scroll when streaming text changes without revision change', () => {
+    const scrollTopSet = vi.fn();
+    let scrollTopValue = 0;
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get() {
+        return scrollTopValue;
+      },
+      set(value: number) {
+        scrollTopValue = value;
+        scrollTopSet(value);
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return 800;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() {
+        return 400;
+      },
+    });
+
+    act(() => {
+      useMessageStore.setState({
+        streamingTurn: { turnId: 'turn1', agentText: 'A', isStreaming: true, items: new Map() },
+        streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 0 },
+      });
+    });
+
+    render(<MessageList threadId="t1" />);
+    scrollTopSet.mockClear();
+
+    act(() => {
+      useMessageStore.setState({
+        streamingTurn: { turnId: 'turn1', agentText: 'AB', isStreaming: true, items: new Map() },
+        streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 0 },
+      });
+    });
+
+    expect(scrollTopSet).not.toHaveBeenCalled();
+  });
+
+  it('reconciles scroll when streaming revision changes', () => {
+    const scrollTopSet = vi.fn();
+    let scrollTopValue = 0;
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get() {
+        return scrollTopValue;
+      },
+      set(value: number) {
+        scrollTopValue = value;
+        scrollTopSet(value);
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        return 960;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() {
+        return 400;
+      },
+    });
+
+    act(() => {
+      useMessageStore.setState({
+        streamingTurn: { turnId: 'turn1', agentText: 'A', isStreaming: true, items: new Map() },
+        streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 0 },
+      });
+    });
+
+    render(<MessageList threadId="t1" />);
+    scrollTopSet.mockClear();
+
+    act(() => {
+      useMessageStore.setState({
+        streamingTurn: { turnId: 'turn1', agentText: 'AB', isStreaming: true, items: new Map() },
+        streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 1 },
+      });
+    });
+
+    expect(scrollTopSet).toHaveBeenCalledWith(960);
+  });
+
+  it('flushes buffered streaming content on animation frame', () => {
+    act(() => {
+      useMessageStore.setState({
+        streamingTurn: { turnId: 'turn1', agentText: '', isStreaming: true, items: new Map() },
+        streamingBuffer: {
+          turnId: 'turn1',
+          isStreaming: true,
+          items: new Map([
+            ['a1', {
+              threadId: 't1',
+              turnId: 'turn1',
+              itemId: 'a1',
+              itemType: 'AgentMessage',
+              pendingAgentText: 'Buffered text',
+              pendingReasoningSummary: [],
+              pendingReasoningRaw: [],
+              pendingPlanText: '',
+              dirty: true,
+            }],
+          ]),
+        },
+        streamingView: {
+          turnId: 'turn1',
+          isStreaming: true,
+          revision: 0,
+          items: new Map([
+            ['a1', {
+              threadId: 't1',
+              turnId: 'turn1',
+              itemId: 'a1',
+              itemType: 'AgentMessage',
+              agentText: '',
+              reasoningSummary: [],
+              reasoningRaw: [],
+              planText: '',
+            }],
+          ]),
+        },
+      });
+    });
+
+    render(<MessageList threadId="t1" />);
+    expect(screen.getByText('Buffered text')).toBeInTheDocument();
+    expect(useMessageStore.getState().streamingView?.revision).toBe(1);
   });
 });
