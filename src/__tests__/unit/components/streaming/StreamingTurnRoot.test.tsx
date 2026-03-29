@@ -24,6 +24,7 @@ describe('StreamingTurnRoot', () => {
       streamingTurn: null,
       streamingBuffer: null,
       streamingView: null,
+      streamingItemOrder: new Map(),
     });
     useToolCallStore.setState({ toolCalls: new Map() });
     useApprovalStore.setState({ approvals: new Map() });
@@ -41,6 +42,7 @@ describe('StreamingTurnRoot', () => {
             threadId: 't1',
             turnId: 'turn-1',
             itemId: 'a1',
+            order: 1,
             itemType: 'AgentMessage',
             agentText: '我正在查找技能。',
             reasoningSummary: [],
@@ -49,6 +51,7 @@ describe('StreamingTurnRoot', () => {
           }],
         ]),
       },
+      streamingItemOrder: new Map([['a1', 1]]),
     });
     useToolCallStore.setState({
       toolCalls: new Map([
@@ -96,6 +99,7 @@ describe('StreamingTurnRoot', () => {
             threadId: 't1',
             turnId: 'turn-1',
             itemId: 'a1-streaming',
+            order: 2,
             itemType: 'AgentMessage',
             agentText: '使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。',
             reasoningSummary: [],
@@ -104,6 +108,7 @@ describe('StreamingTurnRoot', () => {
           }],
         ]),
       },
+      streamingItemOrder: new Map([['a1-streaming', 2]]),
     });
 
     render(<StreamingTurnRoot threadId='t1' />);
@@ -111,5 +116,64 @@ describe('StreamingTurnRoot', () => {
     expect(
       screen.getAllByText('使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。'),
     ).toHaveLength(1);
+  });
+
+  it('renders active tool calls in event order instead of pinning them to the top', () => {
+    useMessageStore.setState({
+      messagesByThread: new Map([
+        ['t1', [{
+          turn_id: 'turn-1',
+          items: [
+            {
+              type: 'AgentMessage',
+              id: 'a1',
+              content: [{ type: 'Text', text: '第一段回答。' }],
+            },
+          ],
+        }]],
+      ]),
+      streamingView: {
+        turnId: 'turn-1',
+        isStreaming: true,
+        revision: 2,
+        items: new Map([
+          ['a2', {
+            threadId: 't1',
+            turnId: 'turn-1',
+            itemId: 'a2',
+            order: 3,
+            itemType: 'AgentMessage',
+            agentText: '第二段回答。',
+            reasoningSummary: [],
+            reasoningRaw: [],
+            planText: '',
+          }],
+        ]),
+      },
+      streamingItemOrder: new Map([
+        ['a1', 1],
+        ['a2', 3],
+      ]),
+    });
+    useToolCallStore.setState({
+      toolCalls: new Map([
+        ['tool-1', {
+          callId: 'tool-1',
+          type: 'mcp',
+          status: 'completed',
+          order: 2,
+          name: 'read_file',
+          serverName: 'filesystem',
+          toolName: 'read_file',
+          arguments: { path: '/tmp/demo.txt' },
+        }],
+      ]),
+    });
+
+    render(<StreamingTurnRoot threadId='t1' />);
+
+    const content = screen.getByTestId('agent-turn-content').textContent ?? '';
+    expect(content.indexOf('第一段回答。')).toBeLessThan(content.indexOf('read_file'));
+    expect(content.indexOf('read_file')).toBeLessThan(content.indexOf('第二段回答。'));
   });
 });

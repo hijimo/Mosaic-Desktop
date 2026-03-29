@@ -8,6 +8,7 @@ export interface ToolCallState {
   type: 'exec' | 'mcp' | 'web_search' | 'patch';
   status: 'pending' | 'running' | 'completed' | 'failed';
   name: string;
+  order?: number;
   command?: string[];
   cwd?: string;
   output?: string;
@@ -23,6 +24,7 @@ export interface ApprovalRequestState {
   callId: string;
   turnId: string;
   type: 'exec' | 'patch';
+  order?: number;
   command?: string[];
   cwd?: string;
   reason?: string;
@@ -35,6 +37,7 @@ export type MessageRole = 'user' | 'agent';
 /** Clarification request state */
 export interface ClarificationState {
   id: string;
+  order?: number;
   message: string;
   schema?: unknown;
 }

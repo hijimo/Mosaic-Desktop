@@ -71,6 +71,7 @@ describe('MessageList', () => {
         streamingTurn: null,
         streamingBuffer: null,
         streamingView: null,
+        streamingItemOrder: new Map(),
       });
     });
   });
@@ -129,6 +130,7 @@ describe('MessageList', () => {
               threadId: 't1',
               turnId: 'turn1',
               itemId: 'a1',
+              order: 1,
               itemType: 'AgentMessage',
               agentText: 'Partial response...',
               reasoningSummary: [],
@@ -266,6 +268,7 @@ describe('MessageList', () => {
               threadId: 't1',
               turnId: 'turn1',
               itemId: 'a1',
+              order: 1,
               itemType: 'AgentMessage',
               pendingAgentText: 'Buffered text',
               pendingReasoningSummary: [],
@@ -284,6 +287,7 @@ describe('MessageList', () => {
               threadId: 't1',
               turnId: 'turn1',
               itemId: 'a1',
+              order: 1,
               itemType: 'AgentMessage',
               agentText: '',
               reasoningSummary: [],

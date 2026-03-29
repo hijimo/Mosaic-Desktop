@@ -5,6 +5,7 @@ interface StreamingItem {
   threadId: string;
   turnId: string;
   itemId: string;
+  order: number;
   itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
   agentText: string;
   reasoningSummary: string[];
@@ -23,6 +24,7 @@ interface StreamingBufferItem {
   threadId: string;
   turnId: string;
   itemId: string;
+  order: number;
   itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
   pendingAgentText: string;
   pendingReasoningSummary: string[];
@@ -42,6 +44,7 @@ interface StreamingViewItem {
   threadId: string;
   turnId: string;
   itemId: string;
+  order: number;
   itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
   agentText: string;
   reasoningSummary: string[];
@@ -61,6 +64,7 @@ interface MessageState {
   streamingTurn: StreamingTurn | null;
   streamingBuffer: StreamingBufferTurn | null;
   streamingView: StreamingViewTurn | null;
+  streamingItemOrder: Map<string, number>;
 
   appendMessage: (threadId: string, turnId: string, item: TurnItem) => void;
   setMessages: (threadId: string, groups: TurnGroup[]) => void;
@@ -68,7 +72,7 @@ interface MessageState {
   stopStreaming: () => void;
   clearThread: (threadId: string) => void;
 
-  startStreamingItem: (threadId: string, turnId: string, item: TurnItem) => void;
+  startStreamingItem: (threadId: string, turnId: string, item: TurnItem, order?: number) => void;
   bufferAgentContentDelta: (itemId: string, delta: string) => void;
   bufferReasoningContentDelta: (itemId: string, delta: string, summaryIndex: number) => void;
   bufferReasoningRawContentDelta: (itemId: string, delta: string, contentIndex: number) => void;
@@ -87,6 +91,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   streamingTurn: null,
   streamingBuffer: null,
   streamingView: null,
+  streamingItemOrder: new Map(),
 
   appendMessage: (threadId, turnId, item) =>
     set((state) => ({
@@ -120,6 +125,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         isStreaming: true,
         items: new Map(),
       },
+      streamingItemOrder: new Map(),
     }),
 
   stopStreaming: () => {
@@ -156,7 +162,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       return { messagesByThread: next };
     }),
 
-  startStreamingItem: (threadId, turnId, item) =>
+  startStreamingItem: (threadId, turnId, item, order = 0) =>
     set((state) => {
       if (!state.streamingBuffer || !state.streamingView) return state;
 
@@ -169,6 +175,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         threadId,
         turnId,
         itemId,
+        order,
         itemType,
         pendingAgentText: '',
         pendingReasoningSummary: [],
@@ -182,12 +189,16 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         threadId,
         turnId,
         itemId,
+        order,
         itemType,
         agentText: '',
         reasoningSummary: [],
         reasoningRaw: [],
         planText: '',
       });
+
+      const nextItemOrder = new Map(state.streamingItemOrder);
+      nextItemOrder.set(itemId, order);
 
       const nextView: StreamingViewTurn = {
         ...state.streamingView,
@@ -202,6 +213,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         },
         streamingView: nextView,
         streamingTurn: buildLegacyTurn(nextView),
+        streamingItemOrder: nextItemOrder,
       };
     }),
 
@@ -330,6 +342,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           threadId: buffered.threadId,
           turnId: buffered.turnId,
           itemId,
+          order: buffered.order,
           itemType: buffered.itemType,
           agentText: '',
           reasoningSummary: [],
@@ -520,12 +533,13 @@ function buildLegacyTurn(view: StreamingViewTurn): StreamingTurn {
   let agentText = '';
 
   for (const [itemId, item] of view.items) {
-    items.set(itemId, {
-      threadId: item.threadId,
-      turnId: item.turnId,
-      itemId,
-      itemType: item.itemType,
-      agentText: item.agentText,
+        items.set(itemId, {
+          threadId: item.threadId,
+          turnId: item.turnId,
+          itemId,
+          order: item.order,
+          itemType: item.itemType,
+          agentText: item.agentText,
       reasoningSummary: [...item.reasoningSummary],
       reasoningRaw: [...item.reasoningRaw],
       planText: item.planText,

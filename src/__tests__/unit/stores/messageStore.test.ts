@@ -21,6 +21,7 @@ describe('messageStore', () => {
       streamingTurn: null,
       streamingBuffer: null,
       streamingView: null,
+      streamingItemOrder: new Map(),
     });
   });
 

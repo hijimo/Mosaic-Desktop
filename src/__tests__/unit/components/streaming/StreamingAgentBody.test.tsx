@@ -26,6 +26,7 @@ describe('StreamingAgentBody', () => {
       streamingTurn: null,
       streamingBuffer: null,
       streamingView: null,
+      streamingItemOrder: new Map(),
     });
   });
 
@@ -40,6 +41,7 @@ describe('StreamingAgentBody', () => {
             threadId: 't1',
             turnId: 'turn-1',
             itemId: 'a1',
+            order: 1,
             itemType: 'AgentMessage',
             agentText: 'Hello',
             reasoningSummary: [],
@@ -79,6 +81,7 @@ describe('StreamingAgentBody', () => {
             threadId: 't1',
             turnId: 'turn-1',
             itemId: 'a1',
+            order: 1,
             itemType: 'AgentMessage',
             agentText: 'Hello',
             reasoningSummary: [],

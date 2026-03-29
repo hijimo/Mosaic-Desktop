@@ -21,6 +21,7 @@ describe('useCodexEvent', () => {
       streamingTurn: null,
       streamingBuffer: null,
       streamingView: null,
+      streamingItemOrder: new Map(),
     });
 
     // Add a thread so updateThread has something to patch

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { listenCodexEvent, threadGetMessages } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
@@ -29,6 +29,12 @@ export function useCodexEvent(): void {
     useToolCallStore();
   const { addApproval, clearAll: clearApprovals } = useApprovalStore();
   const { addRequest: addClarification, clearAll: clearClarifications } = useClarificationStore();
+  const eventOrderRef = useRef(0);
+
+  const nextEventOrder = (): number => {
+    eventOrderRef.current += 1;
+    return eventOrderRef.current;
+  };
 
   useEffect(() => {
     const unlistenPromise = listenCodexEvent((payload: CodexEventPayload) => {
@@ -49,6 +55,7 @@ export function useCodexEvent(): void {
           break;
 
         case 'task_started':
+          eventOrderRef.current = 0;
           clearAll();
           clearApprovals();
           clearClarifications();
@@ -70,7 +77,7 @@ export function useCodexEvent(): void {
 
         // ── v2 Structured item events ──
         case 'item_started':
-          startStreamingItem(msg.thread_id, msg.turn_id, msg.item);
+          startStreamingItem(msg.thread_id, msg.turn_id, msg.item, nextEventOrder());
           break;
 
         case 'item_completed':
@@ -101,6 +108,7 @@ export function useCodexEvent(): void {
             type: 'mcp',
             status: 'running',
             name: msg.invocation.tool,
+            order: nextEventOrder(),
             serverName: msg.invocation.server,
             toolName: msg.invocation.tool,
             arguments: msg.invocation.arguments,
@@ -120,6 +128,7 @@ export function useCodexEvent(): void {
             type: 'exec',
             status: 'running',
             name: msg.command?.[0] ?? 'command',
+            order: nextEventOrder(),
             command: typeof msg.command === 'string' ? [msg.command] : msg.command,
             cwd: msg.cwd,
           });
@@ -143,6 +152,7 @@ export function useCodexEvent(): void {
             type: 'web_search',
             status: 'running',
             name: 'Web Search',
+            order: nextEventOrder(),
           });
           break;
 
@@ -159,6 +169,7 @@ export function useCodexEvent(): void {
             type: 'patch',
             status: 'running',
             name: 'Apply Patch',
+            order: nextEventOrder(),
           });
           break;
 
@@ -179,6 +190,7 @@ export function useCodexEvent(): void {
             callId: msg.call_id,
             turnId: msg.turn_id,
             type: 'exec',
+            order: nextEventOrder(),
             command: msg.command,
             cwd: msg.cwd,
             reason: msg.reason,
@@ -190,6 +202,7 @@ export function useCodexEvent(): void {
             callId: msg.call_id,
             turnId: msg.turn_id,
             type: 'patch',
+            order: nextEventOrder(),
             reason: msg.reason,
             changes: msg.changes as Record<string, unknown>,
           });
@@ -198,6 +211,7 @@ export function useCodexEvent(): void {
         case 'request_user_input':
           addClarification({
             id: msg.id,
+            order: nextEventOrder(),
             message: msg.message,
             schema: msg.schema,
           });
