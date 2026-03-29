@@ -18,7 +18,8 @@ function relativeTime(iso: string): string {
   return `${days}d`;
 }
 
-function projectName(cwd: string): string {
+function projectName(cwd?: string | null): string {
+  if (!cwd) return 'Unknown Project';
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] || cwd;
 }
@@ -29,9 +30,10 @@ function groupByCwd(threads: ThreadMeta[]): Map<string, ThreadMeta[]> {
   );
   const groups = new Map<string, ThreadMeta[]>();
   for (const t of sorted) {
-    const list = groups.get(t.cwd) ?? [];
+    const cwd = t.cwd || 'unknown-project';
+    const list = groups.get(cwd) ?? [];
     list.push(t);
-    groups.set(t.cwd, list);
+    groups.set(cwd, list);
   }
   return groups;
 }

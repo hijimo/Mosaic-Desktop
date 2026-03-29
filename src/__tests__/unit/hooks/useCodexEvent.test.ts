@@ -29,7 +29,7 @@ describe('useCodexEvent', () => {
 
     vi.mocked(listen).mockImplementation(async (_name, handler) => {
       capturedHandler = handler as typeof capturedHandler;
-      return vi.fn();
+      return () => {};
     });
   });
 

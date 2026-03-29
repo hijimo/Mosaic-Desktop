@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 
 // Smoke test: only runs when explicitly triggered via `pnpm test:smoke`
-if (import.meta.env.VITE_RUN_SMOKE === 'true' && (window as Record<string, unknown>).__TAURI_INTERNALS__) {
+if (import.meta.env.VITE_RUN_SMOKE === 'true' && (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__) {
   import('./utils/smoke').then(({ runSmoke }) => {
     setTimeout(async () => {
       const result = await runSmoke();

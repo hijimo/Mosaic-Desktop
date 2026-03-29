@@ -23,7 +23,7 @@ describe('useSubmitOp', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith('submit_op', {
-      thread_id: 't1',
+      threadId: 't1',
       id: 'mock-uuid',
       op: { type: 'interrupt' },
     });
@@ -47,7 +47,7 @@ describe('useSubmitOp', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith('submit_op', {
-      thread_id: 't1',
+      threadId: 't1',
       id: 'mock-uuid',
       op,
     });

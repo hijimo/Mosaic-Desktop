@@ -7,9 +7,32 @@ import { theme } from '@/styles/theme';
 import { MainLayout } from '@/layouts/MainLayout';
 import { IndexPage } from '@/pages/index';
 
+import type { ThreadMeta } from '@/types';
+
+const { mockInvoke } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+}));
+
+function resetInvokeMock(): void {
+  mockInvoke.mockImplementation(async (command: string) => {
+    switch (command) {
+      case 'thread_list':
+        return [] as ThreadMeta[];
+      case 'get_cwd':
+        return '/test/project';
+      case 'thread_start':
+        return 'mock-thread-id';
+      case 'submit_op':
+        return undefined;
+      default:
+        return undefined;
+    }
+  });
+}
+
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue('mock-thread-id'),
+  invoke: mockInvoke,
 }));
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
@@ -32,6 +55,7 @@ function renderApp(): void {
 describe('IndexPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetInvokeMock();
   });
 
   it('renders welcome heading', () => {

@@ -37,18 +37,18 @@ describe('tauri/commands', () => {
     expect(result).toEqual(['a', 'b']);
   });
 
-  it('threadGetInfo calls invoke with thread_id', async () => {
+  it('threadGetInfo calls invoke with threadId', async () => {
     const meta = { thread_id: 't1', cwd: '/' };
     vi.mocked(invoke).mockResolvedValue(meta);
     const result = await threadGetInfo('t1');
-    expect(invoke).toHaveBeenCalledWith('thread_get_info', { thread_id: 't1' });
+    expect(invoke).toHaveBeenCalledWith('thread_get_info', { threadId: 't1' });
     expect(result).toEqual(meta);
   });
 
-  it('threadArchive calls invoke with thread_id', async () => {
+  it('threadArchive calls invoke with threadId', async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
     await threadArchive('t1');
-    expect(invoke).toHaveBeenCalledWith('thread_archive', { thread_id: 't1' });
+    expect(invoke).toHaveBeenCalledWith('thread_archive', { threadId: 't1' });
   });
 
   it('submitOp calls invoke with serialized op', async () => {
@@ -56,7 +56,7 @@ describe('tauri/commands', () => {
     const op: Op = { type: 'interrupt' };
     await submitOp('t1', 'op-1', op);
     expect(invoke).toHaveBeenCalledWith('submit_op', {
-      thread_id: 't1',
+      threadId: 't1',
       id: 'op-1',
       op: { type: 'interrupt' },
     });
