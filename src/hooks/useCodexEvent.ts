@@ -18,10 +18,11 @@ export function useCodexEvent(): void {
     startStreaming,
     stopStreaming,
     startStreamingItem,
-    updateAgentContentDelta,
-    updateReasoningContentDelta,
-    updateReasoningRawContentDelta,
-    updatePlanDelta,
+    bufferAgentContentDelta,
+    bufferReasoningContentDelta,
+    bufferReasoningRawContentDelta,
+    bufferPlanDelta,
+    flushVisibleStreaming,
     completeStreamingItem,
   } = useMessageStore();
   const { beginToolCall, updateToolCallOutput, endToolCall, clearAll } =
@@ -55,10 +56,12 @@ export function useCodexEvent(): void {
           break;
 
         case 'task_complete':
+          flushVisibleStreaming();
           stopStreaming();
           break;
 
         case 'turn_aborted':
+          flushVisibleStreaming();
           stopStreaming();
           break;
 
@@ -68,23 +71,24 @@ export function useCodexEvent(): void {
           break;
 
         case 'item_completed':
+          flushVisibleStreaming();
           completeStreamingItem(thread_id, msg.turn_id, msg.item);
           break;
 
         case 'agent_message_content_delta':
-          updateAgentContentDelta(msg.item_id, msg.delta);
+          bufferAgentContentDelta(msg.item_id, msg.delta);
           break;
 
         case 'reasoning_content_delta':
-          updateReasoningContentDelta(msg.item_id, msg.delta, msg.summary_index);
+          bufferReasoningContentDelta(msg.item_id, msg.delta, msg.summary_index);
           break;
 
         case 'reasoning_raw_content_delta':
-          updateReasoningRawContentDelta(msg.item_id, msg.delta, msg.content_index);
+          bufferReasoningRawContentDelta(msg.item_id, msg.delta, msg.content_index);
           break;
 
         case 'plan_delta':
-          updatePlanDelta(msg.item_id, msg.delta);
+          bufferPlanDelta(msg.item_id, msg.delta);
           break;
 
         // ── Tool call events ──
@@ -207,10 +211,11 @@ export function useCodexEvent(): void {
     startStreaming,
     stopStreaming,
     startStreamingItem,
-    updateAgentContentDelta,
-    updateReasoningContentDelta,
-    updateReasoningRawContentDelta,
-    updatePlanDelta,
+    bufferAgentContentDelta,
+    bufferReasoningContentDelta,
+    bufferReasoningRawContentDelta,
+    bufferPlanDelta,
+    flushVisibleStreaming,
     completeStreamingItem,
     beginToolCall,
     updateToolCallOutput,
