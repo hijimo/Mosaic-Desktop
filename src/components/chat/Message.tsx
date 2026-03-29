@@ -37,7 +37,10 @@ export function Message({
   isStreaming,
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
-  if (items.length === 0) return null;
+  const hasExternalAgentContent = Boolean(
+    toolCalls?.length || approvalRequests?.length || clarifications?.length || isStreaming,
+  );
+  if (items.length === 0 && !hasExternalAgentContent) return null;
 
   // Separate user messages and agent-side items
   const userItems = items.filter(
@@ -47,6 +50,14 @@ export function Message({
   const firstAgentMessage = items.find(
     (item): item is Extract<TurnItem, { type: 'AgentMessage' }> => item.type === 'AgentMessage',
   );
+  const shouldRenderStreamingPlaceholder =
+    Boolean(isStreaming) && agentItems.length === 0;
+  const hasAgentTurnContent =
+    agentItems.length > 0 ||
+    Boolean(toolCalls?.length) ||
+    Boolean(approvalRequests?.length) ||
+    Boolean(clarifications?.length) ||
+    shouldRenderStreamingPlaceholder;
 
   const renderAgentItem = (item: Exclude<TurnItem, { type: 'UserMessage' }>): React.ReactNode => {
     switch (item.type) {
@@ -223,7 +234,7 @@ export function Message({
       ))}
 
       {/* Render agent-side items as a single block */}
-      {agentItems.length > 0 && (
+      {hasAgentTurnContent && (
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
           <AgentAvatar />
           <Box
@@ -289,6 +300,14 @@ export function Message({
 
             {/* All agent-side items in order */}
             {agentItems.map((item) => renderAgentItem(item))}
+
+            {shouldRenderStreamingPlaceholder ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography sx={{ fontSize: 14, color: '#94a3b8' }}>
+                  思考中...
+                </Typography>
+              </Box>
+            ) : null}
 
             {firstAgentMessage ? (
               <MessageActionBar

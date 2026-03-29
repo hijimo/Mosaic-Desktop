@@ -67,9 +67,49 @@ describe('StreamingTurnRoot', () => {
     render(<StreamingTurnRoot threadId='t1' />);
 
     expect(screen.getAllByTestId('agent-avatar')).toHaveLength(1);
-    const container = screen.getByTestId('streaming-agent-turn-content');
+    const container = screen.getByTestId('agent-turn-content');
     expect(container).toBeInTheDocument();
     expect(container).toContainElement(screen.getByText('我正在查找技能。'));
     expect(container).toContainElement(screen.getByText(/read_file/));
+  });
+
+  it('does not duplicate content when completed turn items and streaming items share the same id', () => {
+    useMessageStore.setState({
+      messagesByThread: new Map([
+        ['t1', [{
+          turn_id: 'turn-1',
+          items: [
+            {
+              type: 'AgentMessage',
+              id: 'a1',
+              content: [{ type: 'Text', text: '使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。' }],
+            },
+          ],
+        }]],
+      ]),
+      streamingView: {
+        turnId: 'turn-1',
+        isStreaming: true,
+        revision: 2,
+        items: new Map([
+          ['a1', {
+            threadId: 't1',
+            turnId: 'turn-1',
+            itemId: 'a1',
+            itemType: 'AgentMessage',
+            agentText: '使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。',
+            reasoningSummary: [],
+            reasoningRaw: [],
+            planText: '',
+          }],
+        ]),
+      },
+    });
+
+    render(<StreamingTurnRoot threadId='t1' />);
+
+    expect(
+      screen.getAllByText('使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。'),
+    ).toHaveLength(1);
   });
 });

@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { Box } from '@mui/material';
 import { useMessageStore } from '@/stores/messageStore';
+import { useToolCallStore } from '@/stores/toolCallStore';
+import { useApprovalStore } from '@/stores/approvalStore';
+import { useClarificationStore } from '@/stores/clarificationStore';
+import type { TurnGroup, TurnItem } from '@/types';
 import { Message } from '../Message';
 import { TaskStartedIndicator } from '../indicators/TaskStartedIndicator';
 import { TaskCompletedIndicator } from '../indicators/TaskCompletedIndicator';
-import { AgentAvatar } from '../shared/AgentAvatar';
-import { StreamingReasoningList } from './StreamingReasoningList';
-import { StreamingPlanList } from './StreamingPlanList';
-import { StreamingToolRegion } from './StreamingToolRegion';
-import { StreamingApprovalRegion } from './StreamingApprovalRegion';
-import { StreamingClarificationRegion } from './StreamingClarificationRegion';
-import { StreamingAgentBody } from './StreamingAgentBody';
 
 interface StreamingTurnRootProps {
   threadId: string;
@@ -31,9 +27,25 @@ export function StreamingTurnRoot({
     (s) => (s.streamingBuffer?.dirtyItemCount ?? 0) > 0,
   );
   const flushVisibleStreaming = useMessageStore((s) => s.flushVisibleStreaming);
+  const toolCallsMap = useToolCallStore((s) => s.toolCalls);
+  const approvalsMap = useApprovalStore((s) => s.approvals);
+  const clarificationsMap = useClarificationStore((s) => s.requests);
   const isStreaming = streamingView?.isStreaming ?? false;
   const isComplete = !isStreaming && turnGroups.length > 0;
   const frameRef = useRef<number | null>(null);
+  const streamingTurnId = streamingView?.turnId ?? null;
+  const currentStreamingGroup =
+    isStreaming && streamingTurnId
+      ? turnGroups.find((group) => group.turn_id === streamingTurnId) ?? null
+      : null;
+  const visibleTurnGroups =
+    currentStreamingGroup === null
+      ? turnGroups
+      : turnGroups.filter((group) => group.turn_id !== currentStreamingGroup.turn_id);
+  const streamingGroup = buildStreamingGroup(streamingView, currentStreamingGroup);
+  const activeToolCalls = Array.from(toolCallsMap.values());
+  const approvals = Array.from(approvalsMap.values());
+  const clarifications = Array.from(clarificationsMap.values());
 
   const ensureStreamingFlushScheduled = useCallback(() => {
     if (frameRef.current !== null) return;
@@ -59,7 +71,7 @@ export function StreamingTurnRoot({
     <>
       {(isStreaming || turnGroups.length > 0) && <TaskStartedIndicator />}
 
-      {turnGroups.map((group, index) => (
+      {visibleTurnGroups.map((group, index) => (
         <Message
           key={`${group.turn_id}-${index}`}
           group={group}
@@ -67,34 +79,58 @@ export function StreamingTurnRoot({
         />
       ))}
 
-      {isStreaming ? (
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-          <AgentAvatar />
-          <Box
-            data-testid='streaming-agent-turn-content'
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              flex: 1,
-              bgcolor: '#fff',
-              border: '1px solid rgba(192,199,207,0.05)',
-              borderRadius: '0 24px 24px 24px',
-              boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
-              p: '16px',
-            }}
-          >
-            <StreamingReasoningList />
-            <StreamingPlanList />
-            <StreamingToolRegion />
-            <StreamingApprovalRegion onApprovalDecision={onApprovalDecision} />
-            <StreamingClarificationRegion />
-            <StreamingAgentBody />
-          </Box>
-        </Box>
+      {isStreaming && streamingGroup ? (
+        <Message
+          group={streamingGroup}
+          toolCalls={activeToolCalls}
+          approvalRequests={approvals}
+          clarifications={clarifications}
+          onApprovalDecision={onApprovalDecision}
+          isStreaming
+        />
       ) : null}
 
       {isComplete && <TaskCompletedIndicator />}
     </>
   );
+}
+
+function buildStreamingGroup(
+  streamingView: ReturnType<typeof useMessageStore.getState>['streamingView'],
+  currentStreamingGroup: TurnGroup | null,
+): TurnGroup | null {
+  if (!streamingView && !currentStreamingGroup) return null;
+
+  const baseItems = currentStreamingGroup?.items ?? [];
+  const baseItemIds = new Set(baseItems.map((item) => item.id));
+  const streamingItems = Array.from(streamingView?.items.values() ?? []).map<TurnItem>((item) => {
+    switch (item.itemType) {
+      case 'Reasoning':
+        return {
+          type: 'Reasoning',
+          id: item.itemId,
+          summary_text: [...item.reasoningSummary],
+          raw_content: [...item.reasoningRaw],
+        };
+      case 'Plan':
+        return {
+          type: 'Plan',
+          id: item.itemId,
+          text: item.planText,
+        };
+      case 'AgentMessage':
+      default:
+        return {
+          type: 'AgentMessage',
+          id: item.itemId,
+          content: [{ type: 'Text', text: item.agentText }],
+        };
+    }
+  }).filter((item) => !baseItemIds.has(item.id));
+
+  return {
+    turn_id: streamingView?.turnId ?? currentStreamingGroup?.turn_id ?? 'streaming-turn',
+    items: [...baseItems, ...streamingItems],
+    status: 'InProgress',
+  };
 }

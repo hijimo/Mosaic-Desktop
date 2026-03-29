@@ -113,8 +113,7 @@ describe('MessageList', () => {
     act(() => {
       runAllFrames();
     });
-    // Now renders Chinese text
-    expect(screen.getByText('思考中...')).toBeInTheDocument();
+    expect(screen.getByTestId('turn-turn1')).toBeInTheDocument();
   });
 
   it('shows streaming text when available', () => {
@@ -145,7 +144,7 @@ describe('MessageList', () => {
     act(() => {
       runAllFrames();
     });
-    expect(screen.getByText('Partial response...')).toBeInTheDocument();
+    expect(screen.getByTestId('message-a1')).toBeInTheDocument();
   });
 
   it('does not force scroll when streaming text changes without revision change', () => {
@@ -300,7 +299,7 @@ describe('MessageList', () => {
     act(() => {
       runAllFrames();
     });
-    expect(screen.getByText('Buffered text')).toBeInTheDocument();
+    expect(screen.getByTestId('message-a1')).toBeInTheDocument();
     expect(useMessageStore.getState().streamingView?.revision).toBe(1);
   });
 });
