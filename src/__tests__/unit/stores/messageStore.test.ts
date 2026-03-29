@@ -19,6 +19,8 @@ describe('messageStore', () => {
     useMessageStore.setState({
       messagesByThread: new Map(),
       streamingTurn: null,
+      streamingBuffer: null,
+      streamingView: null,
     });
   });
 
@@ -34,34 +36,72 @@ describe('messageStore', () => {
     expect(state.messagesByThread.get('t2')).toHaveLength(1);
   });
 
-  it('startStreaming sets streamingTurn', () => {
+  it('startStreaming sets streaming buffer and view state', () => {
     useMessageStore.getState().startStreaming('turn-1');
-    const st = useMessageStore.getState().streamingTurn;
-    expect(st).toMatchObject({ turnId: 'turn-1', agentText: '', isStreaming: true });
-    expect(st?.items).toBeInstanceOf(Map);
+    const state = useMessageStore.getState();
+    expect(state.streamingBuffer).toMatchObject({
+      turnId: 'turn-1',
+      dirtyItemCount: 0,
+    });
+    expect(state.streamingView).toMatchObject({
+      turnId: 'turn-1',
+      isStreaming: true,
+      revision: 0,
+    });
+    expect(state.streamingTurn).toMatchObject({ turnId: 'turn-1', agentText: '', isStreaming: true });
   });
 
-  it('updateAgentContentDelta accumulates text via item tracking', () => {
-    const { startStreaming, startStreamingItem, updateAgentContentDelta } = useMessageStore.getState();
+  it('buffers multiple agent deltas until flushVisibleStreaming runs', () => {
+    const {
+      startStreaming,
+      startStreamingItem,
+      bufferAgentContentDelta,
+      flushVisibleStreaming,
+    } = useMessageStore.getState();
     startStreaming('turn-1');
     startStreamingItem('t1', 'turn-1', { type: 'AgentMessage', id: 'a1', content: [] });
-    updateAgentContentDelta('a1', 'Hello');
-    updateAgentContentDelta('a1', ' world');
+    bufferAgentContentDelta('a1', 'Hello');
+    bufferAgentContentDelta('a1', ' world');
 
-    const st = useMessageStore.getState().streamingTurn;
-    expect(st?.agentText).toBe('Hello world');
-    expect(st?.items.get('a1')?.agentText).toBe('Hello world');
+    let state = useMessageStore.getState();
+    expect(state.streamingView?.items.get('a1')?.agentText ?? '').toBe('');
+    expect(state.streamingTurn?.agentText).toBe('');
+    expect(state.streamingBuffer?.dirtyItemCount).toBe(1);
+
+    flushVisibleStreaming();
+
+    state = useMessageStore.getState();
+    expect(state.streamingView?.items.get('a1')?.agentText).toBe('Hello world');
+    expect(state.streamingTurn?.agentText).toBe('Hello world');
+    expect(state.streamingView?.revision).toBe(1);
+    expect(state.streamingBuffer?.dirtyItemCount).toBe(0);
   });
 
-  it('updateAgentContentDelta is no-op when not streaming', () => {
-    useMessageStore.getState().updateAgentContentDelta('a1', 'ignored');
-    expect(useMessageStore.getState().streamingTurn).toBeNull();
+  it('bufferAgentContentDelta is no-op when not streaming', () => {
+    useMessageStore.getState().bufferAgentContentDelta('a1', 'ignored');
+    const state = useMessageStore.getState();
+    expect(state.streamingTurn).toBeNull();
+    expect(state.streamingBuffer).toBeNull();
+    expect(state.streamingView).toBeNull();
   });
 
-  it('stopStreaming clears streamingTurn', () => {
-    useMessageStore.getState().startStreaming('turn-1');
-    useMessageStore.getState().stopStreaming();
-    expect(useMessageStore.getState().streamingTurn?.isStreaming).toBe(false);
+  it('flushes buffered content before stopStreaming finalizes the visible turn', () => {
+    const {
+      startStreaming,
+      startStreamingItem,
+      bufferAgentContentDelta,
+      stopStreaming,
+    } = useMessageStore.getState();
+    startStreaming('turn-1');
+    startStreamingItem('t1', 'turn-1', { type: 'AgentMessage', id: 'a1', content: [] });
+    bufferAgentContentDelta('a1', 'done');
+
+    stopStreaming();
+
+    const state = useMessageStore.getState();
+    expect(state.streamingView?.items.get('a1')?.agentText).toBe('done');
+    expect(state.streamingView?.isStreaming).toBe(false);
+    expect(state.streamingTurn?.isStreaming).toBe(false);
   });
 
   it('clearThread removes messages for a thread', () => {

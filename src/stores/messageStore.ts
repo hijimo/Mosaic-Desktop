@@ -16,13 +16,51 @@ interface StreamingTurn {
   turnId: string;
   agentText: string;
   isStreaming: boolean;
-  /** Active streaming items keyed by item_id */
   items: Map<string, StreamingItem>;
+}
+
+interface StreamingBufferItem {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
+  pendingAgentText: string;
+  pendingReasoningSummary: string[];
+  pendingReasoningRaw: string[];
+  pendingPlanText: string;
+  dirty: boolean;
+}
+
+interface StreamingBufferTurn {
+  turnId: string;
+  isStreaming: boolean;
+  items: Map<string, StreamingBufferItem>;
+  dirtyItemCount: number;
+}
+
+interface StreamingViewItem {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
+  agentText: string;
+  reasoningSummary: string[];
+  reasoningRaw: string[];
+  planText: string;
+}
+
+interface StreamingViewTurn {
+  turnId: string;
+  isStreaming: boolean;
+  items: Map<string, StreamingViewItem>;
+  revision: number;
 }
 
 interface MessageState {
   messagesByThread: Map<string, TurnGroup[]>;
   streamingTurn: StreamingTurn | null;
+  streamingBuffer: StreamingBufferTurn | null;
+  streamingView: StreamingViewTurn | null;
 
   appendMessage: (threadId: string, turnId: string, item: TurnItem) => void;
   setMessages: (threadId: string, groups: TurnGroup[]) => void;
@@ -30,8 +68,13 @@ interface MessageState {
   stopStreaming: () => void;
   clearThread: (threadId: string) => void;
 
-  /** v2 structured item tracking */
   startStreamingItem: (threadId: string, turnId: string, item: TurnItem) => void;
+  bufferAgentContentDelta: (itemId: string, delta: string) => void;
+  bufferReasoningContentDelta: (itemId: string, delta: string, summaryIndex: number) => void;
+  bufferReasoningRawContentDelta: (itemId: string, delta: string, contentIndex: number) => void;
+  bufferPlanDelta: (itemId: string, delta: string) => void;
+  flushVisibleStreaming: () => void;
+
   updateAgentContentDelta: (itemId: string, delta: string) => void;
   updateReasoningContentDelta: (itemId: string, delta: string, summaryIndex: number) => void;
   updateReasoningRawContentDelta: (itemId: string, delta: string, contentIndex: number) => void;
@@ -39,23 +82,16 @@ interface MessageState {
   completeStreamingItem: (threadId: string, turnId: string, item: TurnItem) => void;
 }
 
-export const useMessageStore = create<MessageState>((set) => ({
+export const useMessageStore = create<MessageState>((set, get) => ({
   messagesByThread: new Map(),
   streamingTurn: null,
+  streamingBuffer: null,
+  streamingView: null,
 
   appendMessage: (threadId, turnId, item) =>
-    set((state) => {
-      const next = new Map(state.messagesByThread);
-      const groups = next.get(threadId) ?? [];
-      const last = groups[groups.length - 1];
-      if (last && last.turn_id === turnId) {
-        const updated = [...groups.slice(0, -1), { ...last, items: [...last.items, item] }];
-        next.set(threadId, updated);
-      } else {
-        next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
-      }
-      return { messagesByThread: next };
-    }),
+    set((state) => ({
+      messagesByThread: appendItemToThread(state.messagesByThread, threadId, turnId, item),
+    })),
 
   setMessages: (threadId, groups) =>
     set((state) => {
@@ -65,15 +101,53 @@ export const useMessageStore = create<MessageState>((set) => ({
     }),
 
   startStreaming: (turnId) =>
-    set({ streamingTurn: { turnId, agentText: '', isStreaming: true, items: new Map() } }),
-
-  stopStreaming: () =>
-    set((state) => {
-      if (!state.streamingTurn) return state;
-      return {
-        streamingTurn: { ...state.streamingTurn, isStreaming: false },
-      };
+    set({
+      streamingBuffer: {
+        turnId,
+        isStreaming: true,
+        items: new Map(),
+        dirtyItemCount: 0,
+      },
+      streamingView: {
+        turnId,
+        isStreaming: true,
+        items: new Map(),
+        revision: 0,
+      },
+      streamingTurn: {
+        turnId,
+        agentText: '',
+        isStreaming: true,
+        items: new Map(),
+      },
     }),
+
+  stopStreaming: () => {
+    get().flushVisibleStreaming();
+    set((state) => {
+      if (!state.streamingView && !state.streamingTurn && !state.streamingBuffer) {
+        return state;
+      }
+
+      const nextView = state.streamingView
+        ? { ...state.streamingView, isStreaming: false }
+        : null;
+      const nextTurn = nextView
+        ? buildLegacyTurn(nextView)
+        : state.streamingTurn
+          ? { ...state.streamingTurn, isStreaming: false }
+          : null;
+      const nextBuffer = state.streamingBuffer
+        ? { ...state.streamingBuffer, isStreaming: false }
+        : null;
+
+      return {
+        streamingView: nextView,
+        streamingTurn: nextTurn,
+        streamingBuffer: nextBuffer,
+      };
+    });
+  },
 
   clearThread: (threadId) =>
     set((state) => {
@@ -82,124 +156,401 @@ export const useMessageStore = create<MessageState>((set) => ({
       return { messagesByThread: next };
     }),
 
-  // ── v2 structured item methods ──
-
   startStreamingItem: (threadId, turnId, item) =>
     set((state) => {
-      if (!state.streamingTurn) return state;
-      const items = new Map(state.streamingTurn.items);
+      if (!state.streamingBuffer || !state.streamingView) return state;
+
       const itemId = getItemId(item);
-      const itemType = item.type === 'AgentMessage' ? 'AgentMessage'
-        : item.type === 'Reasoning' ? 'Reasoning'
-        : item.type === 'Plan' ? 'Plan'
-        : 'AgentMessage';
-      items.set(itemId, {
+      const itemType = getStreamingItemType(item);
+      if (!itemId) return state;
+
+      const nextBufferItems = new Map(state.streamingBuffer.items);
+      nextBufferItems.set(itemId, {
         threadId,
         turnId,
         itemId,
-        itemType: itemType as StreamingItem['itemType'],
+        itemType,
+        pendingAgentText: '',
+        pendingReasoningSummary: [],
+        pendingReasoningRaw: [],
+        pendingPlanText: '',
+        dirty: false,
+      });
+
+      const nextViewItems = new Map(state.streamingView.items);
+      nextViewItems.set(itemId, {
+        threadId,
+        turnId,
+        itemId,
+        itemType,
         agentText: '',
         reasoningSummary: [],
         reasoningRaw: [],
         planText: '',
       });
+
+      const nextView: StreamingViewTurn = {
+        ...state.streamingView,
+        items: nextViewItems,
+      };
+
       return {
-        streamingTurn: { ...state.streamingTurn, items },
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextBufferItems,
+          dirtyItemCount: state.streamingBuffer.dirtyItemCount,
+        },
+        streamingView: nextView,
+        streamingTurn: buildLegacyTurn(nextView),
       };
     }),
 
-  updateAgentContentDelta: (itemId, delta) =>
+  bufferAgentContentDelta: (itemId, delta) =>
     set((state) => {
-      if (!state.streamingTurn) return state;
-      const items = new Map(state.streamingTurn.items);
-      const existing = items.get(itemId);
-      if (!existing) return state;
-      items.set(itemId, { ...existing, agentText: existing.agentText + delta });
+      if (!state.streamingBuffer) return state;
+      const buffered = state.streamingBuffer.items.get(itemId);
+      if (!buffered) return state;
+
+      const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
+      nextItems.set(itemId, {
+        ...buffered,
+        pendingAgentText: buffered.pendingAgentText + delta,
+        dirty: true,
+      });
+
       return {
-        streamingTurn: {
-          ...state.streamingTurn,
-          // Also update the top-level agentText for backward compatibility
-          agentText: state.streamingTurn.agentText + delta,
-          items,
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
         },
       };
     }),
 
-  updateReasoningContentDelta: (itemId, delta, summaryIndex) =>
+  bufferReasoningContentDelta: (itemId, delta, summaryIndex) =>
     set((state) => {
-      if (!state.streamingTurn) return state;
-      const items = new Map(state.streamingTurn.items);
-      const existing = items.get(itemId);
-      if (!existing) return state;
-      const summary = [...existing.reasoningSummary];
-      while (summary.length <= summaryIndex) {
-        summary.push('');
+      if (!state.streamingBuffer) return state;
+      const buffered = state.streamingBuffer.items.get(itemId);
+      if (!buffered) return state;
+
+      const nextSummary = [...buffered.pendingReasoningSummary];
+      while (nextSummary.length <= summaryIndex) {
+        nextSummary.push('');
       }
-      summary[summaryIndex] += delta;
-      items.set(itemId, { ...existing, reasoningSummary: summary });
+      nextSummary[summaryIndex] += delta;
+
+      const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
+      nextItems.set(itemId, {
+        ...buffered,
+        pendingReasoningSummary: nextSummary,
+        dirty: true,
+      });
+
       return {
-        streamingTurn: { ...state.streamingTurn, items },
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
+        },
       };
     }),
 
-  updateReasoningRawContentDelta: (itemId, delta, contentIndex) =>
+  bufferReasoningRawContentDelta: (itemId, delta, contentIndex) =>
     set((state) => {
-      if (!state.streamingTurn) return state;
-      const items = new Map(state.streamingTurn.items);
-      const existing = items.get(itemId);
-      if (!existing) return state;
-      const raw = [...existing.reasoningRaw];
-      while (raw.length <= contentIndex) {
-        raw.push('');
+      if (!state.streamingBuffer) return state;
+      const buffered = state.streamingBuffer.items.get(itemId);
+      if (!buffered) return state;
+
+      const nextRaw = [...buffered.pendingReasoningRaw];
+      while (nextRaw.length <= contentIndex) {
+        nextRaw.push('');
       }
-      raw[contentIndex] += delta;
-      items.set(itemId, { ...existing, reasoningRaw: raw });
+      nextRaw[contentIndex] += delta;
+
+      const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
+      nextItems.set(itemId, {
+        ...buffered,
+        pendingReasoningRaw: nextRaw,
+        dirty: true,
+      });
+
       return {
-        streamingTurn: { ...state.streamingTurn, items },
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
+        },
       };
     }),
 
-  updatePlanDelta: (itemId, delta) =>
+  bufferPlanDelta: (itemId, delta) =>
     set((state) => {
-      if (!state.streamingTurn) return state;
-      const items = new Map(state.streamingTurn.items);
-      const existing = items.get(itemId);
-      if (!existing) return state;
-      items.set(itemId, { ...existing, planText: existing.planText + delta });
+      if (!state.streamingBuffer) return state;
+      const buffered = state.streamingBuffer.items.get(itemId);
+      if (!buffered) return state;
+
+      const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
+      nextItems.set(itemId, {
+        ...buffered,
+        pendingPlanText: buffered.pendingPlanText + delta,
+        dirty: true,
+      });
+
       return {
-        streamingTurn: { ...state.streamingTurn, items },
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
+        },
       };
     }),
 
-  completeStreamingItem: (threadId, turnId, item) =>
+  flushVisibleStreaming: () =>
     set((state) => {
-      // Append the completed item to the appropriate turn group
-      const next = new Map(state.messagesByThread);
-      const groups = next.get(threadId) ?? [];
+      if (!state.streamingBuffer || !state.streamingView) return state;
+      if (state.streamingBuffer.dirtyItemCount === 0) return state;
+
+      const nextBufferItems = new Map<string, StreamingBufferItem>();
+      const nextViewItems = new Map(state.streamingView.items);
+
+      for (const [itemId, buffered] of state.streamingBuffer.items) {
+        const previousView = nextViewItems.get(itemId) ?? {
+          threadId: buffered.threadId,
+          turnId: buffered.turnId,
+          itemId,
+          itemType: buffered.itemType,
+          agentText: '',
+          reasoningSummary: [],
+          reasoningRaw: [],
+          planText: '',
+        };
+
+        if (buffered.dirty) {
+          nextViewItems.set(itemId, {
+            ...previousView,
+            agentText: previousView.agentText + buffered.pendingAgentText,
+            reasoningSummary: mergeTextArrays(
+              previousView.reasoningSummary,
+              buffered.pendingReasoningSummary,
+            ),
+            reasoningRaw: mergeTextArrays(
+              previousView.reasoningRaw,
+              buffered.pendingReasoningRaw,
+            ),
+            planText: previousView.planText + buffered.pendingPlanText,
+          });
+        }
+
+        nextBufferItems.set(itemId, resetBufferedItem(buffered));
+      }
+
+      const nextView: StreamingViewTurn = {
+        ...state.streamingView,
+        items: nextViewItems,
+        revision: state.streamingView.revision + 1,
+      };
+
+      return {
+        streamingBuffer: {
+          ...state.streamingBuffer,
+          items: nextBufferItems,
+          dirtyItemCount: 0,
+        },
+        streamingView: nextView,
+        streamingTurn: buildLegacyTurn(nextView),
+      };
+    }),
+
+  updateAgentContentDelta: (itemId, delta) => {
+    get().bufferAgentContentDelta(itemId, delta);
+    get().flushVisibleStreaming();
+  },
+
+  updateReasoningContentDelta: (itemId, delta, summaryIndex) => {
+    get().bufferReasoningContentDelta(itemId, delta, summaryIndex);
+    get().flushVisibleStreaming();
+  },
+
+  updateReasoningRawContentDelta: (itemId, delta, contentIndex) => {
+    get().bufferReasoningRawContentDelta(itemId, delta, contentIndex);
+    get().flushVisibleStreaming();
+  },
+
+  updatePlanDelta: (itemId, delta) => {
+    get().bufferPlanDelta(itemId, delta);
+    get().flushVisibleStreaming();
+  },
+
+  completeStreamingItem: (threadId, turnId, item) => {
+    get().flushVisibleStreaming();
+
+    set((state) => {
+      const nextMessages = appendCompletedStreamingItem(
+        state.messagesByThread,
+        threadId,
+        turnId,
+        item,
+      );
       const itemId = getItemId(item);
 
-      // Find or create the matching turn group
-      const lastGroup = groups[groups.length - 1];
-      if (lastGroup && lastGroup.turn_id === turnId) {
-        if (!lastGroup.items.some((m) => getItemId(m) === itemId)) {
-          const updated = [...groups.slice(0, -1), { ...lastGroup, items: [...lastGroup.items, item] }];
-          next.set(threadId, updated);
-        }
-      } else {
-        next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
-      }
-      // Remove from streaming items
-      if (state.streamingTurn) {
-        const items = new Map(state.streamingTurn.items);
-        items.delete(itemId);
-        return {
-          messagesByThread: next,
-          streamingTurn: { ...state.streamingTurn, items },
-        };
-      }
-      return { messagesByThread: next };
-    }),
+      const nextBufferItems = state.streamingBuffer
+        ? new Map(state.streamingBuffer.items)
+        : null;
+      const removedBufferedItem = nextBufferItems?.get(itemId) ?? null;
+      nextBufferItems?.delete(itemId);
+
+      const nextViewItems = state.streamingView
+        ? new Map(state.streamingView.items)
+        : null;
+      nextViewItems?.delete(itemId);
+
+      const nextView = state.streamingView && nextViewItems
+        ? {
+            ...state.streamingView,
+            items: nextViewItems,
+          }
+        : null;
+
+      return {
+        messagesByThread: nextMessages,
+        streamingBuffer: state.streamingBuffer && nextBufferItems
+          ? {
+              ...state.streamingBuffer,
+              items: nextBufferItems,
+              dirtyItemCount: Math.max(
+                0,
+                state.streamingBuffer.dirtyItemCount -
+                  (removedBufferedItem?.dirty ? 1 : 0),
+              ),
+            }
+          : state.streamingBuffer,
+        streamingView: nextView,
+        streamingTurn: nextView ? buildLegacyTurn(nextView) : state.streamingTurn,
+      };
+    });
+  },
 }));
+
+function appendItemToThread(
+  messagesByThread: Map<string, TurnGroup[]>,
+  threadId: string,
+  turnId: string,
+  item: TurnItem,
+): Map<string, TurnGroup[]> {
+  const next = new Map(messagesByThread);
+  const groups = next.get(threadId) ?? [];
+  const last = groups[groups.length - 1];
+
+  if (last && last.turn_id === turnId) {
+    const updated = [
+      ...groups.slice(0, -1),
+      { ...last, items: [...last.items, item] },
+    ];
+    next.set(threadId, updated);
+  } else {
+    next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
+  }
+
+  return next;
+}
+
+function appendCompletedStreamingItem(
+  messagesByThread: Map<string, TurnGroup[]>,
+  threadId: string,
+  turnId: string,
+  item: TurnItem,
+): Map<string, TurnGroup[]> {
+  const next = new Map(messagesByThread);
+  const groups = next.get(threadId) ?? [];
+  const itemId = getItemId(item);
+  const lastGroup = groups[groups.length - 1];
+
+  if (lastGroup && lastGroup.turn_id === turnId) {
+    if (!lastGroup.items.some((existing) => getItemId(existing) === itemId)) {
+      const updated = [
+        ...groups.slice(0, -1),
+        { ...lastGroup, items: [...lastGroup.items, item] },
+      ];
+      next.set(threadId, updated);
+    }
+  } else {
+    next.set(threadId, [...groups, { turn_id: turnId, items: [item] }]);
+  }
+
+  return next;
+}
+
+function resetBufferedItem(item: StreamingBufferItem): StreamingBufferItem {
+  return {
+    ...item,
+    pendingAgentText: '',
+    pendingReasoningSummary: [],
+    pendingReasoningRaw: [],
+    pendingPlanText: '',
+    dirty: false,
+  };
+}
+
+function mergeTextArrays(current: string[], pending: string[]): string[] {
+  const next = [...current];
+  for (let index = 0; index < pending.length; index += 1) {
+    if (pending[index] === undefined) continue;
+    while (next.length <= index) {
+      next.push('');
+    }
+    next[index] += pending[index];
+  }
+  return next;
+}
+
+function buildLegacyTurn(view: StreamingViewTurn): StreamingTurn {
+  const items = new Map<string, StreamingItem>();
+  let agentText = '';
+
+  for (const [itemId, item] of view.items) {
+    items.set(itemId, {
+      threadId: item.threadId,
+      turnId: item.turnId,
+      itemId,
+      itemType: item.itemType,
+      agentText: item.agentText,
+      reasoningSummary: [...item.reasoningSummary],
+      reasoningRaw: [...item.reasoningRaw],
+      planText: item.planText,
+    });
+
+    if (item.itemType === 'AgentMessage') {
+      agentText += item.agentText;
+    }
+  }
+
+  return {
+    turnId: view.turnId,
+    agentText,
+    isStreaming: view.isStreaming,
+    items,
+  };
+}
+
+function getStreamingItemType(
+  item: TurnItem,
+): 'AgentMessage' | 'Reasoning' | 'Plan' {
+  if (item.type === 'Reasoning') return 'Reasoning';
+  if (item.type === 'Plan') return 'Plan';
+  return 'AgentMessage';
+}
 
 function getItemId(item: TurnItem): string {
   return item.id ?? '';

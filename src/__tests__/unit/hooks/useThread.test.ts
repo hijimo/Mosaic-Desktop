@@ -52,7 +52,7 @@ describe('useThread', () => {
       await result.current.archiveThread('t1');
     });
 
-    expect(invoke).toHaveBeenCalledWith('thread_archive', { thread_id: 't1' });
+    expect(invoke).toHaveBeenCalledWith('thread_archive', { threadId: 't1' });
     expect(useThreadStore.getState().threads.has('t1')).toBe(false);
   });
 });

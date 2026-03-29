@@ -24,7 +24,7 @@ describe('tauri/events', () => {
     let capturedHandler: ((event: unknown) => void) | undefined;
     vi.mocked(listen).mockImplementation(async (_name, handler) => {
       capturedHandler = handler as (event: unknown) => void;
-      return vi.fn();
+      return () => {};
     });
 
     const callback = vi.fn();

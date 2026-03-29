@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listen } from '@tauri-apps/api/event';
 import { useCodexEvent } from '@/hooks/useCodexEvent';
@@ -14,7 +14,12 @@ describe('useCodexEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useThreadStore.setState({ threads: new Map(), activeThreadId: null });
-    useMessageStore.setState({ messagesByThread: new Map(), streamingTurn: null });
+    useMessageStore.setState({
+      messagesByThread: new Map(),
+      streamingTurn: null,
+      streamingBuffer: null,
+      streamingView: null,
+    });
 
     // Add a thread so updateThread has something to patch
     useThreadStore.getState().addThread({
@@ -29,12 +34,14 @@ describe('useCodexEvent', () => {
 
     vi.mocked(listen).mockImplementation(async (_name, handler) => {
       capturedHandler = handler as typeof capturedHandler;
-      return vi.fn();
+      return () => {};
     });
   });
 
   function emit(threadId: string, msg: CodexEventPayload['event']['msg']): void {
-    capturedHandler!({ payload: { thread_id: threadId, event: { id: 'e1', msg } } });
+    act(() => {
+      capturedHandler!({ payload: { thread_id: threadId, event: { id: 'e1', msg } } });
+    });
   }
 
   it('registers listener on mount', () => {
@@ -68,27 +75,38 @@ describe('useCodexEvent', () => {
     expect(useThreadStore.getState().threads.get('t1')?.name).toBe('My Chat');
   });
 
-  it('handles task_started by starting streaming', () => {
+  it('handles task_started by starting streaming buffer and view state', () => {
     renderHook(() => useCodexEvent());
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
 
-    const st = useMessageStore.getState().streamingTurn;
-    expect(st).toMatchObject({
+    const state = useMessageStore.getState();
+    expect(state.streamingBuffer).toMatchObject({
       turnId: 'turn-1',
-      agentText: '',
       isStreaming: true,
     });
-    expect(st?.items).toBeInstanceOf(Map);
+    expect(state.streamingView).toMatchObject({
+      turnId: 'turn-1',
+      isStreaming: true,
+      revision: 0,
+    });
   });
 
-  it('handles agent_message_content_delta by accumulating text via v2 item tracking', () => {
+  it('buffers agent deltas instead of writing visible text immediately', () => {
     renderHook(() => useCodexEvent());
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
     emit('t1', { type: 'item_started', thread_id: 't1', turn_id: 'turn-1', item: { type: 'AgentMessage', id: 'a1', content: [] } });
     emit('t1', { type: 'agent_message_content_delta', thread_id: 't1', turn_id: 'turn-1', item_id: 'a1', delta: 'Hello' });
     emit('t1', { type: 'agent_message_content_delta', thread_id: 't1', turn_id: 'turn-1', item_id: 'a1', delta: ' world' });
 
-    expect(useMessageStore.getState().streamingTurn?.agentText).toBe('Hello world');
+    const buffered = useMessageStore.getState().streamingBuffer?.items.get('a1');
+    expect(buffered?.pendingAgentText).toBe('Hello world');
+    expect(useMessageStore.getState().streamingView?.items.get('a1')?.agentText ?? '').toBe('');
+
+    act(() => {
+      useMessageStore.getState().flushVisibleStreaming();
+    });
+
+    expect(useMessageStore.getState().streamingView?.items.get('a1')?.agentText).toBe('Hello world');
   });
 
   it('handles task_complete by stopping streaming', () => {
