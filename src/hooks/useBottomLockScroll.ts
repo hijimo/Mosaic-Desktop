@@ -7,11 +7,13 @@ export function useBottomLockScroll(): {
   bottomLock: boolean;
   setBottomLock: (value: boolean) => void;
   handleScroll: () => void;
+  reconcileNow: () => void;
   scheduleReconcile: () => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
   const bottomLockRef = useRef(true);
+  const lastAppliedScrollHeightRef = useRef<number | null>(null);
   const [bottomLock, setBottomLock] = useState(true);
 
   const updateBottomLock = useCallback((value: boolean) => {
@@ -31,18 +33,46 @@ export function useBottomLockScroll(): {
     );
   }, [updateBottomLock]);
 
-  const scheduleReconcile = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
+  const reconcileNow = useCallback(() => {
+    const el = containerRef.current;
+    if (!el || !bottomLockRef.current) return;
+
+    const nextScrollHeight = el.scrollHeight;
+    if (lastAppliedScrollHeightRef.current === nextScrollHeight) return;
+
+    lastAppliedScrollHeightRef.current = nextScrollHeight;
+    if (el.scrollTop !== nextScrollHeight) {
+      el.scrollTop = el.scrollHeight;
     }
+  }, []);
+
+  const scheduleReconcile = useCallback(() => {
+    if (frameRef.current !== null) return;
 
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = null;
-      const el = containerRef.current;
-      if (!el || !bottomLockRef.current) return;
-      el.scrollTop = el.scrollHeight;
+      reconcileNow();
     });
-  }, []);
+  }, [reconcileNow]);
+
+  useEffect(() => {
+    if (bottomLock) {
+      lastAppliedScrollHeightRef.current = null;
+    }
+  }, [bottomLock]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => {
+      if (!bottomLockRef.current) return;
+      scheduleReconcile();
+    });
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [scheduleReconcile]);
 
   useEffect(() => () => {
     if (frameRef.current !== null) {
@@ -55,6 +85,7 @@ export function useBottomLockScroll(): {
     bottomLock,
     setBottomLock: updateBottomLock,
     handleScroll,
+    reconcileNow,
     scheduleReconcile,
   };
 }

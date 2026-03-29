@@ -39,7 +39,10 @@ describe('messageStore', () => {
   it('startStreaming sets streaming buffer and view state', () => {
     useMessageStore.getState().startStreaming('turn-1');
     const state = useMessageStore.getState();
-    expect(state.streamingBuffer).toMatchObject({ turnId: 'turn-1' });
+    expect(state.streamingBuffer).toMatchObject({
+      turnId: 'turn-1',
+      dirtyItemCount: 0,
+    });
     expect(state.streamingView).toMatchObject({
       turnId: 'turn-1',
       isStreaming: true,
@@ -63,6 +66,7 @@ describe('messageStore', () => {
     let state = useMessageStore.getState();
     expect(state.streamingView?.items.get('a1')?.agentText ?? '').toBe('');
     expect(state.streamingTurn?.agentText).toBe('');
+    expect(state.streamingBuffer?.dirtyItemCount).toBe(1);
 
     flushVisibleStreaming();
 
@@ -70,6 +74,7 @@ describe('messageStore', () => {
     expect(state.streamingView?.items.get('a1')?.agentText).toBe('Hello world');
     expect(state.streamingTurn?.agentText).toBe('Hello world');
     expect(state.streamingView?.revision).toBe(1);
+    expect(state.streamingBuffer?.dirtyItemCount).toBe(0);
   });
 
   it('bufferAgentContentDelta is no-op when not streaming', () => {

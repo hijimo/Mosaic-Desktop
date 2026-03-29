@@ -158,6 +158,7 @@ describe('MessageList', () => {
   it('reconciles scroll when streaming revision changes', () => {
     const scrollTopSet = vi.fn();
     let scrollTopValue = 0;
+    let scrollHeightValue = 900;
 
     Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
       configurable: true,
@@ -172,7 +173,7 @@ describe('MessageList', () => {
     Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
       configurable: true,
       get() {
-        return 960;
+        return scrollHeightValue;
       },
     });
     Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
@@ -193,6 +194,7 @@ describe('MessageList', () => {
     scrollTopSet.mockClear();
 
     act(() => {
+      scrollHeightValue = 960;
       useMessageStore.setState({
         streamingTurn: { turnId: 'turn1', agentText: 'AB', isStreaming: true, items: new Map() },
         streamingView: { turnId: 'turn1', isStreaming: true, items: new Map(), revision: 1 },
@@ -209,6 +211,7 @@ describe('MessageList', () => {
         streamingBuffer: {
           turnId: 'turn1',
           isStreaming: true,
+          dirtyItemCount: 1,
           items: new Map([
             ['a1', {
               threadId: 't1',

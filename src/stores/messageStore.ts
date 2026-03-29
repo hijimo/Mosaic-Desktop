@@ -35,6 +35,7 @@ interface StreamingBufferTurn {
   turnId: string;
   isStreaming: boolean;
   items: Map<string, StreamingBufferItem>;
+  dirtyItemCount: number;
 }
 
 interface StreamingViewItem {
@@ -105,6 +106,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         turnId,
         isStreaming: true,
         items: new Map(),
+        dirtyItemCount: 0,
       },
       streamingView: {
         turnId,
@@ -196,6 +198,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextBufferItems,
+          dirtyItemCount: state.streamingBuffer.dirtyItemCount,
         },
         streamingView: nextView,
         streamingTurn: buildLegacyTurn(nextView),
@@ -209,6 +212,9 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       if (!buffered) return state;
 
       const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
       nextItems.set(itemId, {
         ...buffered,
         pendingAgentText: buffered.pendingAgentText + delta,
@@ -219,6 +225,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
         },
       };
     }),
@@ -236,6 +243,9 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       nextSummary[summaryIndex] += delta;
 
       const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
       nextItems.set(itemId, {
         ...buffered,
         pendingReasoningSummary: nextSummary,
@@ -246,6 +256,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
         },
       };
     }),
@@ -263,6 +274,9 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       nextRaw[contentIndex] += delta;
 
       const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
       nextItems.set(itemId, {
         ...buffered,
         pendingReasoningRaw: nextRaw,
@@ -273,6 +287,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
         },
       };
     }),
@@ -284,6 +299,9 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       if (!buffered) return state;
 
       const nextItems = new Map(state.streamingBuffer.items);
+      const nextDirtyItemCount = buffered.dirty
+        ? state.streamingBuffer.dirtyItemCount
+        : state.streamingBuffer.dirtyItemCount + 1;
       nextItems.set(itemId, {
         ...buffered,
         pendingPlanText: buffered.pendingPlanText + delta,
@@ -294,6 +312,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextItems,
+          dirtyItemCount: nextDirtyItemCount,
         },
       };
     }),
@@ -301,8 +320,8 @@ export const useMessageStore = create<MessageState>((set, get) => ({
   flushVisibleStreaming: () =>
     set((state) => {
       if (!state.streamingBuffer || !state.streamingView) return state;
+      if (state.streamingBuffer.dirtyItemCount === 0) return state;
 
-      let hasDirtyItems = false;
       const nextBufferItems = new Map<string, StreamingBufferItem>();
       const nextViewItems = new Map(state.streamingView.items);
 
@@ -319,7 +338,6 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         };
 
         if (buffered.dirty) {
-          hasDirtyItems = true;
           nextViewItems.set(itemId, {
             ...previousView,
             agentText: previousView.agentText + buffered.pendingAgentText,
@@ -338,15 +356,6 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         nextBufferItems.set(itemId, resetBufferedItem(buffered));
       }
 
-      if (!hasDirtyItems) {
-        return {
-          streamingBuffer: {
-            ...state.streamingBuffer,
-            items: nextBufferItems,
-          },
-        };
-      }
-
       const nextView: StreamingViewTurn = {
         ...state.streamingView,
         items: nextViewItems,
@@ -357,6 +366,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         streamingBuffer: {
           ...state.streamingBuffer,
           items: nextBufferItems,
+          dirtyItemCount: 0,
         },
         streamingView: nextView,
         streamingTurn: buildLegacyTurn(nextView),
@@ -398,6 +408,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       const nextBufferItems = state.streamingBuffer
         ? new Map(state.streamingBuffer.items)
         : null;
+      const removedBufferedItem = nextBufferItems?.get(itemId) ?? null;
       nextBufferItems?.delete(itemId);
 
       const nextViewItems = state.streamingView
@@ -418,6 +429,11 @@ export const useMessageStore = create<MessageState>((set, get) => ({
           ? {
               ...state.streamingBuffer,
               items: nextBufferItems,
+              dirtyItemCount: Math.max(
+                0,
+                state.streamingBuffer.dirtyItemCount -
+                  (removedBufferedItem?.dirty ? 1 : 0),
+              ),
             }
           : state.streamingBuffer,
         streamingView: nextView,

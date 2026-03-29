@@ -8,6 +8,13 @@ vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
 });
 
 vi.stubGlobal('cancelAnimationFrame', vi.fn());
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe = vi.fn();
+    disconnect = vi.fn();
+  },
+);
 
 function makeScrollableElement({
   scrollHeight,
@@ -61,6 +68,27 @@ describe('useBottomLockScroll', () => {
     act(() => {
       result.current.attachContainer(container);
       result.current.setBottomLock(true);
+      result.current.scheduleReconcile();
+    });
+
+    expect(scrollTopSet).toHaveBeenCalledTimes(1);
+    expect(scrollTopSet).toHaveBeenCalledWith(1200);
+  });
+
+  it('reconcileNow and scheduleReconcile do not double-write for same height', () => {
+    const scrollTopSet = vi.fn();
+    const container = makeScrollableElement({
+      scrollHeight: 1200,
+      clientHeight: 400,
+      onSetScrollTop: scrollTopSet,
+    });
+
+    const { result } = renderHook(() => useBottomLockScroll());
+
+    act(() => {
+      result.current.attachContainer(container);
+      result.current.setBottomLock(true);
+      result.current.reconcileNow();
       result.current.scheduleReconcile();
     });
 

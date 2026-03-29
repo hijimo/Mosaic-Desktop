@@ -25,8 +25,8 @@ export function StreamingTurnRoot({
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
   );
   const streamingView = useMessageStore((s) => s.streamingView);
-  const hasPendingStreamingBuffer = useMessageStore((s) =>
-    Array.from(s.streamingBuffer?.items.values() ?? []).some((item) => item.dirty),
+  const hasPendingStreamingBuffer = useMessageStore(
+    (s) => (s.streamingBuffer?.dirtyItemCount ?? 0) > 0,
   );
   const flushVisibleStreaming = useMessageStore((s) => s.flushVisibleStreaming);
   const isStreaming = streamingView?.isStreaming ?? false;
