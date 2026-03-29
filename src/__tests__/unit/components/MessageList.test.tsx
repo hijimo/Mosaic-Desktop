@@ -4,11 +4,24 @@ import { MessageList } from '@/components/chat/MessageList';
 import { useMessageStore } from '@/stores/messageStore';
 import type { TurnGroup } from '@/types';
 
+let nextFrameId = 1;
+const frameQueue = new Map<number, FrameRequestCallback>();
+
 vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-  callback(0);
-  return 1;
+  const id = nextFrameId++;
+  frameQueue.set(id, callback);
+  return id;
 });
-vi.stubGlobal('cancelAnimationFrame', vi.fn());
+vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => {
+  frameQueue.delete(id);
+}));
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe = vi.fn();
+    disconnect = vi.fn();
+  },
+);
 
 // Mock Streamdown
 vi.mock('streamdown', () => ({
@@ -29,8 +42,29 @@ vi.mock('@/components/chat/Message', () => ({
   ),
 }));
 
+function runNextFrame(timestamp = 16): void {
+  const iterator = frameQueue.entries().next();
+  if (iterator.done) {
+    throw new Error('No animation frame scheduled');
+  }
+
+  const [id, callback] = iterator.value;
+  frameQueue.delete(id);
+  callback(timestamp);
+}
+
+function runAllFrames(): void {
+  while (frameQueue.size > 0) {
+    runNextFrame();
+  }
+}
+
 describe('MessageList', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    frameQueue.clear();
+    nextFrameId = 1;
+
     act(() => {
       useMessageStore.setState({
         messagesByThread: new Map(),
@@ -76,6 +110,9 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
+    act(() => {
+      runAllFrames();
+    });
     // Now renders Chinese text
     expect(screen.getByText('思考中...')).toBeInTheDocument();
   });
@@ -105,6 +142,9 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
+    act(() => {
+      runAllFrames();
+    });
     expect(screen.getByText('Partial response...')).toBeInTheDocument();
   });
 
@@ -143,6 +183,9 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
+    act(() => {
+      runAllFrames();
+    });
     scrollTopSet.mockClear();
 
     act(() => {
@@ -191,6 +234,9 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
+    act(() => {
+      runAllFrames();
+    });
     scrollTopSet.mockClear();
 
     act(() => {
@@ -201,7 +247,11 @@ describe('MessageList', () => {
       });
     });
 
-    expect(scrollTopSet).toHaveBeenCalledWith(960);
+    act(() => {
+      runAllFrames();
+    });
+
+    expect(scrollTopSet.mock.lastCall?.[0]).toBe(960);
   });
 
   it('flushes buffered streaming content on animation frame', () => {
@@ -247,6 +297,9 @@ describe('MessageList', () => {
     });
 
     render(<MessageList threadId="t1" />);
+    act(() => {
+      runAllFrames();
+    });
     expect(screen.getByText('Buffered text')).toBeInTheDocument();
     expect(useMessageStore.getState().streamingView?.revision).toBe(1);
   });

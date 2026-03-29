@@ -19,16 +19,15 @@ export function MessageList({
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
   );
   const streamingView = useMessageStore((s) => s.streamingView);
-  const { attachContainer, handleScroll, reconcileNow, scheduleReconcile } =
+  const { attachContainer, handleScroll, scheduleReconcile } =
     useBottomLockScroll();
 
   const msgLen = turnGroups.length;
   const streamRevision = streamingView?.revision ?? 0;
 
   useLayoutEffect(() => {
-    reconcileNow();
     scheduleReconcile();
-  }, [msgLen, streamRevision, reconcileNow, scheduleReconcile]);
+  }, [msgLen, streamRevision, scheduleReconcile]);
 
   return (
     <Box
