@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { listenCodexEvent } from '@/services/api';
+import { listenCodexEvent, threadGetMessages } from '@/services/api';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
 import { useToolCallStore } from '@/stores/toolCallStore';
@@ -14,7 +14,7 @@ import type { CodexEventPayload } from '@/types';
 export function useCodexEvent(): void {
   const updateThread = useThreadStore((s) => s.updateThread);
   const {
-    appendMessage,
+    setMessages,
     startStreaming,
     stopStreaming,
     startStreamingItem,
@@ -58,6 +58,9 @@ export function useCodexEvent(): void {
         case 'task_complete':
           flushVisibleStreaming();
           stopStreaming();
+          void threadGetMessages(thread_id).then((messages) => {
+            setMessages(thread_id, messages);
+          });
           break;
 
         case 'turn_aborted':
@@ -207,7 +210,7 @@ export function useCodexEvent(): void {
     };
   }, [
     updateThread,
-    appendMessage,
+    setMessages,
     startStreaming,
     stopStreaming,
     startStreamingItem,

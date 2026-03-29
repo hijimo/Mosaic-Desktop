@@ -73,7 +73,7 @@ describe('StreamingTurnRoot', () => {
     expect(container).toContainElement(screen.getByText(/read_file/));
   });
 
-  it('does not duplicate content when completed turn items and streaming items share the same id', () => {
+  it('does not duplicate content when completed turn items and streaming items share the same text', () => {
     useMessageStore.setState({
       messagesByThread: new Map([
         ['t1', [{
@@ -92,10 +92,10 @@ describe('StreamingTurnRoot', () => {
         isStreaming: true,
         revision: 2,
         items: new Map([
-          ['a1', {
+          ['a1-streaming', {
             threadId: 't1',
             turnId: 'turn-1',
-            itemId: 'a1',
+            itemId: 'a1-streaming',
             itemType: 'AgentMessage',
             agentText: '使用技能： find-skills，用来帮你查找“桌面自动化”相关可安装技能。',
             reasoningSummary: [],

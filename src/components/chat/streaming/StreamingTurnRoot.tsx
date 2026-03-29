@@ -103,6 +103,12 @@ function buildStreamingGroup(
 
   const baseItems = currentStreamingGroup?.items ?? [];
   const baseItemIds = new Set(baseItems.map((item) => item.id));
+  const baseAgentTexts = new Set(
+    baseItems
+      .filter((item): item is Extract<TurnItem, { type: 'AgentMessage' }> => item.type === 'AgentMessage')
+      .map((item) => item.content.map((content) => content.text).join(''))
+      .filter(Boolean),
+  );
   const streamingItems = Array.from(streamingView?.items.values() ?? []).map<TurnItem>((item) => {
     switch (item.itemType) {
       case 'Reasoning':
@@ -126,7 +132,13 @@ function buildStreamingGroup(
           content: [{ type: 'Text', text: item.agentText }],
         };
     }
-  }).filter((item) => !baseItemIds.has(item.id));
+  }).filter((item) => {
+    if (baseItemIds.has(item.id)) return false;
+    if (item.type !== 'AgentMessage') return true;
+
+    const itemText = item.content.map((content) => content.text).join('');
+    return !baseAgentTexts.has(itemText);
+  });
 
   return {
     turn_id: streamingView?.turnId ?? currentStreamingGroup?.turn_id ?? 'streaming-turn',

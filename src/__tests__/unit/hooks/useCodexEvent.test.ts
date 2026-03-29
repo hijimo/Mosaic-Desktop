@@ -1,12 +1,14 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useCodexEvent } from '@/hooks/useCodexEvent';
 import { useThreadStore } from '@/stores/threadStore';
 import { useMessageStore } from '@/stores/messageStore';
 import type { CodexEventPayload } from '@/types';
 
 vi.mock('@tauri-apps/api/event');
+vi.mock('@tauri-apps/api/core');
 
 describe('useCodexEvent', () => {
   let capturedHandler: ((event: { payload: CodexEventPayload }) => void) | undefined;
@@ -110,11 +112,32 @@ describe('useCodexEvent', () => {
   });
 
   it('handles task_complete by stopping streaming', () => {
+    vi.mocked(invoke).mockResolvedValueOnce([
+      {
+        turn_id: 'turn-1',
+        items: [
+          {
+            type: 'McpToolCall',
+            id: 'tool-1',
+            server: 'filesystem',
+            tool: 'read_file',
+            status: 'Completed',
+            arguments: { path: '/tmp/demo.txt' },
+          },
+          {
+            type: 'AgentMessage',
+            id: 'a1',
+            content: [{ type: 'Text', text: 'final response' }],
+          },
+        ],
+      },
+    ]);
     renderHook(() => useCodexEvent());
     emit('t1', { type: 'task_started', turn_id: 'turn-1', collaboration_mode_kind: 'Default' });
     emit('t1', { type: 'task_complete', turn_id: 'turn-1' });
 
     expect(useMessageStore.getState().streamingTurn?.isStreaming).toBe(false);
+    expect(invoke).toHaveBeenCalledWith('thread_get_messages', { threadId: 't1' });
   });
 
   it('handles item_completed by appending message', () => {
