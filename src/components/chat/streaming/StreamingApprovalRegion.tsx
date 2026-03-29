@@ -1,6 +1,5 @@
 import { Box } from '@mui/material';
 import { useApprovalStore } from '@/stores/approvalStore';
-import { AgentAvatar } from '../shared/AgentAvatar';
 import { ApprovalRequestCard } from '../agent/ApprovalRequestCard';
 
 interface StreamingApprovalRegionProps {
@@ -15,24 +14,21 @@ export function StreamingApprovalRegion({
   if (approvals.size === 0) return null;
 
   return (
-    <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-      <AgentAvatar />
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          flex: 1,
-        }}
-      >
-        {Array.from(approvals.values()).map((request) => (
-          <ApprovalRequestCard
-            key={request.callId}
-            request={request}
-            onDecision={onApprovalDecision}
-          />
-        ))}
-      </Box>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        flex: 1,
+      }}
+    >
+      {Array.from(approvals.values()).map((request) => (
+        <ApprovalRequestCard
+          key={request.callId}
+          request={request}
+          onDecision={onApprovalDecision}
+        />
+      ))}
     </Box>
   );
 }

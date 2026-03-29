@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { Box } from '@mui/material';
 import { useMessageStore } from '@/stores/messageStore';
 import { Message } from '../Message';
 import { TaskStartedIndicator } from '../indicators/TaskStartedIndicator';
 import { TaskCompletedIndicator } from '../indicators/TaskCompletedIndicator';
+import { AgentAvatar } from '../shared/AgentAvatar';
 import { StreamingReasoningList } from './StreamingReasoningList';
 import { StreamingPlanList } from './StreamingPlanList';
 import { StreamingToolRegion } from './StreamingToolRegion';
@@ -66,14 +68,30 @@ export function StreamingTurnRoot({
       ))}
 
       {isStreaming ? (
-        <>
-          <StreamingReasoningList />
-          <StreamingPlanList />
-          <StreamingToolRegion />
-          <StreamingApprovalRegion onApprovalDecision={onApprovalDecision} />
-          <StreamingClarificationRegion />
-          <StreamingAgentBody />
-        </>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+          <AgentAvatar />
+          <Box
+            data-testid='streaming-agent-turn-content'
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              flex: 1,
+              bgcolor: '#fff',
+              border: '1px solid rgba(192,199,207,0.05)',
+              borderRadius: '0 24px 24px 24px',
+              boxShadow: '0px 8px 30px rgba(0,0,0,0.04)',
+              p: '16px',
+            }}
+          >
+            <StreamingReasoningList />
+            <StreamingPlanList />
+            <StreamingToolRegion />
+            <StreamingApprovalRegion onApprovalDecision={onApprovalDecision} />
+            <StreamingClarificationRegion />
+            <StreamingAgentBody />
+          </Box>
+        </Box>
       ) : null}
 
       {isComplete && <TaskCompletedIndicator />}

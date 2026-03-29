@@ -1,6 +1,5 @@
 import { Box } from '@mui/material';
 import { useMessageStore } from '@/stores/messageStore';
-import { AgentAvatar } from '../shared/AgentAvatar';
 import { ThinkingPanel } from '../agent/ThinkingPanel';
 
 export function StreamingReasoningList(): React.ReactElement | null {
@@ -15,17 +14,11 @@ export function StreamingReasoningList(): React.ReactElement | null {
   return (
     <>
       {items.map((item) => (
-        <Box
-          key={item.itemId}
-          sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}
-        >
-          <AgentAvatar />
-          <Box sx={{ flex: 1 }}>
-            <ThinkingPanel
-              text={item.reasoningSummary.filter(Boolean).join('\n')}
-              isStreaming
-            />
-          </Box>
+        <Box key={item.itemId} sx={{ flex: 1 }}>
+          <ThinkingPanel
+            text={item.reasoningSummary.filter(Boolean).join('\n')}
+            isStreaming
+          />
         </Box>
       ))}
     </>
