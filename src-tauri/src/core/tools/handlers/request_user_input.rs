@@ -16,16 +16,24 @@ pub fn request_user_input_unavailable_message(
     if request_user_input_is_available(mode, default_mode_enabled) {
         None
     } else {
-        Some(format!("request_user_input is unavailable in {} mode", mode.display_name()))
+        Some(format!(
+            "request_user_input is unavailable in {} mode",
+            mode.display_name()
+        ))
     }
 }
 
 pub fn request_user_input_tool_description(default_mode_enabled: bool) -> String {
-    let modes: Vec<&str> = [ModeKind::Default, ModeKind::Plan, ModeKind::Execute, ModeKind::PairProgramming]
-        .iter()
-        .filter(|m| request_user_input_is_available(**m, default_mode_enabled))
-        .map(|m| m.display_name())
-        .collect();
+    let modes: Vec<&str> = [
+        ModeKind::Default,
+        ModeKind::Plan,
+        ModeKind::Execute,
+        ModeKind::PairProgramming,
+    ]
+    .iter()
+    .filter(|m| request_user_input_is_available(**m, default_mode_enabled))
+    .map(|m| m.display_name())
+    .collect();
     let allowed = match modes.as_slice() {
         [] => "no modes".to_string(),
         [m] => format!("{m} mode"),
@@ -41,7 +49,9 @@ pub struct RequestUserInputHandler {
 
 impl Default for RequestUserInputHandler {
     fn default() -> Self {
-        Self { default_mode_request_user_input: false }
+        Self {
+            default_mode_request_user_input: false,
+        }
     }
 }
 
@@ -81,13 +91,17 @@ impl ToolHandler for RequestUserInputHandler {
         }
 
         let mut params: RequestUserInputArgs = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid request_user_input args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid request_user_input args: {e}"),
+            )
         })?;
 
         // Validate: all questions must have non-empty options
-        let missing_options = params.questions.iter().any(|q| {
-            q.options.as_ref().map_or(true, |opts| opts.is_empty())
-        });
+        let missing_options = params
+            .questions
+            .iter()
+            .any(|q| q.options.as_ref().map_or(true, |opts| opts.is_empty()));
         if missing_options {
             return Err(CodexError::new(
                 ErrorCode::InvalidInput,

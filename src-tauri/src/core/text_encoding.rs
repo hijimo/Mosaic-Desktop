@@ -66,7 +66,10 @@ mod tests {
 
     #[test]
     fn utf8_passthrough() {
-        assert_eq!(bytes_to_string_smart("Hello, 世界".as_bytes()), "Hello, 世界");
+        assert_eq!(
+            bytes_to_string_smart("Hello, 世界".as_bytes()),
+            "Hello, 世界"
+        );
     }
 
     #[test]

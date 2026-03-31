@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use anyhow::Error;
 use anyhow::Result;
+use reqwest::header::HeaderMap;
+use reqwest::header::AUTHORIZATION;
 use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;

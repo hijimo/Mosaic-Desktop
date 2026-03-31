@@ -136,7 +136,12 @@ impl StateDb {
 
         let rows: Vec<(String, String)> = stmt
             .query_map(
-                params![JOB_KIND_MEMORY_STAGE1, current_id, max_age_cutoff, idle_cutoff],
+                params![
+                    JOB_KIND_MEMORY_STAGE1,
+                    current_id,
+                    max_age_cutoff,
+                    idle_cutoff
+                ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(2)?)),
             )
             .map_err(|e| db_err(format!("claim query: {e}")))?
@@ -156,7 +161,12 @@ impl StateDb {
                 .map(|d| d.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
 
-            match self.try_claim_stage1_job(tid, current_thread_id, updated_at.timestamp(), lease_seconds)? {
+            match self.try_claim_stage1_job(
+                tid,
+                current_thread_id,
+                updated_at.timestamp(),
+                lease_seconds,
+            )? {
                 Stage1JobClaimOutcome::Claimed { ownership_token } => {
                     claimed.push(Stage1JobClaim {
                         thread: MemoryThreadMeta {
@@ -313,7 +323,14 @@ impl StateDb {
                 rollout_slug = excluded.rollout_slug,
                 generated_at = excluded.generated_at
              WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at",
-            params![tid, source_updated_at, raw_memory, rollout_summary, rollout_slug, now],
+            params![
+                tid,
+                source_updated_at,
+                raw_memory,
+                rollout_summary,
+                rollout_slug,
+                now
+            ],
         )
         .map_err(|e| db_err(format!("upsert stage1 output: {e}")))?;
 
@@ -340,7 +357,14 @@ impl StateDb {
                 "UPDATE jobs SET status = 'error', finished_at = ?1, lease_until = NULL,
                     retry_at = ?2, retry_remaining = retry_remaining - 1, last_error = ?3
                  WHERE kind = ?4 AND job_key = ?5 AND status = 'running' AND ownership_token = ?6",
-                params![now, retry_at, failure_reason, JOB_KIND_MEMORY_STAGE1, tid, ownership_token],
+                params![
+                    now,
+                    retry_at,
+                    failure_reason,
+                    JOB_KIND_MEMORY_STAGE1,
+                    tid,
+                    ownership_token
+                ],
             )
             .map_err(|e| db_err(format!("mark stage1 failed: {e}")))?;
 
@@ -370,11 +394,8 @@ impl StateDb {
             return Ok(false);
         }
 
-        conn.execute(
-            "DELETE FROM stage1_outputs WHERE thread_id = ?1",
-            [&tid],
-        )
-        .map_err(|e| db_err(format!("delete stage1 output: {e}")))?;
+        conn.execute("DELETE FROM stage1_outputs WHERE thread_id = ?1", [&tid])
+            .map_err(|e| db_err(format!("delete stage1 output: {e}")))?;
 
         Ok(true)
     }
@@ -524,8 +545,12 @@ impl StateDb {
                    AND (retry_at IS NULL OR retry_at <= ?3)
                    AND retry_remaining > 0",
                 params![
-                    wid, ownership_token, now, lease_until,
-                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL, MEMORY_CONSOLIDATION_JOB_KEY
+                    wid,
+                    ownership_token,
+                    now,
+                    lease_until,
+                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL,
+                    MEMORY_CONSOLIDATION_JOB_KEY
                 ],
             )
             .map_err(|e| db_err(format!("claim phase2: {e}")))?;
@@ -581,8 +606,10 @@ impl StateDb {
                     last_success_watermark = max(COALESCE(last_success_watermark, 0), ?2)
                  WHERE kind = ?3 AND job_key = ?4 AND status = 'running' AND ownership_token = ?5",
                 params![
-                    now, completed_watermark,
-                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL, MEMORY_CONSOLIDATION_JOB_KEY,
+                    now,
+                    completed_watermark,
+                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL,
+                    MEMORY_CONSOLIDATION_JOB_KEY,
                     ownership_token
                 ],
             )
@@ -632,8 +659,11 @@ impl StateDb {
                     retry_at = ?2, retry_remaining = retry_remaining - 1, last_error = ?3
                  WHERE kind = ?4 AND job_key = ?5 AND status = 'running' AND ownership_token = ?6",
                 params![
-                    now, retry_at, failure_reason,
-                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL, MEMORY_CONSOLIDATION_JOB_KEY,
+                    now,
+                    retry_at,
+                    failure_reason,
+                    JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL,
+                    MEMORY_CONSOLIDATION_JOB_KEY,
                     ownership_token
                 ],
             )
@@ -695,8 +725,8 @@ impl StateDb {
             let (tid, sua, rm, rs, slug, ga, sel, sel_sua) =
                 r.map_err(|e| db_err(format!("row: {e}")))?;
             current_ids.insert(tid.clone());
-            let thread_id = ThreadId::from_string(&tid)
-                .map_err(|e| db_err(format!("parse: {e}")))?;
+            let thread_id =
+                ThreadId::from_string(&tid).map_err(|e| db_err(format!("parse: {e}")))?;
             if sel != 0 && sel_sua == Some(sua) {
                 retained_thread_ids.push(thread_id);
             }
@@ -741,10 +771,9 @@ impl StateDb {
             .map_err(|e| db_err(format!("prev selection: {e}")))?;
 
         for r in prev_rows {
-            let (tid, sua, rm, rs, slug, ga) =
-                r.map_err(|e| db_err(format!("row: {e}")))?;
-            let thread_id = ThreadId::from_string(&tid)
-                .map_err(|e| db_err(format!("parse: {e}")))?;
+            let (tid, sua, rm, rs, slug, ga) = r.map_err(|e| db_err(format!("row: {e}")))?;
+            let thread_id =
+                ThreadId::from_string(&tid).map_err(|e| db_err(format!("parse: {e}")))?;
             previous_selected.push(Stage1Output {
                 thread_id,
                 rollout_path: PathBuf::new(),
@@ -787,10 +816,7 @@ impl StateDb {
     }
 
     /// Record usage for cited stage-1 outputs.
-    pub fn record_stage1_output_usage(
-        &self,
-        thread_ids: &[ThreadId],
-    ) -> Result<usize, CodexError> {
+    pub fn record_stage1_output_usage(&self, thread_ids: &[ThreadId]) -> Result<usize, CodexError> {
         if thread_ids.is_empty() {
             return Ok(0);
         }
@@ -847,7 +873,14 @@ mod tests {
                 "INSERT INTO jobs (kind, job_key, status, worker_id, ownership_token,
                     started_at, lease_until, retry_remaining, input_watermark)
                  VALUES (?1, ?2, 'running', 'w', ?3, ?4, ?5, 3, ?6)",
-                params![JOB_KIND_MEMORY_STAGE1, tid.to_string(), token, now, now + 3600, now],
+                params![
+                    JOB_KIND_MEMORY_STAGE1,
+                    tid.to_string(),
+                    token,
+                    now,
+                    now + 3600,
+                    now
+                ],
             )
             .unwrap();
 

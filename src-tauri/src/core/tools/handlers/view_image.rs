@@ -43,7 +43,10 @@ impl ToolHandler for ViewImageHandler {
         }
 
         let params: ViewImageArgs = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid view_image args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid view_image args: {e}"),
+            )
         })?;
 
         let abs_path = std::path::PathBuf::from(&params.path);
@@ -63,18 +66,28 @@ impl ToolHandler for ViewImageHandler {
         }
 
         let data = tokio::fs::read(&abs_path).await.map_err(|e| {
-            CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to read image: {e}"))
+            CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("failed to read image: {e}"),
+            )
         })?;
 
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
 
-        let mime = if params.path.ends_with(".png") { "image/png" }
-            else if params.path.ends_with(".jpg") || params.path.ends_with(".jpeg") { "image/jpeg" }
-            else if params.path.ends_with(".gif") { "image/gif" }
-            else if params.path.ends_with(".webp") { "image/webp" }
-            else if params.path.ends_with(".svg") { "image/svg+xml" }
-            else { "application/octet-stream" };
+        let mime = if params.path.ends_with(".png") {
+            "image/png"
+        } else if params.path.ends_with(".jpg") || params.path.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if params.path.ends_with(".gif") {
+            "image/gif"
+        } else if params.path.ends_with(".webp") {
+            "image/webp"
+        } else if params.path.ends_with(".svg") {
+            "image/svg+xml"
+        } else {
+            "application/octet-stream"
+        };
 
         // Return structured content items matching source Codex FunctionCallOutputContentItem
         Ok(serde_json::json!({

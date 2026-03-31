@@ -27,8 +27,8 @@ pub fn start_streaming_output(
 
     tokio::spawn(async move {
         use std::pin::Pin;
-        use tokio::time::Sleep;
         use tokio::sync::broadcast::error::RecvError;
+        use tokio::time::Sleep;
 
         let mut pending = Vec::<u8>::new();
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;

@@ -206,7 +206,9 @@ fn get_user_shell_path() -> Option<PathBuf> {
         if pw.is_null() {
             return None;
         }
-        let shell = CStr::from_ptr((*pw).pw_shell).to_string_lossy().into_owned();
+        let shell = CStr::from_ptr((*pw).pw_shell)
+            .to_string_lossy()
+            .into_owned();
         Some(PathBuf::from(shell))
     }
 }
@@ -217,12 +219,27 @@ mod tests {
 
     #[test]
     fn detect_common_shells() {
-        assert_eq!(detect_shell_type(Path::new("/bin/zsh")), Some(ShellType::Zsh));
-        assert_eq!(detect_shell_type(Path::new("/bin/bash")), Some(ShellType::Bash));
+        assert_eq!(
+            detect_shell_type(Path::new("/bin/zsh")),
+            Some(ShellType::Zsh)
+        );
+        assert_eq!(
+            detect_shell_type(Path::new("/bin/bash")),
+            Some(ShellType::Bash)
+        );
         assert_eq!(detect_shell_type(Path::new("/bin/sh")), Some(ShellType::Sh));
-        assert_eq!(detect_shell_type(Path::new("pwsh")), Some(ShellType::PowerShell));
-        assert_eq!(detect_shell_type(Path::new("powershell.exe")), Some(ShellType::PowerShell));
-        assert_eq!(detect_shell_type(Path::new("cmd.exe")), Some(ShellType::Cmd));
+        assert_eq!(
+            detect_shell_type(Path::new("pwsh")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(Path::new("powershell.exe")),
+            Some(ShellType::PowerShell)
+        );
+        assert_eq!(
+            detect_shell_type(Path::new("cmd.exe")),
+            Some(ShellType::Cmd)
+        );
         assert_eq!(detect_shell_type(Path::new("fish")), None);
     }
 
@@ -232,8 +249,14 @@ mod tests {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
         };
-        assert_eq!(shell.exec_args("echo hi", false), vec!["/bin/bash", "-c", "echo hi"]);
-        assert_eq!(shell.exec_args("echo hi", true), vec!["/bin/bash", "-lc", "echo hi"]);
+        assert_eq!(
+            shell.exec_args("echo hi", false),
+            vec!["/bin/bash", "-c", "echo hi"]
+        );
+        assert_eq!(
+            shell.exec_args("echo hi", true),
+            vec!["/bin/bash", "-lc", "echo hi"]
+        );
     }
 
     #[test]
@@ -258,7 +281,10 @@ mod tests {
             shell_type: ShellType::Cmd,
             shell_path: PathBuf::from("cmd.exe"),
         };
-        assert_eq!(shell.exec_args("echo hi", false), vec!["cmd.exe", "/c", "echo hi"]);
+        assert_eq!(
+            shell.exec_args("echo hi", false),
+            vec!["cmd.exe", "/c", "echo hi"]
+        );
     }
 
     #[test]

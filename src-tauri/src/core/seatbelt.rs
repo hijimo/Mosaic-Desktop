@@ -86,8 +86,10 @@ pub fn create_seatbelt_command_args(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
-    let (file_write_policy, file_write_dir_params) = build_write_policy(sandbox_policy, sandbox_policy_cwd);
-    let (file_read_policy, file_read_dir_params) = build_read_policy(sandbox_policy, sandbox_policy_cwd);
+    let (file_write_policy, file_write_dir_params) =
+        build_write_policy(sandbox_policy, sandbox_policy_cwd);
+    let (file_read_policy, file_read_dir_params) =
+        build_read_policy(sandbox_policy, sandbox_policy_cwd);
     let network_policy = build_network_policy(sandbox_policy);
 
     let mut policy_sections = vec![
@@ -97,13 +99,21 @@ pub fn create_seatbelt_command_args(
         network_policy,
     ];
 
-    if matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }) {
+    if matches!(
+        sandbox_policy,
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+    ) {
         policy_sections.push(SEATBELT_PLATFORM_DEFAULTS.to_string());
     }
 
     let full_policy = policy_sections.join("\n");
 
-    let dir_params = [file_read_dir_params, file_write_dir_params, macos_dir_params()].concat();
+    let dir_params = [
+        file_read_dir_params,
+        file_write_dir_params,
+        macos_dir_params(),
+    ]
+    .concat();
 
     let mut args: Vec<String> = vec!["-p".to_string(), full_policy];
     let definition_args = dir_params
@@ -259,14 +269,16 @@ mod tests {
 
     #[test]
     fn full_access_policy_allows_all_writes() {
-        let (policy, params) = build_write_policy(&SandboxPolicy::DangerFullAccess, Path::new("/tmp"));
+        let (policy, params) =
+            build_write_policy(&SandboxPolicy::DangerFullAccess, Path::new("/tmp"));
         assert!(policy.contains("(allow file-write*"));
         assert!(params.is_empty());
     }
 
     #[test]
     fn read_only_policy_allows_all_reads() {
-        let (policy, _) = build_read_policy(&SandboxPolicy::new_read_only_policy(), Path::new("/tmp"));
+        let (policy, _) =
+            build_read_policy(&SandboxPolicy::new_read_only_policy(), Path::new("/tmp"));
         assert!(policy.contains("(allow file-read*)"));
     }
 

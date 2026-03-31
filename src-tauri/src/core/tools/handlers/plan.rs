@@ -91,7 +91,10 @@ impl ToolHandler for PlanHandler {
 
         // Validate: at most one step can be in_progress
         if let Some(ref plan) = params.plan {
-            let in_progress_count = plan.iter().filter(|item| item.status == "in_progress").count();
+            let in_progress_count = plan
+                .iter()
+                .filter(|item| item.status == "in_progress")
+                .count();
             if in_progress_count > 1 {
                 return Err(CodexError::new(
                     ErrorCode::InvalidInput,

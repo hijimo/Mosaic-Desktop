@@ -1,5 +1,8 @@
 use crate::core::rollout::policy::TurnContextItem;
-use crate::protocol::types::{ContentItem, ContentOrItems, FunctionCallOutputBody, FunctionCallOutputPayload, ResponseInputItem, TokenUsageInfo};
+use crate::protocol::types::{
+    ContentItem, ContentOrItems, FunctionCallOutputBody, FunctionCallOutputPayload,
+    ResponseInputItem, TokenUsageInfo,
+};
 
 use super::normalize;
 
@@ -167,11 +170,7 @@ impl ContextManager {
     pub fn token_usage_breakdown(&self) -> TokenUsageBreakdown {
         TokenUsageBreakdown {
             last_api_total_tokens: self.last_api_total_tokens,
-            all_items_bytes: self
-                .items
-                .iter()
-                .map(estimate_item_bytes)
-                .sum(),
+            all_items_bytes: self.items.iter().map(estimate_item_bytes).sum(),
             pending_tokens: self
                 .items_after_last_model_item()
                 .iter()
@@ -217,12 +216,17 @@ fn is_model_generated(item: &ResponseInputItem) -> bool {
 fn estimate_item_bytes(item: &ResponseInputItem) -> i64 {
     let text_len = match item {
         ResponseInputItem::Message { content, role } => {
-            let text_len: usize = content.iter().map(|c| match c {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => text.len(),
-                ContentItem::InputImage { .. } => 7373,
-            }).sum();
+            let text_len: usize = content
+                .iter()
+                .map(|c| match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text.len()
+                    }
+                    ContentItem::InputImage { .. } => 7373,
+                })
+                .sum();
             text_len + role.len()
-        },
+        }
         ResponseInputItem::FunctionCall {
             name, arguments, ..
         } => name.len() + arguments.len(),
@@ -231,8 +235,12 @@ fn estimate_item_bytes(item: &ResponseInputItem) -> i64 {
             FunctionCallOutputBody::ContentItems(items) => items
                 .iter()
                 .map(|ci| match ci {
-                    crate::protocol::types::FunctionCallOutputContentItem::InputText { text } => text.len(),
-                    crate::protocol::types::FunctionCallOutputContentItem::InputImage { .. } => 7373,
+                    crate::protocol::types::FunctionCallOutputContentItem::InputText { text } => {
+                        text.len()
+                    }
+                    crate::protocol::types::FunctionCallOutputContentItem::InputImage {
+                        ..
+                    } => 7373,
                 })
                 .sum(),
         },
@@ -373,23 +381,19 @@ mod tests {
     fn for_prompt_normalizes() {
         let mut cm = ContextManager::new();
         // Add a function call without output
-        cm.record_items(vec![
-            user_msg("run tool"),
-            func_call("c1"),
-        ]);
+        cm.record_items(vec![user_msg("run tool"), func_call("c1")]);
         let prompt = cm.for_prompt();
         // Should have 3 items: user msg, func call, synthetic output
         assert_eq!(prompt.len(), 3);
-        assert!(matches!(&prompt[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
+        assert!(
+            matches!(&prompt[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
     }
 
     #[test]
     fn for_prompt_removes_orphan_outputs() {
         let mut cm = ContextManager::new();
-        cm.record_items(vec![
-            user_msg("hello"),
-            func_output("orphan", "result"),
-        ]);
+        cm.record_items(vec![user_msg("hello"), func_output("orphan", "result")]);
         let prompt = cm.for_prompt();
         // Orphan output should be removed
         assert_eq!(prompt.len(), 1);
@@ -435,11 +439,7 @@ mod tests {
     #[test]
     fn drop_last_n_user_turns_exceeds_count() {
         let mut cm = ContextManager::new();
-        cm.record_items(vec![
-            user_msg("u1"),
-            assistant_msg("a1"),
-            user_msg("u2"),
-        ]);
+        cm.record_items(vec![user_msg("u1"), assistant_msg("a1"), user_msg("u2")]);
         cm.drop_last_n_user_turns(100);
         // Should keep nothing before first user msg → 0 items
         assert_eq!(cm.len(), 0);

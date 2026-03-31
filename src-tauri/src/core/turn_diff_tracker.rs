@@ -4,9 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use sha1::digest::Output;
 use uuid::Uuid;
 
@@ -190,7 +190,11 @@ impl TurnDiffTracker {
             return None;
         }
         let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if s.len() == 40 { Some(s) } else { None }
+        if s.len() == 40 {
+            Some(s)
+        } else {
+            None
+        }
     }
 
     /// Recompute the aggregated unified diff by comparing all in-memory baselines

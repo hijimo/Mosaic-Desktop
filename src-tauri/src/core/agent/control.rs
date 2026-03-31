@@ -346,15 +346,12 @@ impl AgentControl {
     /// Retrieve a strong reference to an agent, or error if not found / dropped.
     async fn get_instance(&self, agent_id: &str) -> Result<Arc<AgentInstance>, CodexError> {
         let mgr = self.state.lock().await;
-        mgr.agents
-            .get(agent_id)
-            .cloned()
-            .ok_or_else(|| {
-                CodexError::new(
-                    ErrorCode::SessionError,
-                    format!("Agent {agent_id} not found or already closed"),
-                )
-            })
+        mgr.agents.get(agent_id).cloned().ok_or_else(|| {
+            CodexError::new(
+                ErrorCode::SessionError,
+                format!("Agent {agent_id} not found or already closed"),
+            )
+        })
     }
 
     /// Receive the next input for an agent (called by the agent itself).
@@ -675,9 +672,15 @@ mod tests {
         ctrl.close_agent(&id).await.unwrap();
         assert_eq!(ctrl.active_count().await, 0);
 
-        let result = ctrl.send_input(&id, UserInput::Text {
-            text: "hello".into(), text_elements: vec![],
-        }).await;
+        let result = ctrl
+            .send_input(
+                &id,
+                UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: vec![],
+                },
+            )
+            .await;
         assert!(result.is_err());
     }
 

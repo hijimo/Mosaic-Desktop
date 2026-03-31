@@ -6,9 +6,9 @@
 
 mod legacy;
 #[allow(unused_imports)]
-pub(crate) use legacy::LegacyFeatureToggles;
-#[allow(unused_imports)]
 pub(crate) use legacy::legacy_feature_keys;
+#[allow(unused_imports)]
+pub(crate) use legacy::LegacyFeatureToggles;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -113,67 +113,272 @@ pub struct FeatureSpec {
 
 /// All known features.
 pub const FEATURES: &[FeatureSpec] = &[
-    FeatureSpec { id: Feature::GhostCommit, key: "undo", stage: Stage::Stable, default_enabled: false },
-    FeatureSpec { id: Feature::ShellTool, key: "shell_tool", stage: Stage::Stable, default_enabled: true },
-    FeatureSpec { id: Feature::UnifiedExec, key: "unified_exec", stage: Stage::Stable, default_enabled: !cfg!(windows) },
-    FeatureSpec { id: Feature::ShellZshFork, key: "shell_zsh_fork", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::ShellSnapshot, key: "shell_snapshot", stage: Stage::Stable, default_enabled: true },
     FeatureSpec {
-        id: Feature::JsRepl, key: "js_repl",
-        stage: Stage::Experimental { name: "JavaScript REPL", description: "Enable a persistent Node-backed JavaScript REPL." },
-        default_enabled: false,
-    },
-    FeatureSpec { id: Feature::JsReplToolsOnly, key: "js_repl_tools_only", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::WebSearchRequest, key: "web_search_request", stage: Stage::Deprecated, default_enabled: false },
-    FeatureSpec { id: Feature::WebSearchCached, key: "web_search_cached", stage: Stage::Deprecated, default_enabled: false },
-    FeatureSpec { id: Feature::SearchTool, key: "search_tool", stage: Stage::Removed, default_enabled: false },
-    FeatureSpec { id: Feature::CodexGitCommit, key: "codex_git_commit", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::RuntimeMetrics, key: "runtime_metrics", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::Sqlite, key: "sqlite", stage: Stage::Stable, default_enabled: true },
-    FeatureSpec { id: Feature::MemoryTool, key: "memories", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::ChildAgentsMd, key: "child_agents_md", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::ApplyPatchFreeform, key: "apply_patch_freeform", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::RequestPermissions, key: "request_permissions", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::UseLinuxSandboxBwrap, key: "use_linux_sandbox_bwrap", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::RequestRule, key: "request_rule", stage: Stage::Removed, default_enabled: false },
-    FeatureSpec { id: Feature::WindowsSandbox, key: "experimental_windows_sandbox", stage: Stage::Removed, default_enabled: false },
-    FeatureSpec { id: Feature::WindowsSandboxElevated, key: "elevated_windows_sandbox", stage: Stage::Removed, default_enabled: false },
-    FeatureSpec { id: Feature::RemoteModels, key: "remote_models", stage: Stage::Removed, default_enabled: false },
-    FeatureSpec { id: Feature::PowershellUtf8, key: "powershell_utf8", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::EnableRequestCompression, key: "enable_request_compression", stage: Stage::Stable, default_enabled: true },
-    FeatureSpec {
-        id: Feature::Collab, key: "multi_agent",
-        stage: Stage::Experimental { name: "Multi-agents", description: "Spawn multiple agents to parallelize work." },
+        id: Feature::GhostCommit,
+        key: "undo",
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Apps, key: "apps",
-        stage: Stage::Experimental { name: "Apps", description: "Use connected ChatGPT Apps via $ mentions." },
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Stable,
+        default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
+        id: Feature::ShellZshFork,
+        key: "shell_zsh_fork",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
-    FeatureSpec { id: Feature::Plugins, key: "plugins", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::AppsMcpGateway, key: "apps_mcp_gateway", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::SkillMcpDependencyInstall, key: "skill_mcp_dependency_install", stage: Stage::Stable, default_enabled: true },
-    FeatureSpec { id: Feature::SkillEnvVarDependencyPrompt, key: "skill_env_var_dependency_prompt", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::Steer, key: "steer", stage: Stage::Removed, default_enabled: true },
-    FeatureSpec { id: Feature::DefaultModeRequestUserInput, key: "default_mode_request_user_input", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::CollaborationModes, key: "collaboration_modes", stage: Stage::Removed, default_enabled: true },
-    FeatureSpec { id: Feature::Personality, key: "personality", stage: Stage::Stable, default_enabled: true },
-    FeatureSpec { id: Feature::Artifact, key: "artifact", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::FastMode, key: "fast_mode", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::VoiceTranscription, key: "voice_transcription", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::RealtimeConversation, key: "realtime_conversation", stage: Stage::UnderDevelopment, default_enabled: false },
     FeatureSpec {
-        id: Feature::PreventIdleSleep, key: "prevent_idle_sleep",
-        stage: if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
-            Stage::Experimental { name: "Prevent sleep while running", description: "Keep computer awake while running." }
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
+        stage: Stage::Experimental {
+            name: "JavaScript REPL",
+            description: "Enable a persistent Node-backed JavaScript REPL.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchRequest,
+        key: "web_search_request",
+        stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SearchTool,
+        key: "search_tool",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeMetrics,
+        key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Sqlite,
+        key: "sqlite",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memories",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchFreeform,
+        key: "apply_patch_freeform",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissions,
+        key: "request_permissions",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLinuxSandboxBwrap,
+        key: "use_linux_sandbox_bwrap",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestRule,
+        key: "request_rule",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WindowsSandbox,
+        key: "experimental_windows_sandbox",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WindowsSandboxElevated,
+        key: "elevated_windows_sandbox",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RemoteModels,
+        key: "remote_models",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PowershellUtf8,
+        key: "powershell_utf8",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnableRequestCompression,
+        key: "enable_request_compression",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "multi_agent",
+        stage: Stage::Experimental {
+            name: "Multi-agents",
+            description: "Spawn multiple agents to parallelize work.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Apps,
+        key: "apps",
+        stage: Stage::Experimental {
+            name: "Apps",
+            description: "Use connected ChatGPT Apps via $ mentions.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Plugins,
+        key: "plugins",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsMcpGateway,
+        key: "apps_mcp_gateway",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillMcpDependencyInstall,
+        key: "skill_mcp_dependency_install",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SkillEnvVarDependencyPrompt,
+        key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Steer,
+        key: "steer",
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DefaultModeRequestUserInput,
+        key: "default_mode_request_user_input",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CollaborationModes,
+        key: "collaboration_modes",
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Personality,
+        key: "personality",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Artifact,
+        key: "artifact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::FastMode,
+        key: "fast_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::VoiceTranscription,
+        key: "voice_transcription",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                description: "Keep computer awake while running.",
+            }
         } else {
             Stage::UnderDevelopment
         },
         default_enabled: false,
     },
-    FeatureSpec { id: Feature::ResponsesWebsockets, key: "responses_websockets", stage: Stage::UnderDevelopment, default_enabled: false },
-    FeatureSpec { id: Feature::ResponsesWebsocketsV2, key: "responses_websockets_v2", stage: Stage::UnderDevelopment, default_enabled: false },
+    FeatureSpec {
+        id: Feature::ResponsesWebsockets,
+        key: "responses_websockets",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
 ];
 
 /// Deserializable features table for TOML config.
@@ -220,7 +425,11 @@ impl Features {
         for (k, v) in m {
             match feature_for_key(k) {
                 Some(feat) => {
-                    if *v { self.enable(feat); } else { self.disable(feat); }
+                    if *v {
+                        self.enable(feat);
+                    } else {
+                        self.disable(feat);
+                    }
                 }
                 None => {
                     eprintln!("unknown feature key in config: {k}");

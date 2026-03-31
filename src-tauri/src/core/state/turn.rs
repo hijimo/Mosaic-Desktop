@@ -3,15 +3,15 @@
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::protocol::types::{DynamicToolResponse, ResponseInputItem, ReviewDecision};
-use crate::core::tasks::{SessionTask, TaskKind};
 use crate::core::session::TurnContext;
+use crate::core::tasks::{SessionTask, TaskKind};
+use crate::protocol::types::{DynamicToolResponse, ResponseInputItem, ReviewDecision};
 
 /// Metadata about the currently running turn.
 pub struct ActiveTurn {

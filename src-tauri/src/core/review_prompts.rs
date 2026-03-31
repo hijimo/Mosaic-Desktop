@@ -214,7 +214,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let tmp = TempDir::new().unwrap();
-            let p = review_prompt(&ReviewTarget::UncommittedChanges, tmp.path()).await.unwrap();
+            let p = review_prompt(&ReviewTarget::UncommittedChanges, tmp.path())
+                .await
+                .unwrap();
             assert_eq!(p, UNCOMMITTED_PROMPT);
         });
     }

@@ -5,7 +5,8 @@ use crate::state::memories_db::{Phase2InputSelection, Stage1Output, Stage1Output
 use std::path::Path;
 
 /// Stage-1 system prompt (extraction).
-pub(crate) const STAGE_ONE_SYSTEM: &str = include_str!("../../../templates/memories/stage_one_system.md");
+pub(crate) const STAGE_ONE_SYSTEM: &str =
+    include_str!("../../../templates/memories/stage_one_system.md");
 
 /// Build the stage-1 user input message.
 pub(crate) fn build_stage_one_input(
@@ -79,7 +80,10 @@ fn render_phase2_input_selection(selection: &Phase2InputSelection) -> String {
                         item.rollout_slug.as_deref(),
                     )
                 );
-                format!("- [{status}] thread_id={}, rollout_summary_file={file}", item.thread_id)
+                format!(
+                    "- [{status}] thread_id={}, rollout_summary_file={file}",
+                    item.thread_id
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -100,7 +104,10 @@ fn render_phase2_input_selection(selection: &Phase2InputSelection) -> String {
                         item.rollout_slug.as_deref(),
                     )
                 );
-                format!("- thread_id={}, rollout_summary_file={file}", item.thread_id)
+                format!(
+                    "- thread_id={}, rollout_summary_file={file}",
+                    item.thread_id
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -119,9 +126,7 @@ fn render_phase2_input_selection(selection: &Phase2InputSelection) -> String {
 }
 
 /// Build memory tool developer instructions for the read path.
-pub(crate) async fn build_memory_tool_developer_instructions(
-    codex_home: &Path,
-) -> Option<String> {
+pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
     let base_path = codex_home.join("memories");
     let summary_path = base_path.join("memory_summary.md");
     let summary = tokio::fs::read_to_string(&summary_path)

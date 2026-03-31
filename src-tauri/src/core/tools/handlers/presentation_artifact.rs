@@ -44,7 +44,10 @@ impl ToolHandler for PresentationArtifactHandler {
         }
 
         let params: PresentationArtifactArgs = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid presentation_artifact args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid presentation_artifact args: {e}"),
+            )
         })?;
 
         // Determine access kind based on action (read vs write)
@@ -71,7 +74,10 @@ impl ToolHandler for PresentationArtifactHandler {
 
 /// Extract required path accesses from the request, matching source's
 /// `PresentationArtifactToolRequest::required_path_accesses`.
-fn required_path_accesses(params: &PresentationArtifactArgs, default_kind: PathAccessKind) -> Vec<(String, PathAccessKind)> {
+fn required_path_accesses(
+    params: &PresentationArtifactArgs,
+    default_kind: PathAccessKind,
+) -> Vec<(String, PathAccessKind)> {
     let mut accesses = Vec::new();
     if let Some(ref path) = params.path {
         accesses.push((path.clone(), default_kind));
@@ -104,7 +110,10 @@ fn authorize_path_access(path: &str, kind: PathAccessKind) -> Result<(), CodexEr
             ErrorCode::ToolExecutionFailed,
             format!(
                 "{} path `{}` is outside the current sandbox policy",
-                match kind { PathAccessKind::Read => "read", PathAccessKind::Write => "write" },
+                match kind {
+                    PathAccessKind::Read => "read",
+                    PathAccessKind::Write => "write",
+                },
                 p.display(),
             ),
         ));
@@ -141,9 +150,9 @@ fn effective_path(path: &std::path::Path, kind: PathAccessKind) -> std::path::Pa
         }
         PathAccessKind::Write => {
             // For write, check the parent directory
-            path.parent().map(|p| {
-                std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-            }).unwrap_or_else(|| path.to_path_buf())
+            path.parent()
+                .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()))
+                .unwrap_or_else(|| path.to_path_buf())
         }
     }
 }

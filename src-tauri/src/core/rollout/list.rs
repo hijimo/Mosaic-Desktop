@@ -8,9 +8,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::SESSIONS_SUBDIR;
-use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::policy::{RolloutItem, RolloutLine, SessionSource};
+use super::ARCHIVED_SESSIONS_SUBDIR;
+use super::SESSIONS_SUBDIR;
 
 // ── Public types ─────────────────────────────────────────────────
 
@@ -142,9 +142,7 @@ pub async fn get_threads_in_root(
 // ── File discovery ───────────────────────────────────────────────
 
 /// Recursively collect rollout JSONL files under a root directory.
-async fn collect_rollout_paths_recursive(
-    root: &Path,
-) -> io::Result<Vec<(String, Uuid, PathBuf)>> {
+async fn collect_rollout_paths_recursive(root: &Path) -> io::Result<Vec<(String, Uuid, PathBuf)>> {
     let mut stack = vec![root.to_path_buf()];
     let mut paths = Vec::new();
 
@@ -181,10 +179,7 @@ async fn collect_rollout_paths_recursive(
 }
 
 /// Build a [`ThreadItem`] by reading the head of a rollout file.
-async fn build_thread_item(
-    path: &Path,
-    allowed_sources: &[SessionSource],
-) -> Option<ThreadItem> {
+async fn build_thread_item(path: &Path, allowed_sources: &[SessionSource]) -> Option<ThreadItem> {
     let summary = read_head_summary(path).await.ok()?;
     if !summary.saw_session_meta || !summary.saw_user_event {
         return None;
@@ -345,9 +340,7 @@ async fn find_in_subdir(
 // ── Session meta reader ──────────────────────────────────────────
 
 /// Read the [`SessionMetaLine`] from the head of a rollout file.
-pub async fn read_session_meta_line(
-    path: &Path,
-) -> io::Result<super::policy::SessionMetaLine> {
+pub async fn read_session_meta_line(path: &Path) -> io::Result<super::policy::SessionMetaLine> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;

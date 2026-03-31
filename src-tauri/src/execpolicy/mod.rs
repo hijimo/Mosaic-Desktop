@@ -319,12 +319,14 @@ impl Policy {
             )
         })?;
         let mut parser = PolicyParser::new();
-        parser.parse(&path.display().to_string(), &content).map_err(|e| {
-            CodexError::new(
-                ErrorCode::ConfigurationError,
-                format!("failed to parse policy file: {e}"),
-            )
-        })?;
+        parser
+            .parse(&path.display().to_string(), &content)
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::ConfigurationError,
+                    format!("failed to parse policy file: {e}"),
+                )
+            })?;
         Ok(parser.build())
     }
 }
@@ -478,8 +480,13 @@ network_rule(host="evil.com", protocol="http", decision="deny")
     #[test]
     fn add_network_rule() {
         let mut p = Policy::empty();
-        p.add_network_rule("example.com", NetworkRuleProtocol::Https, Decision::Allow, None)
-            .unwrap();
+        p.add_network_rule(
+            "example.com",
+            NetworkRuleProtocol::Https,
+            Decision::Allow,
+            None,
+        )
+        .unwrap();
         assert_eq!(p.network_rules().len(), 1);
     }
 

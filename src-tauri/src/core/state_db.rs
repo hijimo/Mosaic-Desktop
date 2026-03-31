@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -110,15 +110,14 @@ impl StateDb {
     /// List session IDs, most recent first.
     pub async fn list_sessions(&self, limit: usize) -> Vec<String> {
         let conn = self.conn.lock().await;
-        let mut stmt = match conn
-            .prepare("SELECT id FROM sessions ORDER BY created_at DESC LIMIT ?1")
-        {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("list_sessions prepare failed: {e}");
-                return Vec::new();
-            }
-        };
+        let mut stmt =
+            match conn.prepare("SELECT id FROM sessions ORDER BY created_at DESC LIMIT ?1") {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("list_sessions prepare failed: {e}");
+                    return Vec::new();
+                }
+            };
         let rows = match stmt.query_map(params![limit as i64], |row| row.get::<_, String>(0)) {
             Ok(r) => r,
             Err(e) => {
@@ -231,8 +230,11 @@ impl StateDb {
     /// Delete a thread record.
     pub async fn delete_thread(&self, thread_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().await;
-        conn.execute("DELETE FROM threads WHERE thread_id = ?1", params![thread_id])
-            .map_err(|e| format!("delete_thread failed: {e}"))?;
+        conn.execute(
+            "DELETE FROM threads WHERE thread_id = ?1",
+            params![thread_id],
+        )
+        .map_err(|e| format!("delete_thread failed: {e}"))?;
         Ok(())
     }
 

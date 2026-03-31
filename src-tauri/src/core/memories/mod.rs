@@ -4,12 +4,12 @@
 //! to disk under `<codex_home>/memories/`. A consolidation step can later
 //! merge them into a single `memory_summary.md` consumed at session start.
 
+pub(crate) mod citations;
 mod phase1;
 mod phase2;
 pub(crate) mod prompts;
 mod start;
 pub mod storage;
-pub(crate) mod citations;
 pub(crate) mod usage;
 
 pub use start::start_memories_startup_task;
@@ -75,7 +75,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = memory_root(dir.path());
         tokio::fs::create_dir_all(&root).await.unwrap();
-        tokio::fs::write(root.join("memory_summary.md"), "  \n").await.unwrap();
+        tokio::fs::write(root.join("memory_summary.md"), "  \n")
+            .await
+            .unwrap();
         assert!(read_memory_summary(dir.path()).await.is_none());
     }
 
@@ -84,7 +86,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = memory_root(dir.path());
         tokio::fs::create_dir_all(&root).await.unwrap();
-        tokio::fs::write(root.join("memory_summary.md"), "summary content").await.unwrap();
-        assert_eq!(read_memory_summary(dir.path()).await.unwrap(), "summary content");
+        tokio::fs::write(root.join("memory_summary.md"), "summary content")
+            .await
+            .unwrap();
+        assert_eq!(
+            read_memory_summary(dir.path()).await.unwrap(),
+            "summary content"
+        );
     }
 }

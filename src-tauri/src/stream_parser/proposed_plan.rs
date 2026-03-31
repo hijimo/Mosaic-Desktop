@@ -1,8 +1,8 @@
-use crate::stream_parser::StreamTextChunk;
-use crate::stream_parser::StreamTextParser;
 use crate::stream_parser::tagged_line_parser::TagSpec;
 use crate::stream_parser::tagged_line_parser::TaggedLineParser;
 use crate::stream_parser::tagged_line_parser::TaggedLineSegment;
+use crate::stream_parser::StreamTextChunk;
+use crate::stream_parser::StreamTextParser;
 
 const OPEN_TAG: &str = "<proposed_plan>";
 const CLOSE_TAG: &str = "</proposed_plan>";
@@ -112,10 +112,10 @@ pub fn extract_proposed_plan_text(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ProposedPlanParser;
-    use super::ProposedPlanSegment;
     use super::extract_proposed_plan_text;
     use super::strip_proposed_plan_blocks;
+    use super::ProposedPlanParser;
+    use super::ProposedPlanSegment;
     use crate::stream_parser::StreamTextChunk;
     use crate::stream_parser::StreamTextParser;
     use pretty_assertions::assert_eq;

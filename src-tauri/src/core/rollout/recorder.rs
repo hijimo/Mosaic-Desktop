@@ -12,11 +12,11 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::{info, trace, warn};
 
+use super::policy::{
+    is_persisted, EventPersistenceMode, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine,
+};
 use super::SESSIONS_SUBDIR;
 use crate::core::git_info::collect_git_info;
-use super::policy::{
-    EventPersistenceMode, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, is_persisted,
-};
 
 // ── Public types ─────────────────────────────────────────────────
 
@@ -239,7 +239,10 @@ impl RolloutRecorder {
             } => {
                 let log_file_info = precompute_log_file_info(mosaic_home, &conversation_id)?;
                 let path = log_file_info.path.clone();
-                let ts = log_file_info.timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                let ts = log_file_info
+                    .timestamp
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string();
                 let session_meta = SessionMeta {
                     id: conversation_id,
                     forked_from_id: None,
@@ -252,7 +255,13 @@ impl RolloutRecorder {
                     agent_role: None,
                     memory_mode: None,
                 };
-                (None, Some(log_file_info), path, Some(session_meta), event_persistence_mode)
+                (
+                    None,
+                    Some(log_file_info),
+                    path,
+                    Some(session_meta),
+                    event_persistence_mode,
+                )
             }
             RolloutRecorderParams::Resume {
                 path,
@@ -272,7 +281,13 @@ impl RolloutRecorder {
         let rp = rollout_path.clone();
 
         tokio::task::spawn(rollout_writer(
-            file, deferred, rx, meta, cwd, rp, model_provider,
+            file,
+            deferred,
+            rx,
+            meta,
+            cwd,
+            rp,
+            model_provider,
         ));
 
         Ok(Self {
@@ -386,12 +401,10 @@ impl RolloutRecorder {
     }
 
     /// Get the rollout history for session resumption.
-    pub async fn get_rollout_history(
-        path: &Path,
-    ) -> std::io::Result<ResumedHistory> {
+    pub async fn get_rollout_history(path: &Path) -> std::io::Result<ResumedHistory> {
         let (items, thread_id, _) = Self::load_rollout_items(path).await?;
-        let conversation_id = thread_id
-            .ok_or_else(|| IoError::other("missing thread ID in rollout file"))?;
+        let conversation_id =
+            thread_id.ok_or_else(|| IoError::other("missing thread ID in rollout file"))?;
         if items.is_empty() {
             return Err(IoError::other("empty rollout history"));
         }

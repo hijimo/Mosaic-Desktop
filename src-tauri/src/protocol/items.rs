@@ -5,8 +5,8 @@ use super::event::{
     EventMsg, UserMessageEvent, WebSearchEndEvent,
 };
 use super::types::{ByteRange, MessagePhase, TextElement, UserInput, WebSearchAction};
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // ── TurnItem ─────────────────────────────────────────────────────
 
@@ -129,10 +129,23 @@ pub enum CommandExecutionStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CommandAction {
-    Read { command: String, name: String, path: PathBuf },
-    ListFiles { command: String, path: Option<String> },
-    Search { command: String, query: Option<String>, path: Option<String> },
-    Unknown { command: String },
+    Read {
+        command: String,
+        name: String,
+        path: PathBuf,
+    },
+    ListFiles {
+        command: String,
+        path: Option<String>,
+    },
+    Search {
+        command: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -402,11 +415,7 @@ impl ReasoningItem {
         let mut events: Vec<EventMsg> = self
             .summary_text
             .iter()
-            .map(|s| {
-                EventMsg::AgentReasoning(AgentReasoningEvent {
-                    text: s.clone(),
-                })
-            })
+            .map(|s| EventMsg::AgentReasoning(AgentReasoningEvent { text: s.clone() }))
             .collect();
         if show_raw {
             for entry in &self.raw_content {
@@ -450,9 +459,13 @@ impl TurnItem {
             Self::Reasoning(i) => i.as_legacy_events(show_raw_reasoning),
             Self::WebSearch(i) => vec![i.as_legacy_event()],
             Self::ContextCompaction(i) => vec![i.as_legacy_event()],
-            Self::CommandExecution(_) | Self::McpToolCall(_) | Self::DynamicToolCall(_)
+            Self::CommandExecution(_)
+            | Self::McpToolCall(_)
+            | Self::DynamicToolCall(_)
             | Self::FileChange(_)
-            | Self::ImageView(_) | Self::EnteredReviewMode(_) | Self::ExitedReviewMode(_)
+            | Self::ImageView(_)
+            | Self::EnteredReviewMode(_)
+            | Self::ExitedReviewMode(_)
             | Self::CollabToolCall(_) => Vec::new(),
         }
     }

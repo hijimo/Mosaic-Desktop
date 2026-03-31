@@ -102,11 +102,17 @@ impl JobProgressEmitter {
     fn new() -> Self {
         let now = std::time::Instant::now();
         let last_emit_at = now.checked_sub(PROGRESS_EMIT_INTERVAL).unwrap_or(now);
-        Self { started_at: now, last_emit_at, last_processed: 0, last_failed: 0 }
+        Self {
+            started_at: now,
+            last_emit_at,
+            last_processed: 0,
+            last_failed: 0,
+        }
     }
 
     fn should_emit(&self, processed: usize, failed: usize) -> bool {
-        processed != self.last_processed || failed != self.last_failed
+        processed != self.last_processed
+            || failed != self.last_failed
             || self.last_emit_at.elapsed() >= PROGRESS_EMIT_INTERVAL
     }
 }
@@ -125,15 +131,20 @@ impl ToolHandler for BatchJobHandler {
         // Dispatch based on tool name
         if args.get("csv_path").is_some() {
             let params: SpawnAgentsOnCsvArgs = serde_json::from_value(args).map_err(|e| {
-                CodexError::new(ErrorCode::InvalidInput, format!("invalid spawn_agents_on_csv args: {e}"))
+                CodexError::new(
+                    ErrorCode::InvalidInput,
+                    format!("invalid spawn_agents_on_csv args: {e}"),
+                )
             })?;
 
-            let concurrency = params.max_concurrency
+            let concurrency = params
+                .max_concurrency
                 .or(params.max_workers)
                 .unwrap_or(DEFAULT_AGENT_JOB_CONCURRENCY)
                 .min(MAX_AGENT_JOB_CONCURRENCY);
 
-            let _timeout = params.max_runtime_seconds
+            let _timeout = params
+                .max_runtime_seconds
                 .map(Duration::from_secs)
                 .unwrap_or(DEFAULT_AGENT_JOB_ITEM_TIMEOUT);
 
@@ -141,13 +152,19 @@ impl ToolHandler for BatchJobHandler {
             // TODO: wire to actual agent subsystem
             return Err(CodexError::new(
                 ErrorCode::ToolExecutionFailed,
-                format!("spawn_agents_on_csv requires the agent subsystem (csv={}, concurrency={})", params.csv_path, concurrency),
+                format!(
+                    "spawn_agents_on_csv requires the agent subsystem (csv={}, concurrency={})",
+                    params.csv_path, concurrency
+                ),
             ));
         }
 
         if args.get("job_id").is_some() {
             let _params: ReportAgentJobResultArgs = serde_json::from_value(args).map_err(|e| {
-                CodexError::new(ErrorCode::InvalidInput, format!("invalid report_agent_job_result args: {e}"))
+                CodexError::new(
+                    ErrorCode::InvalidInput,
+                    format!("invalid report_agent_job_result args: {e}"),
+                )
             })?;
             return Err(CodexError::new(
                 ErrorCode::ToolExecutionFailed,
@@ -155,6 +172,9 @@ impl ToolHandler for BatchJobHandler {
             ));
         }
 
-        Err(CodexError::new(ErrorCode::InvalidInput, "unrecognized agent job tool arguments"))
+        Err(CodexError::new(
+            ErrorCode::InvalidInput,
+            "unrecognized agent job tool arguments",
+        ))
     }
 }

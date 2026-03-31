@@ -47,7 +47,8 @@ pub async fn build_skill_injections(mentioned_skills: &[SkillMetadata]) -> Skill
             Err(err) => {
                 result.warnings.push(format!(
                     "Failed to load skill {} at {}: {err:#}",
-                    skill.name, skill.path_to_skills_md.display()
+                    skill.name,
+                    skill.path_to_skills_md.display()
                 ));
             }
         }
@@ -162,25 +163,43 @@ fn parse_linked_mention<'a>(
     bytes: &[u8],
     start: usize,
 ) -> Option<(&'a str, &'a str, usize)> {
-    if bytes.get(start + 1)? != &b'$' { return None; }
+    if bytes.get(start + 1)? != &b'$' {
+        return None;
+    }
     let name_start = start + 2;
-    if !is_name_char(*bytes.get(name_start)?) { return None; }
+    if !is_name_char(*bytes.get(name_start)?) {
+        return None;
+    }
 
     let mut name_end = name_start + 1;
-    while name_end < bytes.len() && is_name_char(bytes[name_end]) { name_end += 1; }
-    if bytes.get(name_end)? != &b']' { return None; }
+    while name_end < bytes.len() && is_name_char(bytes[name_end]) {
+        name_end += 1;
+    }
+    if bytes.get(name_end)? != &b']' {
+        return None;
+    }
 
     let mut p = name_end + 1;
-    while p < bytes.len() && bytes[p].is_ascii_whitespace() { p += 1; }
-    if bytes.get(p)? != &b'(' { return None; }
+    while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    if bytes.get(p)? != &b'(' {
+        return None;
+    }
 
     let path_start = p + 1;
     let mut path_end = path_start;
-    while path_end < bytes.len() && bytes[path_end] != b')' { path_end += 1; }
-    if bytes.get(path_end)? != &b')' { return None; }
+    while path_end < bytes.len() && bytes[path_end] != b')' {
+        path_end += 1;
+    }
+    if bytes.get(path_end)? != &b')' {
+        return None;
+    }
 
     let path = text[path_start..path_end].trim();
-    if path.is_empty() { return None; }
+    if path.is_empty() {
+        return None;
+    }
     Some((&text[name_start..name_end], path, path_end + 1))
 }
 
@@ -193,7 +212,9 @@ pub fn build_skill_name_counts(
 ) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for skill in skills {
-        if disabled_paths.contains(&skill.path_to_skills_md) { continue; }
+        if disabled_paths.contains(&skill.path_to_skills_md) {
+            continue;
+        }
         *counts.entry(skill.name.clone()).or_default() += 1;
     }
     counts
@@ -225,7 +246,10 @@ pub fn collect_explicit_skill_mentions(
             if disabled_paths.contains(path) || seen_paths.contains(path) {
                 continue;
             }
-            if let Some(skill) = skills.iter().find(|s| s.path_to_skills_md.as_path() == path.as_path()) {
+            if let Some(skill) = skills
+                .iter()
+                .find(|s| s.path_to_skills_md.as_path() == path.as_path())
+            {
                 seen_paths.insert(skill.path_to_skills_md.clone());
                 seen_names.insert(skill.name.clone());
                 selected.push(skill.clone());
@@ -238,9 +262,15 @@ pub fn collect_explicit_skill_mentions(
         if let UserInput::Text { text, .. } = input {
             let mentions = extract_tool_mentions(text);
             select_skills_from_mentions(
-                skills, disabled_paths, &skill_name_counts, connector_slug_counts,
-                &blocked_plain_names, &mentions,
-                &mut seen_names, &mut seen_paths, &mut selected,
+                skills,
+                disabled_paths,
+                &skill_name_counts,
+                connector_slug_counts,
+                &blocked_plain_names,
+                &mentions,
+                &mut seen_names,
+                &mut seen_paths,
+                &mut selected,
             );
         }
     }
@@ -254,7 +284,10 @@ pub fn collect_explicit_skill_mentions_from_text(
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
 ) -> Vec<SkillMetadata> {
-    let inputs = vec![UserInput::Text { text: text.to_string(), text_elements: vec![] }];
+    let inputs = vec![UserInput::Text {
+        text: text.to_string(),
+        text_elements: vec![],
+    }];
     collect_explicit_skill_mentions(&inputs, skills, disabled_paths, &HashMap::new())
 }
 
@@ -269,16 +302,27 @@ fn select_skills_from_mentions(
     seen_paths: &mut HashSet<PathBuf>,
     selected: &mut Vec<SkillMetadata>,
 ) {
-    if mentions.is_empty() { return; }
+    if mentions.is_empty() {
+        return;
+    }
 
     // Path-based exact matches from linked mentions.
-    let linked_paths: HashSet<&str> = mentions.paths.iter()
-        .filter(|p| !matches!(tool_kind_for_path(p), ToolMentionKind::App | ToolMentionKind::Mcp))
+    let linked_paths: HashSet<&str> = mentions
+        .paths
+        .iter()
+        .filter(|p| {
+            !matches!(
+                tool_kind_for_path(p),
+                ToolMentionKind::App | ToolMentionKind::Mcp
+            )
+        })
         .map(|p| normalize_skill_path(p))
         .collect();
 
     for skill in skills {
-        if disabled_paths.contains(&skill.path_to_skills_md) || seen_paths.contains(&skill.path_to_skills_md) {
+        if disabled_paths.contains(&skill.path_to_skills_md)
+            || seen_paths.contains(&skill.path_to_skills_md)
+        {
             continue;
         }
         let path_str = skill.path_to_skills_md.to_string_lossy();
@@ -291,18 +335,29 @@ fn select_skills_from_mentions(
 
     // Plain name matches (unambiguous, not blocked by structured input or connector).
     for skill in skills {
-        if disabled_paths.contains(&skill.path_to_skills_md) || seen_paths.contains(&skill.path_to_skills_md) {
+        if disabled_paths.contains(&skill.path_to_skills_md)
+            || seen_paths.contains(&skill.path_to_skills_md)
+        {
             continue;
         }
-        if blocked_plain_names.contains(skill.name.as_str()) { continue; }
-        if !mentions.plain_names.contains(skill.name.as_str()) { continue; }
+        if blocked_plain_names.contains(skill.name.as_str()) {
+            continue;
+        }
+        if !mentions.plain_names.contains(skill.name.as_str()) {
+            continue;
+        }
 
-        let skill_count = skill_name_counts.get(skill.name.as_str()).copied().unwrap_or(0);
+        let skill_count = skill_name_counts
+            .get(skill.name.as_str())
+            .copied()
+            .unwrap_or(0);
         let connector_count = connector_slug_counts
             .get(&skill.name.to_ascii_lowercase())
             .copied()
             .unwrap_or(0);
-        if skill_count != 1 || connector_count != 0 { continue; }
+        if skill_count != 1 || connector_count != 0 {
+            continue;
+        }
 
         if seen_names.insert(skill.name.clone()) {
             seen_paths.insert(skill.path_to_skills_md.clone());
@@ -321,8 +376,18 @@ fn is_common_env_var(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     matches!(
         upper.as_str(),
-        "PATH" | "HOME" | "USER" | "SHELL" | "LANG" | "TERM" | "PWD"
-            | "TMPDIR" | "TEMP" | "TMP" | "EDITOR" | "XDG_CONFIG_HOME"
+        "PATH"
+            | "HOME"
+            | "USER"
+            | "SHELL"
+            | "LANG"
+            | "TERM"
+            | "PWD"
+            | "TMPDIR"
+            | "TEMP"
+            | "TMP"
+            | "EDITOR"
+            | "XDG_CONFIG_HOME"
     )
 }
 
@@ -349,7 +414,10 @@ mod tests {
     }
 
     fn text_input(text: &str) -> UserInput {
-        UserInput::Text { text: text.to_string(), text_elements: vec![] }
+        UserInput::Text {
+            text: text.to_string(),
+            text_elements: vec![],
+        }
     }
 
     /// Shorthand: collect mentions from a single text string with no connectors.
@@ -358,9 +426,7 @@ mod tests {
         skills: &[SkillMetadata],
         disabled: &HashSet<PathBuf>,
     ) -> Vec<SkillMetadata> {
-        collect_explicit_skill_mentions(
-            &[text_input(text)], skills, disabled, &HashMap::new(),
-        )
+        collect_explicit_skill_mentions(&[text_input(text)], skills, disabled, &HashMap::new())
     }
 
     #[test]
@@ -436,7 +502,10 @@ mod tests {
     fn tool_kind_detection() {
         assert_eq!(tool_kind_for_path("app://my-app"), ToolMentionKind::App);
         assert_eq!(tool_kind_for_path("mcp://server"), ToolMentionKind::Mcp);
-        assert_eq!(tool_kind_for_path("skill:///tmp/SKILL.md"), ToolMentionKind::Skill);
+        assert_eq!(
+            tool_kind_for_path("skill:///tmp/SKILL.md"),
+            ToolMentionKind::Skill
+        );
         assert_eq!(tool_kind_for_path("/tmp/SKILL.md"), ToolMentionKind::Skill);
         assert_eq!(tool_kind_for_path("/tmp/readme.md"), ToolMentionKind::Other);
     }
@@ -450,7 +519,10 @@ mod tests {
 
     #[test]
     fn normalize_skill_path_strips_prefix() {
-        assert_eq!(normalize_skill_path("skill:///tmp/SKILL.md"), "/tmp/SKILL.md");
+        assert_eq!(
+            normalize_skill_path("skill:///tmp/SKILL.md"),
+            "/tmp/SKILL.md"
+        );
         assert_eq!(normalize_skill_path("/tmp/SKILL.md"), "/tmp/SKILL.md");
     }
 
@@ -464,14 +536,22 @@ mod tests {
 
     /// Test helper: check if `$skill_name` appears as a mention in text.
     fn text_mentions_skill(text: &str, skill_name: &str) -> bool {
-        if skill_name.is_empty() { return false; }
+        if skill_name.is_empty() {
+            return false;
+        }
         let bytes = text.as_bytes();
         let skill_bytes = skill_name.as_bytes();
         for (i, &b) in bytes.iter().enumerate() {
-            if b != b'$' { continue; }
+            if b != b'$' {
+                continue;
+            }
             let start = i + 1;
-            let Some(rest) = bytes.get(start..) else { continue };
-            if !rest.starts_with(skill_bytes) { continue; }
+            let Some(rest) = bytes.get(start..) else {
+                continue;
+            };
+            if !rest.starts_with(skill_bytes) {
+                continue;
+            }
             let after = bytes.get(start + skill_bytes.len()).copied();
             if after.is_none() || !is_name_char(after.unwrap()) {
                 return true;
@@ -526,11 +606,7 @@ mod tests {
             make_skill("demo", "/a/SKILL.md"),
             make_skill("demo", "/b/SKILL.md"),
         ];
-        let result = collect_from_text(
-            "use [$demo](/b/SKILL.md)",
-            &skills,
-            &HashSet::new(),
-        );
+        let result = collect_from_text("use [$demo](/b/SKILL.md)", &skills, &HashSet::new());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].path_to_skills_md, PathBuf::from("/b/SKILL.md"));
     }
@@ -545,7 +621,8 @@ mod tests {
             name: "demo".into(),
             path: PathBuf::from("/b/SKILL.md"),
         }];
-        let result = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
+        let result =
+            collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].path_to_skills_md, PathBuf::from("/b/SKILL.md"));
     }
@@ -555,10 +632,14 @@ mod tests {
         let skills = vec![make_skill("alpha", "/a/SKILL.md")];
         // Structured input for "alpha" with a non-matching path blocks $alpha plain match.
         let inputs = vec![
-            UserInput::Skill { name: "alpha".into(), path: PathBuf::from("/nonexistent/SKILL.md") },
+            UserInput::Skill {
+                name: "alpha".into(),
+                path: PathBuf::from("/nonexistent/SKILL.md"),
+            },
             text_input("use $alpha"),
         ];
-        let result = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
+        let result =
+            collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
         assert!(result.is_empty());
     }
 
@@ -567,7 +648,8 @@ mod tests {
         let skills = vec![make_skill("slack", "/a/SKILL.md")];
         let connectors = HashMap::from([("slack".to_string(), 1usize)]);
         let inputs = vec![text_input("use $slack")];
-        let result = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &connectors);
+        let result =
+            collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &connectors);
         assert!(result.is_empty());
     }
 
@@ -576,7 +658,8 @@ mod tests {
         let skills = vec![make_skill("slack", "/a/SKILL.md")];
         let connectors = HashMap::from([("slack".to_string(), 1usize)]);
         let inputs = vec![text_input("use [$slack](/a/SKILL.md)")];
-        let result = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &connectors);
+        let result =
+            collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &connectors);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "slack");
     }
@@ -588,10 +671,14 @@ mod tests {
             make_skill("beta", "/b/SKILL.md"),
         ];
         let inputs = vec![
-            UserInput::Skill { name: "alpha".into(), path: PathBuf::from("/a/SKILL.md") },
+            UserInput::Skill {
+                name: "alpha".into(),
+                path: PathBuf::from("/a/SKILL.md"),
+            },
             text_input("also use $beta"),
         ];
-        let result = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
+        let result =
+            collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new(), &HashMap::new());
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "alpha");
         assert_eq!(result[1].name, "beta");

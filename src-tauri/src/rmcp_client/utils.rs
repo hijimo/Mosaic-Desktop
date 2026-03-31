@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
-use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use reqwest::ClientBuilder;
 use rmcp::service::ServiceError;
 use tokio::time;
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tokio::time::{Duration as TokioDuration, timeout};
+use tokio::time::{timeout, Duration as TokioDuration};
 
 /// Timeout for git commands to prevent freezing on large repositories.
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
@@ -377,8 +377,7 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
         }
 
         // Fall back to `git remote show`
-        if let Some(show_output) =
-            run_git_command(&["remote", "show", remote.as_str()], cwd).await
+        if let Some(show_output) = run_git_command(&["remote", "show", remote.as_str()], cwd).await
         {
             if show_output.status.success() {
                 if let Ok(text) = String::from_utf8(show_output.stdout) {
@@ -511,12 +510,20 @@ async fn branch_remote_and_distance(
         if local_count.status.success() {
             local_count
         } else if let Some(ref remote_ref) = found_remote_ref {
-            run_git_command(&["rev-list", "--count", &format!("{remote_ref}..HEAD")], cwd).await?
+            run_git_command(
+                &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+                cwd,
+            )
+            .await?
         } else {
             return None;
         }
     } else if let Some(ref remote_ref) = found_remote_ref {
-        run_git_command(&["rev-list", "--count", &format!("{remote_ref}..HEAD")], cwd).await?
+        run_git_command(
+            &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+            cwd,
+        )
+        .await?
     } else {
         return None;
     };
@@ -552,8 +559,7 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 }
 
 async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
-    let output =
-        run_git_command(&["diff", "--no-textconv", "--no-ext-diff", sha], cwd).await?;
+    let output = run_git_command(&["diff", "--no-textconv", "--no-ext-diff", sha], cwd).await?;
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
     if !exit_ok {
         return None;

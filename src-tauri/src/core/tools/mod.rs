@@ -15,6 +15,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::error::{CodexError, ErrorCode};
+pub use spec::{
+    build_specs, AssembledToolRuntime, ConfiguredToolSpec, ToolRegistryBuilder, ToolsConfig,
+};
 
 /// Identifies the kind of tool — used for registry lookup and dispatch.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -116,10 +119,7 @@ impl ToolRegistry {
 
     /// Collect all tool specs from registered handlers for sending to the model API.
     pub fn collect_tool_specs(&self) -> Vec<serde_json::Value> {
-        self.handlers
-            .iter()
-            .filter_map(|h| h.tool_spec())
-            .collect()
+        self.handlers.iter().filter_map(|h| h.tool_spec()).collect()
     }
 }
 
@@ -204,5 +204,22 @@ mod tests {
             "mcp__srv__fetch"
         );
         assert_eq!(ToolKind::Dynamic("custom".to_string()).name(), "custom");
+    }
+
+    #[test]
+    fn tools_module_exposes_runtime_assembly_types() {
+        let assembled: AssembledToolRuntime = build_specs(&ToolsConfig::default(), false);
+        let builder = ToolRegistryBuilder::new();
+        let configured = ConfiguredToolSpec::new(
+            assembled.configured_specs[0].spec.clone(),
+            assembled.configured_specs[0].supports_parallel_tool_calls,
+        );
+
+        assert!(assembled
+            .configured_specs
+            .iter()
+            .any(|spec| spec.spec.name() == "shell"));
+        assert!(configured.supports_parallel_tool_calls);
+        let _ = builder;
     }
 }

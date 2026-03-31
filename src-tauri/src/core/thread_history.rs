@@ -67,7 +67,11 @@ pub struct ThreadHistoryBuilder {
 
 impl ThreadHistoryBuilder {
     pub fn new() -> Self {
-        Self { turns: Vec::new(), current_turn: None, next_item_index: 1 }
+        Self {
+            turns: Vec::new(),
+            current_turn: None,
+            next_item_index: 1,
+        }
     }
 
     pub fn finish(mut self) -> Vec<TurnGroup> {
@@ -82,64 +86,101 @@ impl ThreadHistoryBuilder {
                 self.ensure_turn().saw_compaction = true;
             }
             RolloutItem::ResponseItem(ri) => self.handle_response_item(ri),
-            RolloutItem::TurnContext(_)
-            | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
         }
     }
 
     fn handle_response_item(&mut self, ri: &crate::protocol::types::ResponseItem) {
-        use crate::protocol::types::{ResponseItem, ContentItem};
+        use crate::protocol::types::{ContentItem, ResponseItem};
         match ri {
-            ResponseItem::Message { role, content, phase, id, .. } => {
+            ResponseItem::Message {
+                role,
+                content,
+                phase,
+                id,
+                ..
+            } => {
                 if role == "user" {
                     if crate::core::event_mapping::is_contextual_user_message(content) {
                         return;
                     }
                     let item_id = self.next_item_id();
-                    let user_content: Vec<crate::protocol::types::UserInput> = content.iter().filter_map(|c| match c {
-                        ContentItem::InputText { text } => Some(crate::protocol::types::UserInput::Text {
-                            text: text.clone(), text_elements: vec![],
-                        }),
-                        _ => None,
-                    }).collect();
+                    let user_content: Vec<crate::protocol::types::UserInput> = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::InputText { text } => {
+                                Some(crate::protocol::types::UserInput::Text {
+                                    text: text.clone(),
+                                    text_elements: vec![],
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     if !user_content.is_empty() {
                         // Close implicit turn on new user message
                         if let Some(turn) = self.current_turn.as_ref() {
-                            if !turn.opened_explicitly && !(turn.saw_compaction && turn.items.is_empty()) {
+                            if !turn.opened_explicitly
+                                && !(turn.saw_compaction && turn.items.is_empty())
+                            {
                                 self.finish_current_turn();
                             }
                         }
-                        self.ensure_turn().items.push(TurnItem::UserMessage(UserMessageItem {
-                            id: item_id, content: user_content,
-                        }));
+                        self.ensure_turn()
+                            .items
+                            .push(TurnItem::UserMessage(UserMessageItem {
+                                id: item_id,
+                                content: user_content,
+                            }));
                     }
                 } else if role == "assistant" {
-                    let text: String = content.iter().filter_map(|c| match c {
-                        ContentItem::OutputText { text } => Some(text.as_str()),
-                        _ => None,
-                    }).collect();
+                    let text: String = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::OutputText { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
                     if !text.is_empty() {
                         let item_id = self.next_item_id();
-                        self.ensure_turn().items.push(TurnItem::AgentMessage(AgentMessageItem {
-                            id: item_id,
-                            content: vec![AgentMessageContent::Text { text }],
-                            phase: phase.clone(),
-                        }));
+                        self.ensure_turn()
+                            .items
+                            .push(TurnItem::AgentMessage(AgentMessageItem {
+                                id: item_id,
+                                content: vec![AgentMessageContent::Text { text }],
+                                phase: phase.clone(),
+                            }));
                     }
                 }
             }
-            ResponseItem::Reasoning { id, summary, content, .. } => {
-                let summary_texts: Vec<String> = summary.iter().filter_map(|s| {
-                    match s {
-                        crate::protocol::types::ReasoningSummaryItem::SummaryText { text } => Some(text.clone()),
-                    }
-                }).collect();
-                let raw_texts: Vec<String> = content.as_ref().map(|items| {
-                    items.iter().filter_map(|c| match c {
-                        crate::protocol::types::ReasoningContentItem::Text { text } => Some(text.clone()),
-                        _ => None,
-                    }).collect()
-                }).unwrap_or_default();
+            ResponseItem::Reasoning {
+                id,
+                summary,
+                content,
+                ..
+            } => {
+                let summary_texts: Vec<String> = summary
+                    .iter()
+                    .filter_map(|s| match s {
+                        crate::protocol::types::ReasoningSummaryItem::SummaryText { text } => {
+                            Some(text.clone())
+                        }
+                    })
+                    .collect();
+                let raw_texts: Vec<String> = content
+                    .as_ref()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|c| match c {
+                                crate::protocol::types::ReasoningContentItem::Text { text } => {
+                                    Some(text.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 if !summary_texts.is_empty() || !raw_texts.is_empty() {
                     // Try merge with last reasoning
                     if let Some(ct) = self.current_turn.as_mut() {
@@ -149,10 +190,18 @@ impl ThreadHistoryBuilder {
                             return;
                         }
                     }
-                    let item_id = if id.is_empty() { self.next_item_id() } else { id.clone() };
-                    self.ensure_turn().items.push(TurnItem::Reasoning(ReasoningItem {
-                        id: item_id, summary_text: summary_texts, raw_content: raw_texts,
-                    }));
+                    let item_id = if id.is_empty() {
+                        self.next_item_id()
+                    } else {
+                        id.clone()
+                    };
+                    self.ensure_turn()
+                        .items
+                        .push(TurnItem::Reasoning(ReasoningItem {
+                            id: item_id,
+                            summary_text: summary_texts,
+                            raw_content: raw_texts,
+                        }));
                 }
             }
             // FunctionCall, FunctionCallOutput, etc. — not rendered as TurnItems
@@ -186,29 +235,42 @@ impl ThreadHistoryBuilder {
             EventMsg::CollabResumeEnd(p) => self.handle_collab_resume_end(p),
             EventMsg::ContextCompacted(_) => {
                 let id = self.next_item_id();
-                self.ensure_turn().items.push(TurnItem::ContextCompaction(
-                    ContextCompactionItem { id },
-                ));
+                self.ensure_turn()
+                    .items
+                    .push(TurnItem::ContextCompaction(ContextCompactionItem { id }));
             }
             EventMsg::EnteredReviewMode(p) => {
                 let id = self.next_item_id();
-                let review = p.user_facing_hint.clone().unwrap_or_else(|| "Review requested.".to_string());
-                self.ensure_turn().items.push(TurnItem::EnteredReviewMode(
-                    EnteredReviewModeItem { id, review },
-                ));
+                let review = p
+                    .user_facing_hint
+                    .clone()
+                    .unwrap_or_else(|| "Review requested.".to_string());
+                self.ensure_turn()
+                    .items
+                    .push(TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                        id,
+                        review,
+                    }));
             }
             EventMsg::ExitedReviewMode(p) => {
                 let id = self.next_item_id();
-                let review = p.review_output.as_ref()
-                    .map(|o| if o.overall_explanation.trim().is_empty() {
-                        "Reviewer failed to output a response.".to_string()
-                    } else {
-                        o.overall_explanation.trim().to_string()
+                let review = p
+                    .review_output
+                    .as_ref()
+                    .map(|o| {
+                        if o.overall_explanation.trim().is_empty() {
+                            "Reviewer failed to output a response.".to_string()
+                        } else {
+                            o.overall_explanation.trim().to_string()
+                        }
                     })
                     .unwrap_or_else(|| "Reviewer failed to output a response.".to_string());
-                self.ensure_turn().items.push(TurnItem::ExitedReviewMode(
-                    ExitedReviewModeItem { id, review },
-                ));
+                self.ensure_turn()
+                    .items
+                    .push(TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+                        id,
+                        review,
+                    }));
             }
             EventMsg::ItemStarted(p) => self.handle_item_started(p),
             EventMsg::ItemCompleted(p) => self.handle_item_completed(p),
@@ -278,7 +340,9 @@ impl ThreadHistoryBuilder {
                 return;
             }
         }
-        let Some(turn) = self.current_turn.as_mut() else { return };
+        let Some(turn) = self.current_turn.as_mut() else {
+            return;
+        };
         turn.status = TurnStatus::Failed;
         turn.error = Some(TurnError {
             message: p.message.clone(),
@@ -331,27 +395,39 @@ impl ThreadHistoryBuilder {
         }
         if let Some(images) = &p.images {
             for url in images {
-                content.push(UserInput::Image { image_url: url.clone() });
+                content.push(UserInput::Image {
+                    image_url: url.clone(),
+                });
             }
         }
         for path in &p.local_images {
             content.push(UserInput::LocalImage { path: path.clone() });
         }
-        self.ensure_turn().items.push(TurnItem::UserMessage(UserMessageItem { id, content }));
+        self.ensure_turn()
+            .items
+            .push(TurnItem::UserMessage(UserMessageItem { id, content }));
     }
 
     fn handle_agent_message(&mut self, text: &str, phase: &Option<MessagePhase>) {
-        if text.is_empty() { return; }
+        if text.is_empty() {
+            return;
+        }
         let id = self.next_item_id();
-        self.ensure_turn().items.push(TurnItem::AgentMessage(AgentMessageItem {
-            id,
-            content: vec![AgentMessageContent::Text { text: text.to_string() }],
-            phase: phase.clone(),
-        }));
+        self.ensure_turn()
+            .items
+            .push(TurnItem::AgentMessage(AgentMessageItem {
+                id,
+                content: vec![AgentMessageContent::Text {
+                    text: text.to_string(),
+                }],
+                phase: phase.clone(),
+            }));
     }
 
     fn handle_agent_reasoning(&mut self, p: &AgentReasoningEvent) {
-        if p.text.is_empty() { return; }
+        if p.text.is_empty() {
+            return;
+        }
         // Try merge first
         if let Some(ct) = self.current_turn.as_mut() {
             if let Some(TurnItem::Reasoning(r)) = ct.items.last_mut() {
@@ -360,13 +436,19 @@ impl ThreadHistoryBuilder {
             }
         }
         let id = self.next_item_id();
-        self.ensure_turn().items.push(TurnItem::Reasoning(ReasoningItem {
-            id, summary_text: vec![p.text.clone()], raw_content: vec![],
-        }));
+        self.ensure_turn()
+            .items
+            .push(TurnItem::Reasoning(ReasoningItem {
+                id,
+                summary_text: vec![p.text.clone()],
+                raw_content: vec![],
+            }));
     }
 
     fn handle_agent_reasoning_raw(&mut self, p: &AgentReasoningRawContentEvent) {
-        if p.text.is_empty() { return; }
+        if p.text.is_empty() {
+            return;
+        }
         if let Some(ct) = self.current_turn.as_mut() {
             if let Some(TurnItem::Reasoning(r)) = ct.items.last_mut() {
                 r.raw_content.push(p.text.clone());
@@ -374,9 +456,13 @@ impl ThreadHistoryBuilder {
             }
         }
         let id = self.next_item_id();
-        self.ensure_turn().items.push(TurnItem::Reasoning(ReasoningItem {
-            id, summary_text: vec![], raw_content: vec![p.text.clone()],
-        }));
+        self.ensure_turn()
+            .items
+            .push(TurnItem::Reasoning(ReasoningItem {
+                id,
+                summary_text: vec![],
+                raw_content: vec![p.text.clone()],
+            }));
     }
 
     fn handle_item_started(&mut self, p: &ItemStartedEvent) {
@@ -399,7 +485,8 @@ impl ThreadHistoryBuilder {
 
     fn handle_web_search_end(&mut self, p: &WebSearchEndEvent) {
         let item = TurnItem::WebSearch(WebSearchItem {
-            id: p.call_id.clone(), query: p.query.clone(),
+            id: p.call_id.clone(),
+            query: p.query.clone(),
             action: Some(p.action.clone()),
         });
         self.upsert_item_in_current_turn(item);
@@ -411,16 +498,23 @@ impl ThreadHistoryBuilder {
         let collab_status = to_collab_agent_state(&p.status);
         let tool_status = if matches!(p.status, AgentStatus::Errored(_) | AgentStatus::NotFound) {
             CollabAgentToolCallStatus::Failed
-        } else { CollabAgentToolCallStatus::Completed };
+        } else {
+            CollabAgentToolCallStatus::Completed
+        };
         let receiver_ids: Vec<String> = p.new_thread_id.iter().cloned().collect();
-        let agents_states = p.new_thread_id.iter()
+        let agents_states = p
+            .new_thread_id
+            .iter()
             .map(|id| (id.clone(), collab_status.clone()))
             .collect();
         let item = TurnItem::CollabToolCall(CollabToolCallItem {
-            id: p.call_id.clone(), tool: CollabAgentTool::SpawnAgent, status: tool_status,
+            id: p.call_id.clone(),
+            tool: CollabAgentTool::SpawnAgent,
+            status: tool_status,
             sender_thread_id: p.sender_thread_id.clone(),
             receiver_thread_ids: receiver_ids,
-            prompt: Some(p.prompt.clone()), agents_states,
+            prompt: Some(p.prompt.clone()),
+            agents_states,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -429,13 +523,19 @@ impl ThreadHistoryBuilder {
         let collab_status = to_collab_agent_state(&p.status);
         let tool_status = if matches!(p.status, AgentStatus::Errored(_) | AgentStatus::NotFound) {
             CollabAgentToolCallStatus::Failed
-        } else { CollabAgentToolCallStatus::Completed };
+        } else {
+            CollabAgentToolCallStatus::Completed
+        };
         let item = TurnItem::CollabToolCall(CollabToolCallItem {
-            id: p.call_id.clone(), tool: CollabAgentTool::SendInput, status: tool_status,
+            id: p.call_id.clone(),
+            tool: CollabAgentTool::SendInput,
+            status: tool_status,
             sender_thread_id: p.sender_thread_id.clone(),
             receiver_thread_ids: vec![p.receiver_thread_id.clone()],
             prompt: Some(p.prompt.clone()),
-            agents_states: [(p.receiver_thread_id.clone(), collab_status)].into_iter().collect(),
+            agents_states: [(p.receiver_thread_id.clone(), collab_status)]
+                .into_iter()
+                .collect(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -443,15 +543,28 @@ impl ThreadHistoryBuilder {
     fn handle_collab_waiting_end(&mut self, p: &CollabWaitingEndEvent) {
         let mut receiver_ids: Vec<String> = p.statuses.keys().cloned().collect();
         receiver_ids.sort();
-        let agents_states: HashMap<String, CollabAgentState> = p.statuses.iter()
+        let agents_states: HashMap<String, CollabAgentState> = p
+            .statuses
+            .iter()
             .map(|(id, s)| (id.clone(), to_collab_agent_state(s)))
             .collect();
-        let has_error = p.statuses.values().any(|s| matches!(s, AgentStatus::Errored(_) | AgentStatus::NotFound));
-        let tool_status = if has_error { CollabAgentToolCallStatus::Failed } else { CollabAgentToolCallStatus::Completed };
+        let has_error = p
+            .statuses
+            .values()
+            .any(|s| matches!(s, AgentStatus::Errored(_) | AgentStatus::NotFound));
+        let tool_status = if has_error {
+            CollabAgentToolCallStatus::Failed
+        } else {
+            CollabAgentToolCallStatus::Completed
+        };
         let item = TurnItem::CollabToolCall(CollabToolCallItem {
-            id: p.call_id.clone(), tool: CollabAgentTool::Wait, status: tool_status,
+            id: p.call_id.clone(),
+            tool: CollabAgentTool::Wait,
+            status: tool_status,
             sender_thread_id: p.sender_thread_id.clone(),
-            receiver_thread_ids: receiver_ids, prompt: None, agents_states,
+            receiver_thread_ids: receiver_ids,
+            prompt: None,
+            agents_states,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -460,13 +573,19 @@ impl ThreadHistoryBuilder {
         let collab_status = to_collab_agent_state(&p.status);
         let tool_status = if matches!(p.status, AgentStatus::Errored(_) | AgentStatus::NotFound) {
             CollabAgentToolCallStatus::Failed
-        } else { CollabAgentToolCallStatus::Completed };
+        } else {
+            CollabAgentToolCallStatus::Completed
+        };
         let item = TurnItem::CollabToolCall(CollabToolCallItem {
-            id: p.call_id.clone(), tool: CollabAgentTool::CloseAgent, status: tool_status,
+            id: p.call_id.clone(),
+            tool: CollabAgentTool::CloseAgent,
+            status: tool_status,
             sender_thread_id: p.sender_thread_id.clone(),
             receiver_thread_ids: vec![p.receiver_thread_id.clone()],
             prompt: None,
-            agents_states: [(p.receiver_thread_id.clone(), collab_status)].into_iter().collect(),
+            agents_states: [(p.receiver_thread_id.clone(), collab_status)]
+                .into_iter()
+                .collect(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -475,13 +594,19 @@ impl ThreadHistoryBuilder {
         let collab_status = to_collab_agent_state(&p.status);
         let tool_status = if matches!(p.status, AgentStatus::Errored(_) | AgentStatus::NotFound) {
             CollabAgentToolCallStatus::Failed
-        } else { CollabAgentToolCallStatus::Completed };
+        } else {
+            CollabAgentToolCallStatus::Completed
+        };
         let item = TurnItem::CollabToolCall(CollabToolCallItem {
-            id: p.call_id.clone(), tool: CollabAgentTool::ResumeAgent, status: tool_status,
+            id: p.call_id.clone(),
+            tool: CollabAgentTool::ResumeAgent,
+            status: tool_status,
             sender_thread_id: p.sender_thread_id.clone(),
             receiver_thread_ids: vec![p.receiver_thread_id.clone()],
             prompt: None,
-            agents_states: [(p.receiver_thread_id.clone(), collab_status)].into_iter().collect(),
+            agents_states: [(p.receiver_thread_id.clone(), collab_status)]
+                .into_iter()
+                .collect(),
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -489,28 +614,57 @@ impl ThreadHistoryBuilder {
     fn handle_exec_command_end(&mut self, p: &ExecCommandEndEvent) {
         let cmd_str = p.command.join(" ");
         let status = match p.status {
-            crate::protocol::types::ExecCommandStatus::Completed => CommandExecutionStatus::Completed,
+            crate::protocol::types::ExecCommandStatus::Completed => {
+                CommandExecutionStatus::Completed
+            }
             crate::protocol::types::ExecCommandStatus::Failed => CommandExecutionStatus::Failed,
             crate::protocol::types::ExecCommandStatus::Declined => CommandExecutionStatus::Declined,
         };
-        let output = if p.aggregated_output.is_empty() { None } else { Some(p.aggregated_output.clone()) };
+        let output = if p.aggregated_output.is_empty() {
+            None
+        } else {
+            Some(p.aggregated_output.clone())
+        };
         let duration_ms = i64::try_from(p.duration.as_millis()).ok();
-        let command_actions: Vec<CommandAction> = p.parsed_cmd.iter().map(|pc| {
-            match pc {
-                crate::protocol::types::ParsedCommand::Read { cmd, name, path } =>
-                    CommandAction::Read { command: cmd.clone(), name: name.clone(), path: path.clone() },
-                crate::protocol::types::ParsedCommand::ListFiles { cmd, path } =>
-                    CommandAction::ListFiles { command: cmd.clone(), path: path.clone() },
-                crate::protocol::types::ParsedCommand::Search { cmd, query, path } =>
-                    CommandAction::Search { command: cmd.clone(), query: query.clone(), path: path.clone() },
-                crate::protocol::types::ParsedCommand::Unknown { cmd } =>
-                    CommandAction::Unknown { command: cmd.clone() },
-            }
-        }).collect();
+        let command_actions: Vec<CommandAction> = p
+            .parsed_cmd
+            .iter()
+            .map(|pc| match pc {
+                crate::protocol::types::ParsedCommand::Read { cmd, name, path } => {
+                    CommandAction::Read {
+                        command: cmd.clone(),
+                        name: name.clone(),
+                        path: path.clone(),
+                    }
+                }
+                crate::protocol::types::ParsedCommand::ListFiles { cmd, path } => {
+                    CommandAction::ListFiles {
+                        command: cmd.clone(),
+                        path: path.clone(),
+                    }
+                }
+                crate::protocol::types::ParsedCommand::Search { cmd, query, path } => {
+                    CommandAction::Search {
+                        command: cmd.clone(),
+                        query: query.clone(),
+                        path: path.clone(),
+                    }
+                }
+                crate::protocol::types::ParsedCommand::Unknown { cmd } => CommandAction::Unknown {
+                    command: cmd.clone(),
+                },
+            })
+            .collect();
         let item = TurnItem::CommandExecution(CommandExecutionItem {
-            id: p.call_id.clone(), command: cmd_str, cwd: p.cwd.clone(),
-            process_id: p.process_id.clone(), status, command_actions,
-            aggregated_output: output, exit_code: Some(p.exit_code), duration_ms,
+            id: p.call_id.clone(),
+            command: cmd_str,
+            cwd: p.cwd.clone(),
+            process_id: p.process_id.clone(),
+            status,
+            command_actions,
+            aggregated_output: output,
+            exit_code: Some(p.exit_code),
+            duration_ms,
         });
         self.upsert_item_in_turn_id(&p.turn_id, item);
     }
@@ -518,7 +672,13 @@ impl ThreadHistoryBuilder {
     fn handle_mcp_tool_call_end(&mut self, p: &McpToolCallEndEvent) {
         let (status, result, error) = match &p.result {
             Ok(_) => (McpToolCallStatus::Completed, None, None),
-            Err(msg) => (McpToolCallStatus::Failed, None, Some(McpToolCallError { message: msg.clone() })),
+            Err(msg) => (
+                McpToolCallStatus::Failed,
+                None,
+                Some(McpToolCallError {
+                    message: msg.clone(),
+                }),
+            ),
         };
         let duration_ms = i64::try_from(p.duration.as_millis()).ok();
         let item = TurnItem::McpToolCall(McpToolCallItem {
@@ -526,8 +686,14 @@ impl ThreadHistoryBuilder {
             server: p.invocation.server.clone(),
             tool: p.invocation.tool.clone(),
             status,
-            arguments: p.invocation.arguments.clone().unwrap_or(serde_json::Value::Null),
-            result, error, duration_ms,
+            arguments: p
+                .invocation
+                .arguments
+                .clone()
+                .unwrap_or(serde_json::Value::Null),
+            result,
+            error,
+            duration_ms,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -565,10 +731,13 @@ impl ThreadHistoryBuilder {
 
     fn handle_dynamic_request(&mut self, p: &DynamicToolCallRequest) {
         let item = TurnItem::DynamicToolCall(DynamicToolCallItem {
-            id: p.call_id.clone(), tool: p.tool.clone(),
+            id: p.call_id.clone(),
+            tool: p.tool.clone(),
             arguments: p.arguments.clone(),
             status: DynamicToolCallStatus::InProgress,
-            content_items: None, success: None, duration_ms: None,
+            content_items: None,
+            success: None,
+            duration_ms: None,
         });
         if p.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -578,13 +747,22 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_dynamic_response(&mut self, p: &DynamicToolCallResponseEvent) {
-        let status = if p.success { DynamicToolCallStatus::Completed } else { DynamicToolCallStatus::Failed };
-        let duration_ms = p.duration.map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let status = if p.success {
+            DynamicToolCallStatus::Completed
+        } else {
+            DynamicToolCallStatus::Failed
+        };
+        let duration_ms = p
+            .duration
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
         let item = TurnItem::DynamicToolCall(DynamicToolCallItem {
-            id: p.call_id.clone(), tool: p.tool.clone(),
-            arguments: p.arguments.clone(), status,
+            id: p.call_id.clone(),
+            tool: p.tool.clone(),
+            arguments: p.arguments.clone(),
+            status,
             content_items: Some(p.content_items.clone()),
-            success: Some(p.success), duration_ms,
+            success: Some(p.success),
+            duration_ms,
         });
         if p.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -652,31 +830,64 @@ fn upsert_turn_item(items: &mut Vec<TurnItem>, item: TurnItem) {
 
 fn to_collab_agent_state(status: &AgentStatus) -> CollabAgentState {
     match status {
-        AgentStatus::PendingInit => CollabAgentState { status: CollabAgentStatus::PendingInit, message: None },
-        AgentStatus::Running => CollabAgentState { status: CollabAgentStatus::Running, message: None },
-        AgentStatus::Completed(msg) => CollabAgentState { status: CollabAgentStatus::Completed, message: msg.clone() },
-        AgentStatus::Errored(msg) => CollabAgentState { status: CollabAgentStatus::Errored, message: Some(msg.clone()) },
-        AgentStatus::Shutdown => CollabAgentState { status: CollabAgentStatus::Shutdown, message: None },
-        AgentStatus::NotFound => CollabAgentState { status: CollabAgentStatus::NotFound, message: None },
+        AgentStatus::PendingInit => CollabAgentState {
+            status: CollabAgentStatus::PendingInit,
+            message: None,
+        },
+        AgentStatus::Running => CollabAgentState {
+            status: CollabAgentStatus::Running,
+            message: None,
+        },
+        AgentStatus::Completed(msg) => CollabAgentState {
+            status: CollabAgentStatus::Completed,
+            message: msg.clone(),
+        },
+        AgentStatus::Errored(msg) => CollabAgentState {
+            status: CollabAgentStatus::Errored,
+            message: Some(msg.clone()),
+        },
+        AgentStatus::Shutdown => CollabAgentState {
+            status: CollabAgentStatus::Shutdown,
+            message: None,
+        },
+        AgentStatus::NotFound => CollabAgentState {
+            status: CollabAgentStatus::NotFound,
+            message: None,
+        },
     }
 }
 
 fn convert_patch_changes(changes: &HashMap<PathBuf, FileChange>) -> Vec<FileUpdateChange> {
-    let mut result: Vec<FileUpdateChange> = changes.iter().map(|(path, change)| {
-        let (kind, diff) = match change {
-            FileChange::Add { content } => (PatchChangeKind::Add, content.clone()),
-            FileChange::Delete { content } => (PatchChangeKind::Delete, content.clone()),
-            FileChange::Update { unified_diff, move_path } => {
-                let d = if let Some(p) = move_path {
-                    format!("{unified_diff}\n\nMoved to: {}", p.display())
-                } else {
-                    unified_diff.clone()
-                };
-                (PatchChangeKind::Update { move_path: move_path.clone() }, d)
+    let mut result: Vec<FileUpdateChange> = changes
+        .iter()
+        .map(|(path, change)| {
+            let (kind, diff) = match change {
+                FileChange::Add { content } => (PatchChangeKind::Add, content.clone()),
+                FileChange::Delete { content } => (PatchChangeKind::Delete, content.clone()),
+                FileChange::Update {
+                    unified_diff,
+                    move_path,
+                } => {
+                    let d = if let Some(p) = move_path {
+                        format!("{unified_diff}\n\nMoved to: {}", p.display())
+                    } else {
+                        unified_diff.clone()
+                    };
+                    (
+                        PatchChangeKind::Update {
+                            move_path: move_path.clone(),
+                        },
+                        d,
+                    )
+                }
+            };
+            FileUpdateChange {
+                path: path.to_string_lossy().into_owned(),
+                kind,
+                diff,
             }
-        };
-        FileUpdateChange { path: path.to_string_lossy().into_owned(), kind, diff }
-    }).collect();
+        })
+        .collect();
     result.sort_by(|a, b| a.path.cmp(&b.path));
     result
 }
@@ -686,50 +897,72 @@ mod tests {
     use super::*;
     use crate::core::rollout::policy::RolloutItem;
     use crate::protocol::event::*;
-    use crate::protocol::types::{ModeKind, TurnAbortReason, McpInvocation};
+    use crate::protocol::types::{McpInvocation, ModeKind, TurnAbortReason};
 
-    fn ev(e: EventMsg) -> RolloutItem { RolloutItem::EventMsg(e) }
+    fn ev(e: EventMsg) -> RolloutItem {
+        RolloutItem::EventMsg(e)
+    }
 
     fn user(msg: &str) -> RolloutItem {
         ev(EventMsg::UserMessage(UserMessageEvent {
-            message: msg.into(), images: None, text_elements: vec![], local_images: vec![],
+            message: msg.into(),
+            images: None,
+            text_elements: vec![],
+            local_images: vec![],
         }))
     }
 
     fn agent(msg: &str) -> RolloutItem {
-        ev(EventMsg::AgentMessage(AgentMessageEvent { message: msg.into(), phase: None }))
+        ev(EventMsg::AgentMessage(AgentMessageEvent {
+            message: msg.into(),
+            phase: None,
+        }))
     }
 
     fn turn_start(id: &str) -> RolloutItem {
         ev(EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: id.into(), model_context_window: None,
+            turn_id: id.into(),
+            model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }))
     }
 
     fn turn_end(id: &str) -> RolloutItem {
         ev(EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: id.into(), last_agent_message: None,
+            turn_id: id.into(),
+            last_agent_message: None,
         }))
     }
 
     fn rollback(n: u32) -> RolloutItem {
-        ev(EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: n }))
+        ev(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: n,
+        }))
     }
 
     fn reasoning(text: &str) -> RolloutItem {
-        ev(EventMsg::AgentReasoning(AgentReasoningEvent { text: text.into() }))
+        ev(EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: text.into(),
+        }))
     }
 
     fn reasoning_raw(text: &str) -> RolloutItem {
-        ev(EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: text.into() }))
+        ev(EventMsg::AgentReasoningRawContent(
+            AgentReasoningRawContentEvent { text: text.into() },
+        ))
     }
 
     #[test]
     fn basic_two_turn_conversation() {
         let items = vec![
-            turn_start("t1"), user("hello"), agent("hi"), turn_end("t1"),
-            turn_start("t2"), user("bye"), agent("goodbye"), turn_end("t2"),
+            turn_start("t1"),
+            user("hello"),
+            agent("hi"),
+            turn_end("t1"),
+            turn_start("t2"),
+            user("bye"),
+            agent("goodbye"),
+            turn_end("t2"),
         ];
         let turns = build_turn_groups_from_rollout_items(&items);
         assert_eq!(turns.len(), 2);
@@ -742,9 +975,7 @@ mod tests {
 
     #[test]
     fn implicit_turn_split_on_user_message() {
-        let items = vec![
-            user("first"), agent("a1"), user("second"), agent("a2"),
-        ];
+        let items = vec![user("first"), agent("a1"), user("second"), agent("a2")];
         let turns = build_turn_groups_from_rollout_items(&items);
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].items.len(), 2);
@@ -754,10 +985,19 @@ mod tests {
     #[test]
     fn rollback_removes_turns() {
         let items = vec![
-            turn_start("t1"), user("u1"), agent("a1"), turn_end("t1"),
-            turn_start("t2"), user("u2"), agent("a2"), turn_end("t2"),
+            turn_start("t1"),
+            user("u1"),
+            agent("a1"),
+            turn_end("t1"),
+            turn_start("t2"),
+            user("u2"),
+            agent("a2"),
+            turn_end("t2"),
             rollback(1),
-            turn_start("t3"), user("u3"), agent("a3"), turn_end("t3"),
+            turn_start("t3"),
+            user("u3"),
+            agent("a3"),
+            turn_end("t3"),
         ];
         let turns = build_turn_groups_from_rollout_items(&items);
         assert_eq!(turns.len(), 2);
@@ -768,12 +1008,17 @@ mod tests {
     #[test]
     fn turn_aborted_marks_interrupted() {
         let items = vec![
-            turn_start("t1"), user("u1"), agent("working..."),
+            turn_start("t1"),
+            user("u1"),
+            agent("working..."),
             ev(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("t1".into()),
                 reason: TurnAbortReason::Replaced,
             })),
-            turn_start("t2"), user("retry"), agent("done"), turn_end("t2"),
+            turn_start("t2"),
+            user("retry"),
+            agent("done"),
+            turn_end("t2"),
         ];
         let turns = build_turn_groups_from_rollout_items(&items);
         assert_eq!(turns.len(), 2);
@@ -784,7 +1029,8 @@ mod tests {
     #[test]
     fn error_marks_turn_failed() {
         let items = vec![
-            turn_start("t1"), user("u1"),
+            turn_start("t1"),
+            user("u1"),
             ev(EventMsg::Error(ErrorEvent {
                 message: "boom".into(),
                 codex_error_info: Some(crate::protocol::types::CodexErrorInfo::BadRequest),
@@ -801,10 +1047,14 @@ mod tests {
     #[test]
     fn rollback_error_does_not_mark_turn_failed() {
         let items = vec![
-            turn_start("t1"), user("hello"), agent("done"),
+            turn_start("t1"),
+            user("hello"),
+            agent("done"),
             ev(EventMsg::Error(ErrorEvent {
                 message: "rollback failed".into(),
-                codex_error_info: Some(crate::protocol::types::CodexErrorInfo::ThreadRollbackFailed),
+                codex_error_info: Some(
+                    crate::protocol::types::CodexErrorInfo::ThreadRollbackFailed,
+                ),
             })),
             turn_end("t1"),
         ];
@@ -816,7 +1066,9 @@ mod tests {
     #[test]
     fn out_of_turn_error_does_not_create_turn() {
         let items = vec![
-            turn_start("t1"), user("hello"), turn_end("t1"),
+            turn_start("t1"),
+            user("hello"),
+            turn_end("t1"),
             ev(EventMsg::Error(ErrorEvent {
                 message: "request-level failure".into(),
                 codex_error_info: Some(crate::protocol::types::CodexErrorInfo::BadRequest),
@@ -830,8 +1082,10 @@ mod tests {
     #[test]
     fn reasoning_merges_consecutive() {
         let items = vec![
-            turn_start("t1"), user("q"),
-            reasoning("think1"), reasoning("think2"),
+            turn_start("t1"),
+            user("q"),
+            reasoning("think1"),
+            reasoning("think2"),
             reasoning_raw("raw1"),
             agent("answer"),
             reasoning("new_block"),
@@ -842,19 +1096,24 @@ mod tests {
         if let TurnItem::Reasoning(r) = &turns[0].items[1] {
             assert_eq!(r.summary_text, vec!["think1", "think2"]);
             assert_eq!(r.raw_content, vec!["raw1"]);
-        } else { panic!("expected Reasoning"); }
+        } else {
+            panic!("expected Reasoning");
+        }
     }
 
     #[test]
     fn upsert_updates_existing_item_by_id() {
         let items = vec![
-            turn_start("t1"), user("run"),
+            turn_start("t1"),
+            user("run"),
             ev(EventMsg::WebSearchEnd(WebSearchEndEvent {
-                call_id: "ws1".into(), query: "".into(),
+                call_id: "ws1".into(),
+                query: "".into(),
                 action: crate::protocol::types::WebSearchAction::Other,
             })),
             ev(EventMsg::WebSearchEnd(WebSearchEndEvent {
-                call_id: "ws1".into(), query: "codex".into(),
+                call_id: "ws1".into(),
+                query: "codex".into(),
                 action: crate::protocol::types::WebSearchAction::Other,
             })),
             turn_end("t1"),
@@ -864,14 +1123,19 @@ mod tests {
         assert_eq!(turns[0].items.len(), 2);
         if let TurnItem::WebSearch(ws) = &turns[0].items[1] {
             assert_eq!(ws.query, "codex");
-        } else { panic!("expected WebSearch"); }
+        } else {
+            panic!("expected WebSearch");
+        }
     }
 
     #[test]
     fn exec_command_routed_to_original_turn() {
         let items = vec![
-            turn_start("t-a"), user("first"), turn_end("t-a"),
-            turn_start("t-b"), user("second"),
+            turn_start("t-a"),
+            user("first"),
+            turn_end("t-a"),
+            turn_start("t-b"),
+            user("second"),
             ev(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-late".into(),
                 process_id: None,
@@ -881,7 +1145,8 @@ mod tests {
                 parsed_cmd: vec![],
                 source: crate::protocol::types::ExecCommandSource::Agent,
                 interaction_input: None,
-                stdout: String::new(), stderr: String::new(),
+                stdout: String::new(),
+                stderr: String::new(),
                 aggregated_output: "done\n".into(),
                 exit_code: 0,
                 duration: std::time::Duration::from_millis(5),
@@ -913,11 +1178,13 @@ mod tests {
     #[test]
     fn mcp_tool_call_end_creates_item() {
         let items = vec![
-            turn_start("t1"), user("run mcp"),
+            turn_start("t1"),
+            user("run mcp"),
             ev(EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: "mcp-1".into(),
                 invocation: McpInvocation {
-                    server: "docs".into(), tool: "lookup".into(),
+                    server: "docs".into(),
+                    tool: "lookup".into(),
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
                 duration: std::time::Duration::from_millis(8),
@@ -931,13 +1198,16 @@ mod tests {
             assert_eq!(m.tool, "lookup");
             assert_eq!(m.status, McpToolCallStatus::Failed);
             assert_eq!(m.error.as_ref().unwrap().message, "boom");
-        } else { panic!("expected McpToolCall"); }
+        } else {
+            panic!("expected McpToolCall");
+        }
     }
 
     #[test]
     fn collab_spawn_end_creates_item() {
         let items = vec![
-            turn_start("t1"), user("spawn agent"),
+            turn_start("t1"),
+            user("spawn agent"),
             ev(EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
                 call_id: "spawn-1".into(),
                 sender_thread_id: "parent".into(),
@@ -957,20 +1227,31 @@ mod tests {
             assert_eq!(c.sender_thread_id, "parent");
             assert_eq!(c.receiver_thread_ids, vec!["child-1"]);
             assert_eq!(c.prompt.as_deref(), Some("do the thing"));
-        } else { panic!("expected CollabToolCall"); }
+        } else {
+            panic!("expected CollabToolCall");
+        }
     }
 
     #[test]
     fn collab_waiting_end_detects_errors() {
         let items = vec![
-            turn_start("t1"), user("wait"),
+            turn_start("t1"),
+            user("wait"),
             ev(EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
                 call_id: "wait-1".into(),
                 sender_thread_id: "parent".into(),
                 statuses: [
-                    ("a".into(), crate::protocol::types::AgentStatus::Completed(None)),
-                    ("b".into(), crate::protocol::types::AgentStatus::Errored("oops".into())),
-                ].into_iter().collect(),
+                    (
+                        "a".into(),
+                        crate::protocol::types::AgentStatus::Completed(None),
+                    ),
+                    (
+                        "b".into(),
+                        crate::protocol::types::AgentStatus::Errored("oops".into()),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
             })),
             turn_end("t1"),
         ];
@@ -978,6 +1259,8 @@ mod tests {
         if let TurnItem::CollabToolCall(c) = &turns[0].items[1] {
             assert_eq!(c.tool, CollabAgentTool::Wait);
             assert_eq!(c.status, CollabAgentToolCallStatus::Failed);
-        } else { panic!("expected CollabToolCall"); }
+        } else {
+            panic!("expected CollabToolCall");
+        }
     }
 }

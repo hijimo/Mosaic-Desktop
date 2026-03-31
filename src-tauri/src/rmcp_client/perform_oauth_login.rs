@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use anyhow::Context;
+use anyhow::Result;
 use reqwest::Url;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
@@ -14,10 +14,10 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use urlencoding::decode;
 
-use crate::rmcp_client::oauth::StoredOAuthTokens;
-use crate::rmcp_client::oauth::WrappedOAuthTokenResponse;
 use crate::rmcp_client::oauth::compute_expires_at_millis;
 use crate::rmcp_client::oauth::save_oauth_tokens;
+use crate::rmcp_client::oauth::StoredOAuthTokens;
+use crate::rmcp_client::oauth::WrappedOAuthTokenResponse;
 
 #[allow(dead_code)]
 struct OauthHeaders {

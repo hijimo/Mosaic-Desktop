@@ -60,9 +60,7 @@ fn canonical_json(value: &JsonValue) -> JsonValue {
             }
             JsonValue::Object(sorted)
         }
-        JsonValue::Array(items) => {
-            JsonValue::Array(items.iter().map(canonical_json).collect())
-        }
+        JsonValue::Array(items) => JsonValue::Array(items.iter().map(canonical_json).collect()),
         other => other.clone(),
     }
 }

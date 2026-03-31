@@ -20,10 +20,14 @@ pub struct SkillDependencyInfo {
 }
 
 /// Collect all `env_var` dependencies from the given skills.
-pub fn collect_env_var_dependencies(mentioned_skills: &[SkillMetadata]) -> Vec<SkillDependencyInfo> {
+pub fn collect_env_var_dependencies(
+    mentioned_skills: &[SkillMetadata],
+) -> Vec<SkillDependencyInfo> {
     let mut deps = Vec::new();
     for skill in mentioned_skills {
-        let Some(skill_deps) = &skill.dependencies else { continue };
+        let Some(skill_deps) = &skill.dependencies else {
+            continue;
+        };
         for tool in &skill_deps.tools {
             if tool.r#type != "env_var" || tool.value.is_empty() {
                 continue;
@@ -117,12 +121,20 @@ mod tests {
     fn collects_env_var_deps_only() {
         let skill = make_skill_with_deps(vec![
             SkillToolDependency {
-                r#type: "env_var".into(), value: "API_KEY".into(),
-                description: Some("key".into()), transport: None, command: None, url: None,
+                r#type: "env_var".into(),
+                value: "API_KEY".into(),
+                description: Some("key".into()),
+                transport: None,
+                command: None,
+                url: None,
             },
             SkillToolDependency {
-                r#type: "mcp".into(), value: "github".into(),
-                description: None, transport: None, command: None, url: None,
+                r#type: "mcp".into(),
+                value: "github".into(),
+                description: None,
+                transport: None,
+                command: None,
+                url: None,
             },
         ]);
         let deps = collect_env_var_dependencies(&[skill]);
@@ -133,7 +145,9 @@ mod tests {
     #[test]
     fn resolve_skips_cached_values() {
         let deps = vec![SkillDependencyInfo {
-            skill_name: "s".into(), name: "CACHED_VAR".into(), description: None,
+            skill_name: "s".into(),
+            name: "CACHED_VAR".into(),
+            description: None,
         }];
         let mut cache = HashMap::new();
         cache.insert("CACHED_VAR".into(), "val".into());
@@ -145,8 +159,16 @@ mod tests {
     #[test]
     fn resolve_deduplicates() {
         let deps = vec![
-            SkillDependencyInfo { skill_name: "a".into(), name: "X".into(), description: None },
-            SkillDependencyInfo { skill_name: "b".into(), name: "X".into(), description: None },
+            SkillDependencyInfo {
+                skill_name: "a".into(),
+                name: "X".into(),
+                description: None,
+            },
+            SkillDependencyInfo {
+                skill_name: "b".into(),
+                name: "X".into(),
+                description: None,
+            },
         ];
         let result = resolve_dependencies(&deps, &HashMap::new());
         // X appears only once in missing (assuming not set in env).

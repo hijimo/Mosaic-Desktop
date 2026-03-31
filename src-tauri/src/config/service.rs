@@ -2,11 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::protocol::error::{CodexError, ErrorCode};
 
+use super::config_requirements::{ConfigRequirements, ConfigRequirementsToml};
 use super::layer_stack::{ConfigLayer, ConfigLayerStack};
 use super::toml_types::ConfigToml;
 use super::{deserialize_toml, serialize_toml};
 
 const CONFIG_TOML_FILE: &str = "config.toml";
+const REQUIREMENTS_TOML_FILE: &str = "requirements.toml";
 
 /// Errors specific to the config service.
 #[derive(Debug)]
@@ -63,7 +65,10 @@ impl ConfigService {
     /// Load a full [`ConfigLayerStack`] from disk, merging:
     /// 1. User config (`~/.codex/config.toml`)
     /// 2. Project config (`.codex/config.toml` relative to `project_root`)
-    pub fn load_layers(&self, project_root: Option<&Path>) -> Result<ConfigLayerStack, ConfigServiceError> {
+    pub fn load_layers(
+        &self,
+        project_root: Option<&Path>,
+    ) -> Result<ConfigLayerStack, ConfigServiceError> {
         let mut stack = ConfigLayerStack::new();
 
         // User layer
@@ -81,6 +86,35 @@ impl ConfigService {
         }
 
         Ok(stack)
+    }
+
+    /// Load normalized config requirements from disk.
+    ///
+    /// Higher-precedence project requirements override user requirements field-by-field.
+    pub fn load_requirements(
+        &self,
+        project_root: Option<&Path>,
+    ) -> Result<ConfigRequirements, ConfigServiceError> {
+        let mut merged = ConfigRequirementsToml::default();
+
+        let user_path = self.codex_home.join(REQUIREMENTS_TOML_FILE);
+        if let Some(reqs) = self.read_requirements_file(&user_path)? {
+            merge_requirements(&mut merged, &reqs)?;
+        }
+
+        if let Some(root) = project_root {
+            let project_path = root.join(".codex").join(REQUIREMENTS_TOML_FILE);
+            if let Some(reqs) = self.read_requirements_file(&project_path)? {
+                merge_requirements(&mut merged, &reqs)?;
+            }
+        }
+
+        ConfigRequirements::try_from(merged).map_err(|e| {
+            ConfigServiceError::Config(CodexError::new(
+                ErrorCode::ConfigurationError,
+                format!("failed to normalize requirements: {e}"),
+            ))
+        })
     }
 
     /// Write a [`ConfigToml`] to the user-level config file.
@@ -105,11 +139,7 @@ impl ConfigService {
     }
 
     /// Read a single config key from the merged stack.
-    pub fn read_value(
-        &self,
-        stack: &ConfigLayerStack,
-        key: &str,
-    ) -> Option<serde_json::Value> {
+    pub fn read_value(&self, stack: &ConfigLayerStack, key: &str) -> Option<serde_json::Value> {
         let merged = stack.merge();
         let json = serde_json::to_value(&merged).ok()?;
         json.get(key).cloned()
@@ -131,6 +161,29 @@ impl ConfigService {
         }
     }
 
+    fn read_requirements_file(
+        &self,
+        path: &Path,
+    ) -> Result<Option<ConfigRequirementsToml>, ConfigServiceError> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let requirements =
+                    toml::from_str::<ConfigRequirementsToml>(&content).map_err(|e| {
+                        ConfigServiceError::Config(CodexError::new(
+                            ErrorCode::ConfigurationError,
+                            format!("failed to parse TOML requirements: {e}"),
+                        ))
+                    })?;
+                Ok(Some(requirements))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(ConfigServiceError::Io {
+                context: "read requirements file",
+                source: e,
+            }),
+        }
+    }
+
     fn write_toml_file(&self, path: &Path, config: &ConfigToml) -> Result<(), ConfigServiceError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ConfigServiceError::Io {
@@ -147,9 +200,35 @@ impl ConfigService {
     }
 }
 
+fn merge_requirements(
+    base: &mut ConfigRequirementsToml,
+    overlay: &ConfigRequirementsToml,
+) -> Result<(), ConfigServiceError> {
+    if let Some(value) = &overlay.allowed_approval_policies {
+        base.allowed_approval_policies = Some(value.clone());
+    }
+    if let Some(value) = &overlay.allowed_sandbox_modes {
+        base.allowed_sandbox_modes = Some(value.clone());
+    }
+    if let Some(value) = &overlay.allowed_web_search_modes {
+        base.allowed_web_search_modes = Some(value.clone());
+    }
+    if let Some(value) = &overlay.mcp_servers {
+        base.mcp_servers = Some(value.clone());
+    }
+    if let Some(value) = overlay.enforce_residency {
+        base.enforce_residency = Some(value);
+    }
+    if let Some(value) = &overlay.network {
+        base.network = Some(value.clone());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::types::WebSearchMode;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, ConfigService) {
@@ -191,7 +270,8 @@ mod tests {
             model: Some("project-model".into()),
             ..Default::default()
         };
-        svc.save_project_config(&project_root, &project_cfg).unwrap();
+        svc.save_project_config(&project_root, &project_cfg)
+            .unwrap();
 
         let stack = svc.load_layers(Some(&project_root)).unwrap();
         assert_eq!(stack.merge().model, Some("project-model".into()));
@@ -215,5 +295,46 @@ mod tests {
         // Should at least return ~/.codex when HOME is set
         let home = ConfigService::find_codex_home();
         assert!(home.is_some());
+    }
+
+    #[test]
+    fn load_requirements_defaults_when_missing() {
+        let (_tmp, svc) = setup();
+        let reqs = svc.load_requirements(None).unwrap();
+        assert_eq!(reqs, ConfigRequirements::default());
+    }
+
+    #[test]
+    fn load_requirements_reads_user_requirements() {
+        let (tmp, svc) = setup();
+        std::fs::write(
+            tmp.path().join(REQUIREMENTS_TOML_FILE),
+            "allowed_web_search_modes = [\"live\"]\n",
+        )
+        .unwrap();
+
+        let reqs = svc.load_requirements(None).unwrap();
+        assert_eq!(reqs.web_search_mode.value(), WebSearchMode::Live);
+    }
+
+    #[test]
+    fn load_requirements_project_overrides_user() {
+        let (tmp, svc) = setup();
+        std::fs::write(
+            tmp.path().join(REQUIREMENTS_TOML_FILE),
+            "allowed_web_search_modes = [\"live\"]\n",
+        )
+        .unwrap();
+
+        let project_root = tmp.path().join("my-project");
+        std::fs::create_dir_all(project_root.join(".codex")).unwrap();
+        std::fs::write(
+            project_root.join(".codex").join(REQUIREMENTS_TOML_FILE),
+            "allowed_web_search_modes = [\"cached\"]\n",
+        )
+        .unwrap();
+
+        let reqs = svc.load_requirements(Some(&project_root)).unwrap();
+        assert_eq!(reqs.web_search_mode.value(), WebSearchMode::Cached);
     }
 }

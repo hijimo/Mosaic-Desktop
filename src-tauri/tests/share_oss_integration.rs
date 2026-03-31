@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use aliyun_oss_rust_sdk::oss::OSS;
 use aliyun_oss_rust_sdk::request::RequestBuilder;
+use anyhow::{Context, Result};
 use tauri_app_lib::share::config::OssConfig;
 use tauri_app_lib::share::oss::{upload_bytes, upload_file};
 use tauri_app_lib::share::share_message;
@@ -47,9 +47,14 @@ async fn uploads_fixture_file_to_oss() -> Result<()> {
     let source_path = fixture_path();
     let object_key = unique_key(&config.normalized_prefix());
 
-    upload_file(&config, &object_key, &source_path, Some("text/plain; charset=utf-8"))
-        .await
-        .with_context(|| format!("failed to upload fixture: {}", source_path.display()))?;
+    upload_file(
+        &config,
+        &object_key,
+        &source_path,
+        Some("text/plain; charset=utf-8"),
+    )
+    .await
+    .with_context(|| format!("failed to upload fixture: {}", source_path.display()))?;
 
     let client = sdk_client(&config);
     let metadata_key = object_key.clone();
@@ -60,7 +65,10 @@ async fn uploads_fixture_file_to_oss() -> Result<()> {
     })
     .await
     .context("failed to join OSS metadata task")??;
-    assert_eq!(metadata.content_disposition().as_deref(), Some("attachment"));
+    assert_eq!(
+        metadata.content_disposition().as_deref(),
+        Some("attachment")
+    );
 
     let client = sdk_client(&config);
     let delete_key = object_key.clone();
@@ -81,7 +89,10 @@ async fn uploads_html_as_inline_preview() -> Result<()> {
     load_env();
 
     let config = OssConfig::from_env()?;
-    let object_key = format!("{}integration-tests/share-preview-inline.html", config.normalized_prefix());
+    let object_key = format!(
+        "{}integration-tests/share-preview-inline.html",
+        config.normalized_prefix()
+    );
 
     upload_bytes(
         &config,
@@ -138,7 +149,12 @@ async fn share_message_uploads_index_html_as_inline() -> Result<()> {
         .url
         .strip_prefix(&base)
         .map(str::to_string)
-        .with_context(|| format!("share url does not start with configured host: {}", response.url))?;
+        .with_context(|| {
+            format!(
+                "share url does not start with configured host: {}",
+                response.url
+            )
+        })?;
 
     let client = sdk_client(&config);
     let metadata_key = object_key.clone();

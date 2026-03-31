@@ -1,6 +1,6 @@
+pub mod compact;
 pub mod regular;
 pub mod review;
-pub mod compact;
 pub mod undo;
 
 use std::sync::Arc;
@@ -63,9 +63,12 @@ impl TaskContext {
     }
 
     pub async fn emit(&self, msg: crate::protocol::event::EventMsg) {
-        let _ = self.eq_tx.send(crate::protocol::event::Event {
-            id: uuid::Uuid::new_v4().to_string(),
-            msg,
-        }).await;
+        let _ = self
+            .eq_tx
+            .send(crate::protocol::event::Event {
+                id: uuid::Uuid::new_v4().to_string(),
+                msg,
+            })
+            .await;
     }
 }

@@ -235,12 +235,17 @@ impl StateDb {
     pub fn open(path: &Path) -> Result<Self, CodexError> {
         let log_db = LogDb::open(path)?;
         // Enable WAL mode for better concurrency
-        log_db.connection().execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;"
-        ).map_err(|e| CodexError::new(
-            ErrorCode::InternalError,
-            format!("failed to set pragmas: {e}"),
-        ))?;
+        log_db
+            .connection()
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+            )
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("failed to set pragmas: {e}"),
+                )
+            })?;
         let runtime = StateRuntime {
             config: StateConfig {
                 db_path: path.to_path_buf(),
@@ -256,10 +261,12 @@ impl StateDb {
     /// Open the versioned state database inside the given home directory.
     /// Creates the directory if needed and cleans up legacy DB files.
     pub fn open_versioned(home_dir: &Path) -> Result<Self, CodexError> {
-        std::fs::create_dir_all(home_dir).map_err(|e| CodexError::new(
-            ErrorCode::InternalError,
-            format!("failed to create home dir: {e}"),
-        ))?;
+        std::fs::create_dir_all(home_dir).map_err(|e| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to create home dir: {e}"),
+            )
+        })?;
         remove_legacy_state_files(home_dir);
         let db_path = state_db_path(home_dir);
         Self::open(&db_path)
@@ -273,14 +280,17 @@ impl StateDb {
     /// Save session metadata.
     pub fn save_session_meta(&mut self, meta: &SessionMeta) -> Result<(), CodexError> {
         // Ensure sessions table exists (for backward compat with old DBs)
-        self.log_db.connection().execute_batch(
-            "CREATE TABLE IF NOT EXISTS sessions (
+        self.log_db
+            .connection()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 last_activity TEXT NOT NULL,
                 config_profile TEXT
-            )"
-        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+            )",
+            )
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
 
         self.log_db
             .connection()
@@ -309,11 +319,15 @@ impl StateDb {
         self.runtime.metrics.total_reads += 1;
 
         // Check if sessions table exists
-        let exists: bool = self.log_db.connection().query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='sessions'",
-            [],
-            |r| r.get(0),
-        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+        let exists: bool = self
+            .log_db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='sessions'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
         if !exists {
             return Ok(None);
         }
@@ -406,14 +420,17 @@ impl StateDb {
             )
         })?;
         // Use the legacy agent_jobs table format for backward compat
-        self.log_db.connection().execute_batch(
-            "CREATE TABLE IF NOT EXISTS agent_jobs_legacy (
+        self.log_db
+            .connection()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS agent_jobs_legacy (
                 job_id TEXT PRIMARY KEY,
                 thread_id TEXT NOT NULL,
                 status TEXT NOT NULL,
                 items_json TEXT NOT NULL
-            )"
-        ).map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
+            )",
+            )
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))?;
 
         self.log_db
             .connection()
@@ -506,10 +523,13 @@ impl StateDb {
         match result {
             Ok((status_str, last_watermark, last_success_at)) => {
                 let status = BackfillStatus::parse(&status_str)?;
-                let last_success_at = last_success_at.and_then(|secs| {
-                    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
-                });
-                Ok(BackfillState { status, last_watermark, last_success_at })
+                let last_success_at = last_success_at
+                    .and_then(|secs| chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0));
+                Ok(BackfillState {
+                    status,
+                    last_watermark,
+                    last_success_at,
+                })
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(BackfillState::default()),
             Err(e) => Err(CodexError::new(
@@ -528,12 +548,19 @@ impl StateDb {
             .execute(
                 "UPDATE backfill_state SET status = ?1, last_watermark = ?2,
                  last_success_at = ?3, updated_at = ?4 WHERE id = 1",
-                rusqlite::params![state.status.as_str(), state.last_watermark, last_success_at, now],
+                rusqlite::params![
+                    state.status.as_str(),
+                    state.last_watermark,
+                    last_success_at,
+                    now
+                ],
             )
-            .map_err(|e| CodexError::new(
-                ErrorCode::InternalError,
-                format!("failed to update backfill state: {e}"),
-            ))?;
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("failed to update backfill state: {e}"),
+                )
+            })?;
         self.runtime.metrics.total_writes += 1;
         Ok(())
     }
@@ -553,15 +580,25 @@ impl StateDb {
                  process_uuid, module_path, file, line, estimated_bytes)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
-                    entry.ts, entry.ts_nanos, entry.level, entry.target,
-                    entry.message, entry.thread_id, entry.process_uuid,
-                    entry.module_path, entry.file, entry.line, estimated_bytes as i64,
+                    entry.ts,
+                    entry.ts_nanos,
+                    entry.level,
+                    entry.target,
+                    entry.message,
+                    entry.thread_id,
+                    entry.process_uuid,
+                    entry.module_path,
+                    entry.file,
+                    entry.line,
+                    estimated_bytes as i64,
                 ],
             )
-            .map_err(|e| CodexError::new(
-                ErrorCode::InternalError,
-                format!("failed to write log: {e}"),
-            ))?;
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("failed to write log: {e}"),
+                )
+            })?;
         self.runtime.metrics.total_writes += 1;
         Ok(())
     }
@@ -591,8 +628,12 @@ impl StateDb {
             params.push(Box::new(after_id));
         }
         if !query.thread_ids.is_empty() {
-            let placeholders: Vec<String> = query.thread_ids.iter().enumerate()
-                .map(|(_, _)| "?".to_string()).collect();
+            let placeholders: Vec<String> = query
+                .thread_ids
+                .iter()
+                .enumerate()
+                .map(|(_, _)| "?".to_string())
+                .collect();
             sql.push_str(&format!(" AND thread_id IN ({})", placeholders.join(",")));
             for tid in &query.thread_ids {
                 params.push(Box::new(tid.clone()));
@@ -613,32 +654,44 @@ impl StateDb {
             sql.push_str(&format!(" LIMIT {limit}"));
         }
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.log_db.connection().prepare(&sql).map_err(|e| {
-            CodexError::new(ErrorCode::InternalError, format!("failed to prepare log query: {e}"))
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to prepare log query: {e}"),
+            )
         })?;
 
-        let rows = stmt.query_map(param_refs.as_slice(), |row| {
-            Ok(LogRow {
-                id: row.get(0)?,
-                ts: row.get(1)?,
-                ts_nanos: row.get(2)?,
-                level: row.get(3)?,
-                target: row.get(4)?,
-                message: row.get(5)?,
-                thread_id: row.get(6)?,
-                process_uuid: row.get(7)?,
-                file: row.get(8)?,
-                line: row.get(9)?,
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(LogRow {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    ts_nanos: row.get(2)?,
+                    level: row.get(3)?,
+                    target: row.get(4)?,
+                    message: row.get(5)?,
+                    thread_id: row.get(6)?,
+                    process_uuid: row.get(7)?,
+                    file: row.get(8)?,
+                    line: row.get(9)?,
+                })
             })
-        }).map_err(|e| {
-            CodexError::new(ErrorCode::InternalError, format!("failed to query logs: {e}"))
-        })?;
+            .map_err(|e| {
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("failed to query logs: {e}"),
+                )
+            })?;
 
         let mut result = Vec::new();
         for row in rows {
             result.push(row.map_err(|e| {
-                CodexError::new(ErrorCode::InternalError, format!("failed to read log row: {e}"))
+                CodexError::new(
+                    ErrorCode::InternalError,
+                    format!("failed to read log row: {e}"),
+                )
             })?);
         }
         Ok(result)
@@ -868,11 +921,13 @@ mod tests {
         };
         db.write_log(&entry).unwrap();
 
-        let rows = db.query_logs(&LogQuery {
-            thread_ids: vec!["t1".to_string()],
-            limit: Some(10),
-            ..Default::default()
-        }).unwrap();
+        let rows = db
+            .query_logs(&LogQuery {
+                thread_ids: vec!["t1".to_string()],
+                limit: Some(10),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message, Some("hello world".to_string()));
     }
@@ -892,13 +947,16 @@ mod tests {
                 module_path: None,
                 file: None,
                 line: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
-        let rows = db.query_logs(&LogQuery {
-            search: Some("msg-1".to_string()),
-            ..Default::default()
-        }).unwrap();
+        let rows = db
+            .query_logs(&LogQuery {
+                search: Some("msg-1".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message, Some("msg-1".to_string()));
     }
@@ -931,9 +989,18 @@ mod tests {
 
     #[test]
     fn backfill_status_parse() {
-        assert_eq!(BackfillStatus::parse("pending").unwrap(), BackfillStatus::Pending);
-        assert_eq!(BackfillStatus::parse("running").unwrap(), BackfillStatus::Running);
-        assert_eq!(BackfillStatus::parse("complete").unwrap(), BackfillStatus::Complete);
+        assert_eq!(
+            BackfillStatus::parse("pending").unwrap(),
+            BackfillStatus::Pending
+        );
+        assert_eq!(
+            BackfillStatus::parse("running").unwrap(),
+            BackfillStatus::Running
+        );
+        assert_eq!(
+            BackfillStatus::parse("complete").unwrap(),
+            BackfillStatus::Complete
+        );
         assert!(BackfillStatus::parse("invalid").is_err());
     }
 }

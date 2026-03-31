@@ -145,11 +145,14 @@ pub fn load_skills_from_roots(roots: impl IntoIterator<Item = SkillRoot>) -> Ski
 
     // Deduplicate by resolved path, keeping first occurrence.
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    outcome.skills.retain(|s| seen.insert(s.path_to_skills_md.clone()));
+    outcome
+        .skills
+        .retain(|s| seen.insert(s.path_to_skills_md.clone()));
 
     // Sort: Repo(0) > User(1) > System(2) > Admin(3), then by name, then path.
     outcome.skills.sort_by(|a, b| {
-        a.scope.priority()
+        a.scope
+            .priority()
             .cmp(&b.scope.priority())
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.path_to_skills_md.cmp(&b.path_to_skills_md))
@@ -165,20 +168,31 @@ pub fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     // Repo: <cwd>/.codex/skills  and  <cwd>/.agents/skills
     let project_skills = cwd.join(".codex").join(SKILLS_DIR_NAME);
     if project_skills.is_dir() {
-        roots.push(SkillRoot { path: project_skills, scope: SkillScope::Repo });
+        roots.push(SkillRoot {
+            path: project_skills,
+            scope: SkillScope::Repo,
+        });
     }
     let agents_skills = cwd.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
     if agents_skills.is_dir() {
-        roots.push(SkillRoot { path: agents_skills, scope: SkillScope::Repo });
+        roots.push(SkillRoot {
+            path: agents_skills,
+            scope: SkillScope::Repo,
+        });
     }
 
     // Walk ancestors up to project root for .agents/skills dirs.
     if let Some(project_root) = find_project_root(cwd) {
         for dir in dirs_between_project_root_and_cwd(cwd, &project_root) {
-            if dir == cwd { continue; } // already handled above
+            if dir == cwd {
+                continue;
+            } // already handled above
             let dir_agents = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
             if dir_agents.is_dir() {
-                roots.push(SkillRoot { path: dir_agents, scope: SkillScope::Repo });
+                roots.push(SkillRoot {
+                    path: dir_agents,
+                    scope: SkillScope::Repo,
+                });
             }
         }
     }
@@ -186,21 +200,30 @@ pub fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     // User: $CODEX_HOME/skills
     let user_skills = codex_home.join(SKILLS_DIR_NAME);
     if user_skills.is_dir() {
-        roots.push(SkillRoot { path: user_skills, scope: SkillScope::User });
+        roots.push(SkillRoot {
+            path: user_skills,
+            scope: SkillScope::User,
+        });
     }
 
     // User: $HOME/.agents/skills
     if let Some(home) = dirs::home_dir() {
         let home_agents = home.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
         if home_agents.is_dir() {
-            roots.push(SkillRoot { path: home_agents, scope: SkillScope::User });
+            roots.push(SkillRoot {
+                path: home_agents,
+                scope: SkillScope::User,
+            });
         }
     }
 
     // System: $CODEX_HOME/skills/.system
     let system_skills = super::system::system_cache_root_dir(codex_home);
     if system_skills.is_dir() {
-        roots.push(SkillRoot { path: system_skills, scope: SkillScope::System });
+        roots.push(SkillRoot {
+            path: system_skills,
+            scope: SkillScope::System,
+        });
     }
 
     // Deduplicate by path.
@@ -224,10 +247,17 @@ fn find_project_root(cwd: &Path) -> Option<PathBuf> {
 // ── BFS discovery ────────────────────────────────────────────────────────────
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
-    let Ok(root) = canonicalize_path(root) else { return };
-    if !root.is_dir() { return; }
+    let Ok(root) = canonicalize_path(root) else {
+        return;
+    };
+    if !root.is_dir() {
+        return;
+    }
 
-    let follow_symlinks = matches!(scope, SkillScope::Repo | SkillScope::User | SkillScope::Admin);
+    let follow_symlinks = matches!(
+        scope,
+        SkillScope::Repo | SkillScope::User | SkillScope::Admin
+    );
     let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
     visited_dirs.insert(root.clone());
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::from([(root.clone(), 0)]);
@@ -236,7 +266,10 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
     while let Some((dir, depth)) = queue.pop_front() {
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(e) => { error!("failed to read skills dir {}: {e:#}", dir.display()); continue; }
+            Err(e) => {
+                error!("failed to read skills dir {}: {e:#}", dir.display());
+                continue;
+            }
         };
 
         for entry in entries.flatten() {
@@ -245,23 +278,47 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                 Some(n) => n.to_string(),
                 None => continue,
             };
-            if file_name.starts_with('.') { continue; }
+            if file_name.starts_with('.') {
+                continue;
+            }
 
-            let Ok(file_type) = entry.file_type() else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
 
             if file_type.is_symlink() {
-                if !follow_symlinks { continue; }
-                let Ok(meta) = fs::metadata(&path) else { continue };
+                if !follow_symlinks {
+                    continue;
+                }
+                let Ok(meta) = fs::metadata(&path) else {
+                    continue;
+                };
                 if meta.is_dir() {
-                    let Ok(resolved) = canonicalize_path(&path) else { continue };
-                    enqueue_dir(&mut queue, &mut visited_dirs, &mut truncated, resolved, depth + 1);
+                    let Ok(resolved) = canonicalize_path(&path) else {
+                        continue;
+                    };
+                    enqueue_dir(
+                        &mut queue,
+                        &mut visited_dirs,
+                        &mut truncated,
+                        resolved,
+                        depth + 1,
+                    );
                 }
                 continue;
             }
 
             if file_type.is_dir() {
-                let Ok(resolved) = canonicalize_path(&path) else { continue };
-                enqueue_dir(&mut queue, &mut visited_dirs, &mut truncated, resolved, depth + 1);
+                let Ok(resolved) = canonicalize_path(&path) else {
+                    continue;
+                };
+                enqueue_dir(
+                    &mut queue,
+                    &mut visited_dirs,
+                    &mut truncated,
+                    resolved,
+                    depth + 1,
+                );
                 continue;
             }
 
@@ -284,7 +341,8 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
     if truncated {
         tracing::warn!(
             "skills scan truncated after {} directories (root: {})",
-            MAX_SKILLS_DIRS_PER_ROOT, root.display()
+            MAX_SKILLS_DIRS_PER_ROOT,
+            root.display()
         );
     }
 }
@@ -296,8 +354,13 @@ fn enqueue_dir(
     path: PathBuf,
     depth: usize,
 ) {
-    if depth > MAX_SCAN_DEPTH { return; }
-    if visited.len() >= MAX_SKILLS_DIRS_PER_ROOT { *truncated = true; return; }
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+    if visited.len() >= MAX_SKILLS_DIRS_PER_ROOT {
+        *truncated = true;
+        return;
+    }
     if visited.insert(path.clone()) {
         queue.push_back((path, depth));
     }
@@ -307,18 +370,27 @@ fn enqueue_dir(
 
 fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, SkillParseError> {
     let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
-    let frontmatter_str = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
-    let parsed: SkillFrontmatter = serde_yaml::from_str(&frontmatter_str).map_err(SkillParseError::InvalidYaml)?;
+    let frontmatter_str =
+        extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
+    let parsed: SkillFrontmatter =
+        serde_yaml::from_str(&frontmatter_str).map_err(SkillParseError::InvalidYaml)?;
 
-    let base_name = parsed.name.as_deref()
+    let base_name = parsed
+        .name
+        .as_deref()
         .map(sanitize_single_line)
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| default_skill_name(path));
     let name = namespaced_skill_name(path, &base_name);
-    let description = parsed.description.as_deref()
+    let description = parsed
+        .description
+        .as_deref()
         .map(sanitize_single_line)
         .unwrap_or_default();
-    let short_description = parsed.metadata.short_description.as_deref()
+    let short_description = parsed
+        .metadata
+        .short_description
+        .as_deref()
         .map(sanitize_single_line)
         .filter(|v| !v.is_empty());
 
@@ -375,8 +447,12 @@ fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<Pat
     let mut dirs: Vec<PathBuf> = cwd
         .ancestors()
         .scan(false, |done, a| {
-            if *done { return None; }
-            if a == project_root { *done = true; }
+            if *done {
+                return None;
+            }
+            if a == project_root {
+                *done = true;
+            }
             Some(a.to_path_buf())
         })
         .collect();
@@ -387,9 +463,15 @@ fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<Pat
 // ── openai.yaml metadata loading ─────────────────────────────────────────────
 
 fn load_skill_metadata_file(skill_path: &Path) -> LoadedSkillExtra {
-    let Some(skill_dir) = skill_path.parent() else { return LoadedSkillExtra::default(); };
-    let metadata_path = skill_dir.join(SKILLS_METADATA_DIR).join(SKILLS_METADATA_FILENAME);
-    if !metadata_path.exists() { return LoadedSkillExtra::default(); }
+    let Some(skill_dir) = skill_path.parent() else {
+        return LoadedSkillExtra::default();
+    };
+    let metadata_path = skill_dir
+        .join(SKILLS_METADATA_DIR)
+        .join(SKILLS_METADATA_FILENAME);
+    if !metadata_path.exists() {
+        return LoadedSkillExtra::default();
+    }
 
     let contents = match fs::read_to_string(&metadata_path) {
         Ok(c) => c,
@@ -418,17 +500,35 @@ fn load_skill_metadata_file(skill_path: &Path) -> LoadedSkillExtra {
 fn resolve_interface(raw: Option<InterfaceRaw>, skill_dir: &Path) -> Option<SkillInterface> {
     let raw = raw?;
     let display_name = resolve_str(raw.display_name, MAX_NAME_LEN, "interface.display_name");
-    let short_description = resolve_str(raw.short_description, MAX_SHORT_DESCRIPTION_LEN, "interface.short_description");
+    let short_description = resolve_str(
+        raw.short_description,
+        MAX_SHORT_DESCRIPTION_LEN,
+        "interface.short_description",
+    );
     let icon = resolve_asset_path(skill_dir, "interface.icon_small", raw.icon_small);
     let icon_large = resolve_asset_path(skill_dir, "interface.icon_large", raw.icon_large);
     let brand_color = resolve_color_str(raw.brand_color, "interface.brand_color");
-    let default_prompt = resolve_str(raw.default_prompt, MAX_DEFAULT_PROMPT_LEN, "interface.default_prompt");
+    let default_prompt = resolve_str(
+        raw.default_prompt,
+        MAX_DEFAULT_PROMPT_LEN,
+        "interface.default_prompt",
+    );
 
-    let has_fields = display_name.is_some() || short_description.is_some()
-        || icon.is_some() || icon_large.is_some()
-        || brand_color.is_some() || default_prompt.is_some();
+    let has_fields = display_name.is_some()
+        || short_description.is_some()
+        || icon.is_some()
+        || icon_large.is_some()
+        || brand_color.is_some()
+        || default_prompt.is_some();
     if has_fields {
-        Some(SkillInterface { display_name, short_description, icon, icon_large, brand_color, default_prompt })
+        Some(SkillInterface {
+            display_name,
+            short_description,
+            icon,
+            icon_large,
+            brand_color,
+            default_prompt,
+        })
     } else {
         None
     }
@@ -436,30 +536,66 @@ fn resolve_interface(raw: Option<InterfaceRaw>, skill_dir: &Path) -> Option<Skil
 
 fn resolve_dependencies(raw: Option<DependenciesRaw>) -> Option<SkillDependencies> {
     let raw = raw?;
-    let tools: Vec<SkillToolDependency> = raw.tools.into_iter().filter_map(resolve_dependency_tool).collect();
-    if tools.is_empty() { None } else { Some(SkillDependencies { tools }) }
+    let tools: Vec<SkillToolDependency> = raw
+        .tools
+        .into_iter()
+        .filter_map(resolve_dependency_tool)
+        .collect();
+    if tools.is_empty() {
+        None
+    } else {
+        Some(SkillDependencies { tools })
+    }
 }
 
 fn resolve_policy(raw: Option<PolicyRaw>) -> Option<SkillPolicy> {
-    raw.map(|p| SkillPolicy { allow_implicit_invocation: p.allow_implicit_invocation })
+    raw.map(|p| SkillPolicy {
+        allow_implicit_invocation: p.allow_implicit_invocation,
+    })
 }
 
 fn resolve_dependency_tool(tool: DependencyToolRaw) -> Option<SkillToolDependency> {
-    let r#type = resolve_required_str(tool.kind, MAX_DEPENDENCY_TYPE_LEN, "dependencies.tools.type")?;
-    let value = resolve_required_str(tool.value, MAX_DEPENDENCY_VALUE_LEN, "dependencies.tools.value")?;
+    let r#type = resolve_required_str(
+        tool.kind,
+        MAX_DEPENDENCY_TYPE_LEN,
+        "dependencies.tools.type",
+    )?;
+    let value = resolve_required_str(
+        tool.value,
+        MAX_DEPENDENCY_VALUE_LEN,
+        "dependencies.tools.value",
+    )?;
     Some(SkillToolDependency {
         r#type,
         value,
-        description: resolve_str(tool.description, MAX_DEPENDENCY_DESCRIPTION_LEN, "dependencies.tools.description"),
-        transport: resolve_str(tool.transport, MAX_DEPENDENCY_TRANSPORT_LEN, "dependencies.tools.transport"),
-        command: resolve_str(tool.command, MAX_DEPENDENCY_COMMAND_LEN, "dependencies.tools.command"),
+        description: resolve_str(
+            tool.description,
+            MAX_DEPENDENCY_DESCRIPTION_LEN,
+            "dependencies.tools.description",
+        ),
+        transport: resolve_str(
+            tool.transport,
+            MAX_DEPENDENCY_TRANSPORT_LEN,
+            "dependencies.tools.transport",
+        ),
+        command: resolve_str(
+            tool.command,
+            MAX_DEPENDENCY_COMMAND_LEN,
+            "dependencies.tools.command",
+        ),
         url: resolve_str(tool.url, MAX_DEPENDENCY_URL_LEN, "dependencies.tools.url"),
     })
 }
 
-fn resolve_asset_path(skill_dir: &Path, field: &'static str, raw: Option<String>) -> Option<String> {
+fn resolve_asset_path(
+    skill_dir: &Path,
+    field: &'static str,
+    raw: Option<String>,
+) -> Option<String> {
     let raw = raw?;
-    if raw.is_empty() { return None; }
+    if raw.is_empty() {
+        return None;
+    }
     let path = Path::new(&raw);
     if path.is_absolute() {
         tracing::warn!("ignoring {field}: icon must be a relative assets path");
@@ -512,19 +648,35 @@ fn validate_len(value: &str, max_len: usize, field: &'static str) -> Result<(), 
 
 fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Option<String> {
     let value = sanitize_single_line(&value?);
-    if value.is_empty() { tracing::warn!("ignoring {field}: value is empty"); return None; }
-    if value.chars().count() > max_len { tracing::warn!("ignoring {field}: exceeds max length {max_len}"); return None; }
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
+    if value.chars().count() > max_len {
+        tracing::warn!("ignoring {field}: exceeds max length {max_len}");
+        return None;
+    }
     Some(value)
 }
 
-fn resolve_required_str(value: Option<String>, max_len: usize, field: &'static str) -> Option<String> {
-    if value.is_none() { tracing::warn!("ignoring {field}: value is missing"); return None; }
+fn resolve_required_str(
+    value: Option<String>,
+    max_len: usize,
+    field: &'static str,
+) -> Option<String> {
+    if value.is_none() {
+        tracing::warn!("ignoring {field}: value is missing");
+        return None;
+    }
     resolve_str(value, max_len, field)
 }
 
 fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
     let value = value?.trim().to_string();
-    if value.is_empty() { tracing::warn!("ignoring {field}: value is empty"); return None; }
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
     let mut chars = value.chars();
     if value.len() == 7 && chars.next() == Some('#') && chars.all(|c| c.is_ascii_hexdigit()) {
         Some(value)
@@ -536,14 +688,21 @@ fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<Strin
 
 fn extract_frontmatter(contents: &str) -> Option<String> {
     let mut lines = contents.lines();
-    if !matches!(lines.next(), Some(line) if line.trim() == "---") { return None; }
+    if !matches!(lines.next(), Some(line) if line.trim() == "---") {
+        return None;
+    }
     let mut fm_lines: Vec<&str> = Vec::new();
     let mut found_closing = false;
     for line in lines {
-        if line.trim() == "---" { found_closing = true; break; }
+        if line.trim() == "---" {
+            found_closing = true;
+            break;
+        }
         fm_lines.push(line);
     }
-    if fm_lines.is_empty() || !found_closing { return None; }
+    if fm_lines.is_empty() || !found_closing {
+        return None;
+    }
     Some(fm_lines.join("\n"))
 }
 
@@ -563,15 +722,20 @@ mod tests {
         let skill_dir = root.join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let desc_indented = description.replace('\n', "\n  ");
-        let content = format!("---\nname: {name}\ndescription: |-\n  {desc_indented}\n---\n\n# Body\n");
+        let content =
+            format!("---\nname: {name}\ndescription: |-\n  {desc_indented}\n---\n\n# Body\n");
         let path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&path, content).unwrap();
         path
     }
 
     fn write_skill_metadata_at(skill_dir: &Path, contents: &str) {
-        let path = skill_dir.join(SKILLS_METADATA_DIR).join(SKILLS_METADATA_FILENAME);
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+        let path = skill_dir
+            .join(SKILLS_METADATA_DIR)
+            .join(SKILLS_METADATA_FILENAME);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(&path, contents).unwrap();
     }
 
@@ -579,9 +743,10 @@ mod tests {
     fn loads_valid_skill() {
         let tmp = TempDir::new().unwrap();
         let skill_path = write_skill_at(tmp.path(), "demo", "demo-skill", "does things\ncarefully");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty(), "errors: {:?}", outcome.errors);
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "demo-skill");
@@ -594,10 +759,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = tmp.path().join("directory-derived");
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join(SKILLS_FILENAME), "---\ndescription: fallback name\n---\n").unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        fs::write(
+            skill_dir.join(SKILLS_FILENAME),
+            "---\ndescription: fallback name\n---\n",
+        )
+        .unwrap();
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills[0].name, "directory-derived");
     }
@@ -607,9 +777,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let too_long = "x".repeat(MAX_DESCRIPTION_LEN + 1);
         write_skill_at(tmp.path(), "too-long", "too-long", &too_long);
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
         assert!(outcome.errors[0].message.contains("invalid description"));
@@ -620,10 +791,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let hidden = tmp.path().join(".hidden");
         fs::create_dir_all(&hidden).unwrap();
-        fs::write(hidden.join(SKILLS_FILENAME), "---\nname: hidden\ndescription: hidden\n---\n").unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        fs::write(
+            hidden.join(SKILLS_FILENAME),
+            "---\nname: hidden\ndescription: hidden\n---\n",
+        )
+        .unwrap();
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.skills.is_empty());
     }
 
@@ -633,12 +809,15 @@ mod tests {
         let dir = tmp.path().join("invalid");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
-        assert!(outcome.errors[0].message.contains("missing YAML frontmatter"));
+        assert!(outcome.errors[0]
+            .message
+            .contains("missing YAML frontmatter"));
     }
 
     #[test]
@@ -646,8 +825,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_skill_at(tmp.path(), "dupe", "dupe-skill", "from repo");
         let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::Repo },
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
+            SkillRoot {
+                path: tmp.path().to_path_buf(),
+                scope: SkillScope::Repo,
+            },
+            SkillRoot {
+                path: tmp.path().to_path_buf(),
+                scope: SkillScope::User,
+            },
         ]);
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
@@ -657,10 +842,16 @@ mod tests {
     fn respects_max_scan_depth() {
         let tmp = TempDir::new().unwrap();
         write_skill_at(tmp.path(), "d0/d1/d2/d3/d4/d5", "within", "loads");
-        write_skill_at(tmp.path(), "d0/d1/d2/d3/d4/d5/d6", "too-deep", "should not load");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        write_skill_at(
+            tmp.path(),
+            "d0/d1/d2/d3/d4/d5/d6",
+            "too-deep",
+            "should not load",
+        );
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "within");
@@ -671,7 +862,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_path = write_skill_at(tmp.path(), "demo", "dep-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
-        write_skill_metadata_at(skill_dir, r#"
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
 dependencies:
   tools:
     - type: env_var
@@ -682,10 +875,12 @@ dependencies:
       description: "GitHub MCP server"
       transport: streamable_http
       url: "https://example.com/mcp"
-"#);
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+"#,
+        );
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         let skill = &outcome.skills[0];
         let deps = skill.dependencies.as_ref().unwrap();
@@ -701,9 +896,10 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "ui-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "interface:\n  display_name: \"UI Skill\"\n  short_description: \"short desc\"\n  icon_small: \"./assets/icon.png\"\n  brand_color: \"#3B82F6\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         let iface = outcome.skills[0].interface.as_ref().unwrap();
         assert_eq!(iface.display_name.as_deref(), Some("UI Skill"));
@@ -716,11 +912,17 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "policy-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "policy:\n  allow_implicit_invocation: false\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
-        assert_eq!(outcome.skills[0].policy, Some(SkillPolicy { allow_implicit_invocation: Some(false) }));
+        assert_eq!(
+            outcome.skills[0].policy,
+            Some(SkillPolicy {
+                allow_implicit_invocation: Some(false)
+            })
+        );
         assert!(outcome.allowed_skills_for_implicit_invocation().is_empty());
     }
 
@@ -730,18 +932,20 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "ui-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "interface:\n  brand_color: blue\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert!(outcome.skills[0].interface.is_none());
     }
 
     #[test]
     fn nonexistent_root_skipped() {
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: PathBuf::from("/nonexistent"), scope: SkillScope::Admin },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: PathBuf::from("/nonexistent"),
+            scope: SkillScope::Admin,
+        }]);
         assert!(outcome.skills.is_empty());
     }
 
@@ -750,12 +954,19 @@ dependencies:
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("demo");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(SKILLS_FILENAME),
-            "---\nname: demo\ndescription: long\nmetadata:\n  short-description: short\n---\n").unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
-        assert_eq!(outcome.skills[0].short_description.as_deref(), Some("short"));
+        fs::write(
+            dir.join(SKILLS_FILENAME),
+            "---\nname: demo\ndescription: long\nmetadata:\n  short-description: short\n---\n",
+        )
+        .unwrap();
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
+        assert_eq!(
+            outcome.skills[0].short_description.as_deref(),
+            Some("short")
+        );
     }
 
     #[cfg(unix)]
@@ -767,9 +978,10 @@ dependencies:
         let skills_root = tmp.path().join("skills");
         fs::create_dir_all(&skills_root).unwrap();
         std::os::unix::fs::symlink(shared.path(), skills_root.join("shared")).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: skills_root, scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: skills_root,
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "linked-skill");
@@ -784,28 +996,32 @@ dependencies:
         let sys_root = tmp.path().join("system");
         fs::create_dir_all(&sys_root).unwrap();
         std::os::unix::fs::symlink(shared.path(), sys_root.join("shared")).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: sys_root, scope: SkillScope::System },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: sys_root,
+            scope: SkillScope::System,
+        }]);
         assert!(outcome.skills.is_empty());
     }
 
     #[test]
     fn dirs_between_project_root_and_cwd_returns_ordered_list() {
-        let dirs = dirs_between_project_root_and_cwd(
-            Path::new("/a/b/c/d"),
-            Path::new("/a/b"),
+        let dirs = dirs_between_project_root_and_cwd(Path::new("/a/b/c/d"), Path::new("/a/b"));
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/a/b"),
+                PathBuf::from("/a/b/c"),
+                PathBuf::from("/a/b/c/d"),
+            ]
         );
-        assert_eq!(dirs, vec![
-            PathBuf::from("/a/b"),
-            PathBuf::from("/a/b/c"),
-            PathBuf::from("/a/b/c/d"),
-        ]);
     }
 
     #[test]
     fn namespaced_skill_name_returns_base_when_no_namespace() {
-        assert_eq!(namespaced_skill_name(Path::new("/tmp/skills/demo/SKILL.md"), "demo"), "demo");
+        assert_eq!(
+            namespaced_skill_name(Path::new("/tmp/skills/demo/SKILL.md"), "demo"),
+            "demo"
+        );
     }
 
     #[test]
@@ -814,9 +1030,10 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "prompt-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "interface:\n  default_prompt: \"Hello world\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         let iface = outcome.skills[0].interface.as_ref().unwrap();
         assert_eq!(iface.default_prompt.as_deref(), Some("Hello world"));
@@ -828,11 +1045,15 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "perm-skill", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "permissions: network\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
-        assert_eq!(outcome.skills[0].permission_profile.as_deref(), Some("network"));
+        assert_eq!(
+            outcome.skills[0].permission_profile.as_deref(),
+            Some("network")
+        );
     }
 
     // ── Additional tests aligned with source project ─────────────────────
@@ -844,8 +1065,14 @@ dependencies:
         write_skill_at(repo_root.path(), "demo", "demo", "from repo");
         write_skill_at(user_root.path(), "demo", "demo", "from user");
         let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: repo_root.path().to_path_buf(), scope: SkillScope::Repo },
-            SkillRoot { path: user_root.path().to_path_buf(), scope: SkillScope::User },
+            SkillRoot {
+                path: repo_root.path().to_path_buf(),
+                scope: SkillScope::Repo,
+            },
+            SkillRoot {
+                path: user_root.path().to_path_buf(),
+                scope: SkillScope::User,
+            },
         ]);
         // Both are kept because they have different paths.
         assert_eq!(outcome.skills.len(), 2);
@@ -860,8 +1087,14 @@ dependencies:
         write_skill_at(user_root.path(), "beta", "beta", "user beta");
         write_skill_at(repo_root.path(), "alpha", "alpha", "repo alpha");
         let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: user_root.path().to_path_buf(), scope: SkillScope::User },
-            SkillRoot { path: repo_root.path().to_path_buf(), scope: SkillScope::Repo },
+            SkillRoot {
+                path: user_root.path().to_path_buf(),
+                scope: SkillScope::User,
+            },
+            SkillRoot {
+                path: repo_root.path().to_path_buf(),
+                scope: SkillScope::Repo,
+            },
         ]);
         assert_eq!(outcome.skills.len(), 2);
         // Repo(0) < User(1), so repo comes first.
@@ -877,9 +1110,10 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "empty-perm", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "permissions: \"\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert!(outcome.skills[0].permission_profile.is_none());
     }
@@ -890,9 +1124,10 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "empty-policy", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "policy: {}\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         let skill = &outcome.skills[0];
         assert!(skill.allow_implicit_invocation());
@@ -904,10 +1139,14 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "long-prompt", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         let long_prompt = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
-        write_skill_metadata_at(skill_dir, &format!("interface:\n  default_prompt: \"{long_prompt}\"\n"));
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        write_skill_metadata_at(
+            skill_dir,
+            &format!("interface:\n  default_prompt: \"{long_prompt}\"\n"),
+        );
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         // Interface should be None because the only field was over-length.
         assert!(outcome.skills[0].interface.is_none());
@@ -919,9 +1158,10 @@ dependencies:
         let dir = tmp.path().join("broken");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::System },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::System,
+        }]);
         // System scope errors are silently ignored.
         assert!(outcome.errors.is_empty());
         assert!(outcome.skills.is_empty());
@@ -933,9 +1173,10 @@ dependencies:
         let agents_skills = tmp.path().join(".agents").join("skills");
         fs::create_dir_all(&agents_skills).unwrap();
         write_skill_at(&agents_skills, "demo", "agents-skill", "from agents dir");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: agents_skills, scope: SkillScope::Repo },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: agents_skills,
+            scope: SkillScope::Repo,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "agents-skill");
@@ -979,9 +1220,10 @@ dependencies:
         fs::create_dir_all(&root).unwrap();
         // Create a symlink cycle: skills/loop -> skills
         std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: root, scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: root,
+            scope: SkillScope::User,
+        }]);
         // Should not hang; visited set prevents infinite loop.
         assert!(outcome.skills.is_empty());
     }
@@ -995,9 +1237,10 @@ dependencies:
         let admin_root = tmp.path().join("admin");
         fs::create_dir_all(&admin_root).unwrap();
         std::os::unix::fs::symlink(shared.path(), admin_root.join("shared")).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: admin_root, scope: SkillScope::Admin },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: admin_root,
+            scope: SkillScope::Admin,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "admin-linked");
@@ -1012,9 +1255,10 @@ dependencies:
         let repo_root = tmp.path().join("repo");
         fs::create_dir_all(&repo_root).unwrap();
         std::os::unix::fs::symlink(shared.path(), repo_root.join("shared")).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: repo_root, scope: SkillScope::Repo },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: repo_root,
+            scope: SkillScope::Repo,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "repo-linked");
@@ -1030,11 +1274,14 @@ dependencies:
             dir.join(SKILLS_FILENAME),
             format!("---\nname: demo\ndescription: ok\nmetadata:\n  short-description: {too_long}\n---\n"),
         ).unwrap();
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert_eq!(outcome.errors.len(), 1);
-        assert!(outcome.errors[0].message.contains("metadata.short-description"));
+        assert!(outcome.errors[0]
+            .message
+            .contains("metadata.short-description"));
     }
 
     #[test]
@@ -1046,9 +1293,10 @@ dependencies:
         fs::create_dir_all(&assets_dir).unwrap();
         fs::write(assets_dir.join("icon.png"), "fake png").unwrap();
         write_skill_metadata_at(skill_dir, "interface:\n  icon_small: \"assets/icon.png\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         let iface = outcome.skills[0].interface.as_ref().unwrap();
         assert!(iface.icon.is_some());
@@ -1059,10 +1307,14 @@ dependencies:
         let tmp = TempDir::new().unwrap();
         let skill_path = write_skill_at(tmp.path(), "demo", "bad-icon", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
-        write_skill_metadata_at(skill_dir, "interface:\n  icon_small: \"../../../etc/passwd\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        write_skill_metadata_at(
+            skill_dir,
+            "interface:\n  icon_small: \"../../../etc/passwd\"\n",
+        );
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         // Interface should be None because the icon path was rejected.
         assert!(outcome.skills[0].interface.is_none());
@@ -1074,9 +1326,10 @@ dependencies:
         let skill_path = write_skill_at(tmp.path(), "demo", "abs-icon", "from yaml");
         let skill_dir = skill_path.parent().unwrap();
         write_skill_metadata_at(skill_dir, "interface:\n  icon_small: \"/tmp/icon.png\"\n");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: tmp.path().to_path_buf(), scope: SkillScope::User },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: tmp.path().to_path_buf(),
+            scope: SkillScope::User,
+        }]);
         assert!(outcome.errors.is_empty());
         assert!(outcome.skills[0].interface.is_none());
     }
@@ -1087,9 +1340,10 @@ dependencies:
         let system_dir = super::super::system::system_cache_root_dir(codex_home.path());
         fs::create_dir_all(&system_dir).unwrap();
         write_skill_at(&system_dir, "sys-skill", "sys-skill", "system skill");
-        let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: system_dir, scope: SkillScope::System },
-        ]);
+        let outcome = load_skills_from_roots(vec![SkillRoot {
+            path: system_dir,
+            scope: SkillScope::System,
+        }]);
         assert!(outcome.errors.is_empty());
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].scope, SkillScope::System);
@@ -1102,8 +1356,14 @@ dependencies:
         write_skill_at(repo_root.path(), "a", "alpha", "repo");
         write_skill_at(admin_root.path(), "b", "beta", "admin");
         let outcome = load_skills_from_roots(vec![
-            SkillRoot { path: admin_root.path().to_path_buf(), scope: SkillScope::Admin },
-            SkillRoot { path: repo_root.path().to_path_buf(), scope: SkillScope::Repo },
+            SkillRoot {
+                path: admin_root.path().to_path_buf(),
+                scope: SkillScope::Admin,
+            },
+            SkillRoot {
+                path: repo_root.path().to_path_buf(),
+                scope: SkillScope::Repo,
+            },
         ]);
         assert_eq!(outcome.skills.len(), 2);
         assert_eq!(outcome.skills[0].scope, SkillScope::Repo);

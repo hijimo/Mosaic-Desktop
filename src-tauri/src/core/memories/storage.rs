@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
+use super::{ensure_layout, raw_memories_file, rollout_summaries_dir};
 use crate::protocol::ThreadId;
 use crate::state::memories_db::Stage1Output;
-use super::{ensure_layout, raw_memories_file, rollout_summaries_dir};
 
 /// Rebuild `raw_memories.md` from stage-1 outputs.
 pub async fn rebuild_raw_memories_file(
@@ -128,22 +128,19 @@ pub fn rollout_summary_file_stem_from_parts(
     rollout_slug: Option<&str>,
 ) -> String {
     const SLUG_MAX: usize = 60;
-    const ALPHABET: &[u8; 62] =
-        b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const ALPHABET: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const SPACE: u32 = 14_776_336; // 62^4
 
     let uuid = thread_id.as_uuid();
     // Extract timestamp from UUID v7 if possible, else use source_updated_at.
     let (ts_str, hash_seed) = {
-        let (secs, nanos) = uuid.get_timestamp().map_or(
-            (source_updated_at.timestamp() as u64, 0u32),
-            |ts| {
-                let (s, n) = ts.to_unix();
-                (s, n)
-            },
-        );
-        let dt = DateTime::<Utc>::from_timestamp(secs as i64, nanos)
-            .unwrap_or(source_updated_at);
+        let (secs, nanos) =
+            uuid.get_timestamp()
+                .map_or((source_updated_at.timestamp() as u64, 0u32), |ts| {
+                    let (s, n) = ts.to_unix();
+                    (s, n)
+                });
+        let dt = DateTime::<Utc>::from_timestamp(secs as i64, nanos).unwrap_or(source_updated_at);
         let seed = (uuid.as_u128() & 0xFFFF_FFFF) as u32;
         (dt.format("%Y-%m-%dT%H-%M-%S").to_string(), seed)
     };
@@ -176,7 +173,11 @@ pub fn rollout_summary_file_stem_from_parts(
         slug.pop();
     }
 
-    if slug.is_empty() { prefix } else { format!("{prefix}-{slug}") }
+    if slug.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}-{slug}")
+    }
 }
 
 fn fmt_err(e: std::fmt::Error) -> std::io::Error {
@@ -243,14 +244,20 @@ mod tests {
         let memories = vec![make_memory(id, None, 100)];
 
         sync_rollout_summaries(&root, &memories, 64).await.unwrap();
-        rebuild_raw_memories_file(&root, &memories, 64).await.unwrap();
+        rebuild_raw_memories_file(&root, &memories, 64)
+            .await
+            .unwrap();
 
-        let raw = tokio::fs::read_to_string(raw_memories_file(&root)).await.unwrap();
+        let raw = tokio::fs::read_to_string(raw_memories_file(&root))
+            .await
+            .unwrap();
         assert!(raw.contains("raw memory"));
         assert!(raw.contains(&id.to_string()));
         assert!(raw.contains("cwd: /tmp/workspace"));
 
-        let mut entries = tokio::fs::read_dir(rollout_summaries_dir(&root)).await.unwrap();
+        let mut entries = tokio::fs::read_dir(rollout_summaries_dir(&root))
+            .await
+            .unwrap();
         let mut count = 0;
         while let Ok(Some(_)) = entries.next_entry().await {
             count += 1;
@@ -283,7 +290,9 @@ mod tests {
         let skill_file = root.join("skills/demo/SKILL.md");
         tokio::fs::write(&memory_md, "old").await.unwrap();
         tokio::fs::write(&summary_md, "old").await.unwrap();
-        tokio::fs::create_dir_all(skill_file.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(skill_file.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&skill_file, "old").await.unwrap();
 
         sync_rollout_summaries(&root, &[], 64).await.unwrap();
@@ -300,7 +309,9 @@ mod tests {
 
         rebuild_raw_memories_file(&root, &[], 64).await.unwrap();
 
-        let raw = tokio::fs::read_to_string(raw_memories_file(&root)).await.unwrap();
+        let raw = tokio::fs::read_to_string(raw_memories_file(&root))
+            .await
+            .unwrap();
         assert_eq!(raw, "# Raw Memories\n\nNo raw memories yet.\n");
     }
 
@@ -314,7 +325,9 @@ mod tests {
 
         sync_rollout_summaries(&root, &[m], 64).await.unwrap();
 
-        let mut entries = tokio::fs::read_dir(rollout_summaries_dir(&root)).await.unwrap();
+        let mut entries = tokio::fs::read_dir(rollout_summaries_dir(&root))
+            .await
+            .unwrap();
         let entry = entries.next_entry().await.unwrap().unwrap();
         let content = tokio::fs::read_to_string(entry.path()).await.unwrap();
         assert!(content.contains("git_branch: feature/test"));

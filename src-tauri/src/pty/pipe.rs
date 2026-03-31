@@ -42,7 +42,9 @@ async fn read_output_stream<R: AsyncRead + Unpin>(
     loop {
         match reader.read(&mut buf).await {
             Ok(0) => break,
-            Ok(n) => { let _ = output_tx.send(buf[..n].to_vec()); }
+            Ok(n) => {
+                let _ = output_tx.send(buf[..n].to_vec());
+            }
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
@@ -86,7 +88,9 @@ pub async fn spawn_process(
     command.stderr(Stdio::piped());
 
     let mut child = command.spawn()?;
-    let pid = child.id().ok_or_else(|| io::Error::other("missing child pid"))?;
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("missing child pid"))?;
     #[cfg(unix)]
     let process_group_id = pid;
 
@@ -114,18 +118,30 @@ pub async fn spawn_process(
 
     let stdout_handle = stdout.map(|s| {
         let tx = output_tx.clone();
-        tokio::spawn(async move { read_output_stream(BufReader::new(s), tx).await; })
+        tokio::spawn(async move {
+            read_output_stream(BufReader::new(s), tx).await;
+        })
     });
     let stderr_handle = stderr.map(|s| {
         let tx = output_tx.clone();
-        tokio::spawn(async move { read_output_stream(BufReader::new(s), tx).await; })
+        tokio::spawn(async move {
+            read_output_stream(BufReader::new(s), tx).await;
+        })
     });
     let mut reader_abort_handles = Vec::new();
-    if let Some(h) = stdout_handle.as_ref() { reader_abort_handles.push(h.abort_handle()); }
-    if let Some(h) = stderr_handle.as_ref() { reader_abort_handles.push(h.abort_handle()); }
+    if let Some(h) = stdout_handle.as_ref() {
+        reader_abort_handles.push(h.abort_handle());
+    }
+    if let Some(h) = stderr_handle.as_ref() {
+        reader_abort_handles.push(h.abort_handle());
+    }
     let reader_handle = tokio::spawn(async move {
-        if let Some(h) = stdout_handle { let _ = h.await; }
-        if let Some(h) = stderr_handle { let _ = h.await; }
+        if let Some(h) = stdout_handle {
+            let _ = h.await;
+        }
+        if let Some(h) = stderr_handle {
+            let _ = h.await;
+        }
     });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();

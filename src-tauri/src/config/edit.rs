@@ -210,21 +210,21 @@ mod tests {
     #[test]
     fn add_mcp_server() {
         let server = McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
-                        command: "node".into(),
-                        args: vec![],
-                        env: HashMap::new(),
-                    },
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: None,
-                    tool_timeout_sec: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth_resource: None,
-                };
+            transport: McpServerTransportConfig::Stdio {
+                command: "node".into(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+        };
         let result = ConfigEdit::new()
             .set_mcp_server("my-server", server.clone())
             .apply(&ConfigToml::default());
@@ -234,21 +234,21 @@ mod tests {
     #[test]
     fn remove_mcp_server() {
         let server = McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
-                        command: "node".into(),
-                        args: vec![],
-                        env: HashMap::new(),
-                    },
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: None,
-                    tool_timeout_sec: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth_resource: None,
-                };
+            transport: McpServerTransportConfig::Stdio {
+                command: "node".into(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+        };
         let config = ConfigToml {
             mcp_servers: HashMap::from([("srv".into(), server)]),
             ..Default::default()

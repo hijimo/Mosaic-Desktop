@@ -57,10 +57,14 @@ impl SkillsManager {
             }
         }
         let mut roots = skill_roots_for_cwd(&self.codex_home, cwd);
-        roots.extend(normalize_extra_roots(extra_roots).into_iter().map(|p| SkillRoot {
-            path: p,
-            scope: SkillScope::User,
-        }));
+        roots.extend(
+            normalize_extra_roots(extra_roots)
+                .into_iter()
+                .map(|p| SkillRoot {
+                    path: p,
+                    scope: SkillScope::User,
+                }),
+        );
         let mut outcome = load_skills_from_roots(roots);
         if !extra_roots.is_empty() {
             outcome.skills.retain(|s| s.scope != SkillScope::System);
@@ -84,11 +88,7 @@ impl SkillsManager {
     }
 
     /// Apply disabled paths to an existing outcome.
-    pub fn apply_disabled_paths(
-        &self,
-        outcome: &mut SkillLoadOutcome,
-        disabled: HashSet<PathBuf>,
-    ) {
+    pub fn apply_disabled_paths(&self, outcome: &mut SkillLoadOutcome, disabled: HashSet<PathBuf>) {
         outcome.disabled_paths = disabled;
     }
 
@@ -123,14 +123,16 @@ pub fn disabled_paths_from_entries(entries: &[(PathBuf, bool)]) -> HashSet<PathB
         let normalized = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
         configs.insert(normalized, *enabled);
     }
-    configs.into_iter()
+    configs
+        .into_iter()
         .filter(|(_, enabled)| !enabled)
         .map(|(path, _)| path)
         .collect()
 }
 
 fn normalize_extra_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut normalized: Vec<PathBuf> = roots.iter()
+    let mut normalized: Vec<PathBuf> = roots
+        .iter()
         .map(|p| dunce::canonicalize(p).unwrap_or_else(|_| p.clone()))
         .collect();
     normalized.sort_unstable();
@@ -150,7 +152,8 @@ mod tests {
         fs::write(
             dir.join("SKILL.md"),
             format!("---\nname: {name}\ndescription: {name} skill\n---\n"),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
@@ -191,9 +194,8 @@ mod tests {
         write_skill(extra.path(), "extra-skill");
 
         let mgr = SkillsManager::new(home.path().to_path_buf());
-        let outcome = mgr.skills_for_cwd_with_extra_roots(
-            cwd.path(), &[extra.path().to_path_buf()], true,
-        );
+        let outcome =
+            mgr.skills_for_cwd_with_extra_roots(cwd.path(), &[extra.path().to_path_buf()], true);
         assert!(outcome.skills.iter().any(|s| s.name == "extra-skill"));
     }
 

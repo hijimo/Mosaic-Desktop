@@ -20,13 +20,11 @@ pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
 
 /// Removed provider ID — kept to emit a helpful migration error.
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
-pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str =
-    "`ollama-chat` is no longer supported.\n\
+pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\n\
      How to fix: replace `ollama-chat` with `ollama` in `model_provider` or `--local-provider`.\n\
      More info: https://github.com/openai/codex/discussions/7782";
 
-const CHAT_WIRE_API_REMOVED_ERROR: &str =
-    "`wire_api = \"chat\"` is no longer supported.\n\
+const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\n\
      How to fix: set `wire_api = \"responses\"` in your provider config.\n\
      More info: https://github.com/openai/codex/discussions/7782";
 

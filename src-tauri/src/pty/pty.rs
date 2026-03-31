@@ -82,7 +82,9 @@ pub async fn spawn_process(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => { let _ = output_tx_clone.send(buf[..n].to_vec()); }
+                Ok(n) => {
+                    let _ = output_tx_clone.send(buf[..n].to_vec());
+                }
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(5));

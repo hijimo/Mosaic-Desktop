@@ -66,20 +66,19 @@ impl OssConfig {
 }
 
 fn required_env(primary: &str, fallback: &str) -> Result<String> {
-    optional_env(primary, fallback).ok_or_else(|| {
-        anyhow::anyhow!(
-            "missing OSS config: expected {} or {}",
-            primary,
-            fallback
-        )
-    })
+    optional_env(primary, fallback)
+        .ok_or_else(|| anyhow::anyhow!("missing OSS config: expected {} or {}", primary, fallback))
 }
 
 fn optional_env(primary: &str, fallback: &str) -> Option<String> {
     std::env::var(primary)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var(fallback).ok().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            std::env::var(fallback)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
 }
 
 fn endpoint_from_region(region: &str) -> String {

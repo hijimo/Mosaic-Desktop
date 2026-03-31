@@ -25,10 +25,7 @@ impl crate::core::tools::sandboxing::ToolRuntime for UnifiedExecRuntime {
         args: serde_json::Value,
         _attempt: &SandboxAttempt,
     ) -> Result<serde_json::Value, ToolError> {
-        let cmd_str = args
-            .get("cmd")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let cmd_str = args.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
 
         if cmd_str.is_empty() {
             return Err(ToolError::Codex(CodexError::new(
@@ -38,10 +35,7 @@ impl crate::core::tools::sandboxing::ToolRuntime for UnifiedExecRuntime {
         }
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let tty = args
-            .get("tty")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let tty = args.get("tty").and_then(|v| v.as_bool()).unwrap_or(false);
         let command = vec![shell, "-c".to_string(), cmd_str.to_string()];
         let cwd = args
             .get("workdir")
@@ -67,8 +61,7 @@ impl crate::core::tools::sandboxing::ToolRuntime for UnifiedExecRuntime {
             .and_then(|v| v.as_u64())
             .unwrap_or(120_000);
 
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
         let handles = process.output_handles();
         let collected =
             crate::core::unified_exec::UnifiedExecProcessManager::collect_output_until_deadline(

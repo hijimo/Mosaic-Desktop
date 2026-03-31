@@ -1,8 +1,8 @@
 //! Rollout truncation helpers based on user-turn boundaries.
 
+use super::policy::RolloutItem;
 use crate::protocol::event::EventMsg;
 use crate::protocol::types::ResponseInputItem;
-use super::policy::RolloutItem;
 
 /// Return indices of user message boundaries in a rollout.
 ///
@@ -14,8 +14,10 @@ pub fn user_message_positions(items: &[RolloutItem]) -> Vec<usize> {
     for (idx, item) in items.iter().enumerate() {
         match item {
             RolloutItem::ResponseItem(resp) => {
-                let input: ResponseInputItem = resp.clone().into();
-                if matches!(&input, ResponseInputItem::Message { role, .. } if role == "user") {
+                if matches!(
+                    resp.to_input_item().as_ref(),
+                    Some(ResponseInputItem::Message { role, .. }) if role == "user"
+                ) {
                     positions.push(idx);
                 }
             }
@@ -55,9 +57,7 @@ pub fn truncate_before_nth_user_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::event::{
-        AgentMessageEvent, ThreadRolledBackEvent, UserMessageEvent,
-    };
+    use crate::protocol::event::{AgentMessageEvent, ThreadRolledBackEvent, UserMessageEvent};
 
     fn user_item(text: &str) -> RolloutItem {
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
@@ -112,5 +112,23 @@ mod tests {
         // n=2 → cut before u4 (index 7)
         let truncated = truncate_before_nth_user_message(&items, 2);
         assert_eq!(truncated.len(), 7);
+    }
+
+    #[test]
+    fn web_search_response_item_is_not_counted_as_user_boundary() {
+        let items = vec![
+            RolloutItem::ResponseItem(crate::protocol::types::ResponseItem::WebSearchCall {
+                id: Some("ws1".to_string()),
+                status: Some("completed".to_string()),
+                action: Some(crate::protocol::types::WebSearchAction::Search {
+                    query: Some("mosaic".to_string()),
+                    queries: None,
+                }),
+            }),
+            user_item("u1"),
+        ];
+
+        let positions = user_message_positions(&items);
+        assert_eq!(positions, vec![1]);
     }
 }

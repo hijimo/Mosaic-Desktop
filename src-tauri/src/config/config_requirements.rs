@@ -271,44 +271,13 @@ impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
             Some(modes) => {
                 let source = RequirementSource::Unknown;
                 let src_clone = source.clone();
-                let constrained =
-                    Constrained::new(SandboxMode::ReadOnly, move |candidate| {
-                        let req: SandboxModeRequirement = (*candidate).into();
-                        if modes.contains(&req) {
-                            Ok(())
-                        } else {
-                            Err(ConstraintError::InvalidValue {
-                                field_name: "sandbox_mode",
-                                candidate: format!("{req:?}"),
-                                allowed: format!("{modes:?}"),
-                                requirement_source: src_clone.clone(),
-                            })
-                        }
-                    })?;
-                ConstrainedWithSource::new(constrained, Some(source))
-            }
-            None => ConstrainedWithSource::new(
-                Constrained::allow_any(SandboxMode::ReadOnly),
-                None,
-            ),
-        };
-
-        let web_search_mode = match toml.allowed_web_search_modes {
-            Some(modes) => {
-                let source = RequirementSource::Unknown;
-                let src_clone = source.clone();
-                let initial = if modes.contains(&WebSearchModeRequirement::Cached) {
-                    WebSearchMode::Cached
-                } else {
-                    WebSearchMode::Disabled
-                };
-                let constrained = Constrained::new(initial, move |candidate| {
-                    let req: WebSearchModeRequirement = (*candidate).into();
+                let constrained = Constrained::new(SandboxMode::ReadOnly, move |candidate| {
+                    let req: SandboxModeRequirement = (*candidate).into();
                     if modes.contains(&req) {
                         Ok(())
                     } else {
                         Err(ConstraintError::InvalidValue {
-                            field_name: "web_search",
+                            field_name: "sandbox_mode",
                             candidate: format!("{req:?}"),
                             allowed: format!("{modes:?}"),
                             requirement_source: src_clone.clone(),
@@ -317,19 +286,55 @@ impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(source))
             }
-            None => ConstrainedWithSource::new(
-                Constrained::allow_any(WebSearchMode::Cached),
-                None,
-            ),
+            None => ConstrainedWithSource::new(Constrained::allow_any(SandboxMode::ReadOnly), None),
         };
 
-        let network = toml.network.map(|n| {
-            Sourced::new(NetworkConstraints::from(n), RequirementSource::Unknown)
-        });
+        let web_search_mode = match toml.allowed_web_search_modes {
+            Some(modes) => {
+                let source = RequirementSource::Unknown;
+                let src_clone = source.clone();
+                let mut accepted = modes.into_iter().collect::<std::collections::BTreeSet<_>>();
+                accepted.insert(WebSearchModeRequirement::Disabled);
+                let allowed = format!(
+                    "{:?}",
+                    accepted
+                        .iter()
+                        .copied()
+                        .map(WebSearchMode::from)
+                        .collect::<Vec<_>>()
+                );
+                let initial = if accepted.contains(&WebSearchModeRequirement::Cached) {
+                    WebSearchMode::Cached
+                } else if accepted.contains(&WebSearchModeRequirement::Live) {
+                    WebSearchMode::Live
+                } else {
+                    WebSearchMode::Disabled
+                };
+                let constrained = Constrained::new(initial, move |candidate| {
+                    let req: WebSearchModeRequirement = (*candidate).into();
+                    if accepted.contains(&req) {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "web_search_mode",
+                            candidate: format!("{req:?}"),
+                            allowed: allowed.clone(),
+                            requirement_source: src_clone.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(source))
+            }
+            None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
+        };
 
-        let mcp_servers = toml.mcp_servers.map(|s| {
-            Sourced::new(s, RequirementSource::Unknown)
-        });
+        let network = toml
+            .network
+            .map(|n| Sourced::new(NetworkConstraints::from(n), RequirementSource::Unknown));
+
+        let mcp_servers = toml
+            .mcp_servers
+            .map(|s| Sourced::new(s, RequirementSource::Unknown));
 
         let enforce_residency = match toml.enforce_residency {
             Some(r) => ConstrainedWithSource::new(
@@ -357,8 +362,12 @@ mod tests {
     #[test]
     fn empty_requirements_allows_all() {
         let reqs = ConfigRequirements::default();
-        reqs.approval_policy.can_set(&AskForApproval::Never).unwrap();
-        reqs.sandbox_mode.can_set(&SandboxMode::DangerFullAccess).unwrap();
+        reqs.approval_policy
+            .can_set(&AskForApproval::Never)
+            .unwrap();
+        reqs.sandbox_mode
+            .can_set(&SandboxMode::DangerFullAccess)
+            .unwrap();
     }
 
     #[test]
@@ -368,8 +377,13 @@ mod tests {
             ..Default::default()
         };
         let reqs = ConfigRequirements::try_from(toml).unwrap();
-        assert!(reqs.approval_policy.can_set(&AskForApproval::Never).is_err());
-        reqs.approval_policy.can_set(&AskForApproval::OnRequest).unwrap();
+        assert!(reqs
+            .approval_policy
+            .can_set(&AskForApproval::Never)
+            .is_err());
+        reqs.approval_policy
+            .can_set(&AskForApproval::OnRequest)
+            .unwrap();
     }
 
     #[test]
@@ -379,11 +393,69 @@ mod tests {
             ..Default::default()
         };
         let reqs = ConfigRequirements::try_from(toml).unwrap();
-        assert!(reqs.sandbox_mode.can_set(&SandboxMode::DangerFullAccess).is_err());
+        assert!(reqs
+            .sandbox_mode
+            .can_set(&SandboxMode::DangerFullAccess)
+            .is_err());
     }
 
     #[test]
     fn requirements_toml_is_empty() {
         assert!(ConfigRequirementsToml::default().is_empty());
+    }
+
+    #[test]
+    fn allowed_web_search_modes_cached_also_allows_disabled() {
+        let toml = ConfigRequirementsToml {
+            allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            ..Default::default()
+        };
+
+        let reqs = ConfigRequirements::try_from(toml).unwrap();
+
+        assert_eq!(reqs.web_search_mode.value(), WebSearchMode::Cached);
+        reqs.web_search_mode
+            .can_set(&WebSearchMode::Disabled)
+            .unwrap();
+        assert!(reqs.web_search_mode.can_set(&WebSearchMode::Live).is_err());
+    }
+
+    #[test]
+    fn allowed_web_search_modes_live_defaults_to_live_and_allows_disabled() {
+        let toml = ConfigRequirementsToml {
+            allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Live]),
+            ..Default::default()
+        };
+
+        let reqs = ConfigRequirements::try_from(toml).unwrap();
+
+        assert_eq!(reqs.web_search_mode.value(), WebSearchMode::Live);
+        reqs.web_search_mode
+            .can_set(&WebSearchMode::Disabled)
+            .unwrap();
+        assert!(reqs
+            .web_search_mode
+            .can_set(&WebSearchMode::Cached)
+            .is_err());
+    }
+
+    #[test]
+    fn allowed_web_search_modes_empty_restricts_to_disabled() {
+        let toml = ConfigRequirementsToml {
+            allowed_web_search_modes: Some(vec![]),
+            ..Default::default()
+        };
+
+        let reqs = ConfigRequirements::try_from(toml).unwrap();
+
+        assert_eq!(reqs.web_search_mode.value(), WebSearchMode::Disabled);
+        reqs.web_search_mode
+            .can_set(&WebSearchMode::Disabled)
+            .unwrap();
+        assert!(reqs
+            .web_search_mode
+            .can_set(&WebSearchMode::Cached)
+            .is_err());
+        assert!(reqs.web_search_mode.can_set(&WebSearchMode::Live).is_err());
     }
 }

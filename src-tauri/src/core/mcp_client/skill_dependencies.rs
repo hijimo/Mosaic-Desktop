@@ -70,9 +70,7 @@ fn canonical_key(transport: &str, identifier: &str, fallback: &str) -> String {
 
 fn canonical_server_key(name: &str, config: &McpServerConfig) -> String {
     match &config.transport {
-        McpServerTransportConfig::Stdio { command, .. } => {
-            canonical_key("stdio", command, name)
-        }
+        McpServerTransportConfig::Stdio { command, .. } => canonical_key("stdio", command, name),
         McpServerTransportConfig::StreamableHttp { url, .. } => {
             canonical_key("streamable_http", url, name)
         }

@@ -13,9 +13,15 @@ pub struct ListDirHandler;
 const MAX_ENTRY_LENGTH: usize = 500;
 const INDENTATION_SPACES: usize = 2;
 
-fn default_offset() -> usize { 1 }
-fn default_limit() -> usize { 25 }
-fn default_depth() -> usize { 2 }
+fn default_offset() -> usize {
+    1
+}
+fn default_limit() -> usize {
+    25
+}
+fn default_depth() -> usize {
+    2
+}
 
 #[derive(Deserialize)]
 struct ListDirArgs {
@@ -71,22 +77,37 @@ impl ToolHandler for ListDirHandler {
 
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: ListDirArgs = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid list_dir args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid list_dir args: {e}"),
+            )
         })?;
 
         if params.offset == 0 {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "offset must be a 1-indexed entry number"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "offset must be a 1-indexed entry number",
+            ));
         }
         if params.limit == 0 {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "limit must be greater than zero"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "limit must be greater than zero",
+            ));
         }
         if params.depth == 0 {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "depth must be greater than zero"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "depth must be greater than zero",
+            ));
         }
 
         let path = PathBuf::from(&params.dir_path);
         if !path.is_absolute() {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "dir_path must be an absolute path"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "dir_path must be an absolute path",
+            ));
         }
 
         let entries = list_dir_slice(&path, params.offset, params.limit, params.depth).await?;
@@ -117,7 +138,10 @@ async fn list_dir_slice(
 
     let start_index = offset - 1;
     if start_index >= entries.len() {
-        return Err(CodexError::new(ErrorCode::InvalidInput, "offset exceeds directory entry count"));
+        return Err(CodexError::new(
+            ErrorCode::InvalidInput,
+            "offset exceeds directory entry count",
+        ));
     }
 
     let remaining = entries.len() - start_index;
@@ -148,16 +172,25 @@ async fn collect_entries(
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
         let mut read_dir = tokio::fs::read_dir(&current_dir).await.map_err(|e| {
-            CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to read directory: {e}"))
+            CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("failed to read directory: {e}"),
+            )
         })?;
 
         let mut dir_entries = Vec::new();
 
         while let Some(entry) = read_dir.next_entry().await.map_err(|e| {
-            CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to read directory: {e}"))
+            CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("failed to read directory: {e}"),
+            )
         })? {
             let file_type = entry.file_type().await.map_err(|e| {
-                CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to inspect entry: {e}"))
+                CodexError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    format!("failed to inspect entry: {e}"),
+                )
             })?;
 
             let file_name = entry.file_name();
@@ -175,7 +208,12 @@ async fn collect_entries(
                 entry.path(),
                 relative_path,
                 kind,
-                DirEntry { name: sort_key, display_name, depth: display_depth, kind },
+                DirEntry {
+                    name: sort_key,
+                    display_name,
+                    depth: display_depth,
+                    kind,
+                },
             ));
         }
 
@@ -196,7 +234,9 @@ fn format_entry_name(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
     if normalized.len() > MAX_ENTRY_LENGTH {
         let mut end = MAX_ENTRY_LENGTH;
-        while end > 0 && !normalized.is_char_boundary(end) { end -= 1; }
+        while end > 0 && !normalized.is_char_boundary(end) {
+            end -= 1;
+        }
         normalized[..end].to_string()
     } else {
         normalized
@@ -207,7 +247,9 @@ fn format_entry_component(name: &OsStr) -> String {
     let normalized = name.to_string_lossy();
     if normalized.len() > MAX_ENTRY_LENGTH {
         let mut end = MAX_ENTRY_LENGTH;
-        while end > 0 && !normalized.is_char_boundary(end) { end -= 1; }
+        while end > 0 && !normalized.is_char_boundary(end) {
+            end -= 1;
+        }
         normalized[..end].to_string()
     } else {
         normalized.to_string()
@@ -244,9 +286,14 @@ enum DirEntryKind {
 
 impl From<&FileType> for DirEntryKind {
     fn from(ft: &FileType) -> Self {
-        if ft.is_symlink() { DirEntryKind::Symlink }
-        else if ft.is_dir() { DirEntryKind::Directory }
-        else if ft.is_file() { DirEntryKind::File }
-        else { DirEntryKind::Other }
+        if ft.is_symlink() {
+            DirEntryKind::Symlink
+        } else if ft.is_dir() {
+            DirEntryKind::Directory
+        } else if ft.is_file() {
+            DirEntryKind::File
+        } else {
+            DirEntryKind::Other
+        }
     }
 }

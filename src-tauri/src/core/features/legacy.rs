@@ -62,9 +62,21 @@ pub(crate) struct LegacyFeatureToggles {
 #[allow(dead_code)]
 impl LegacyFeatureToggles {
     pub fn apply(self, features: &mut Features) {
-        set_if_some(features, Feature::ApplyPatchFreeform, self.include_apply_patch_tool);
-        set_if_some(features, Feature::ApplyPatchFreeform, self.experimental_use_freeform_apply_patch);
-        set_if_some(features, Feature::UnifiedExec, self.experimental_use_unified_exec_tool);
+        set_if_some(
+            features,
+            Feature::ApplyPatchFreeform,
+            self.include_apply_patch_tool,
+        );
+        set_if_some(
+            features,
+            Feature::ApplyPatchFreeform,
+            self.experimental_use_freeform_apply_patch,
+        );
+        set_if_some(
+            features,
+            Feature::UnifiedExec,
+            self.experimental_use_unified_exec_tool,
+        );
         set_if_some(features, Feature::WebSearchRequest, self.tools_web_search);
     }
 }

@@ -1,7 +1,7 @@
 //! Heuristic decision logic for commands not matched by any policy rule.
 
-use crate::protocol::types::{AskForApproval, SandboxPolicy};
 use crate::execpolicy::prefix_rule::Decision;
+use crate::protocol::types::{AskForApproval, SandboxPolicy};
 use crate::shell_command::is_dangerous_command;
 
 /// Derive a [`Decision`] for a command not matched by any execpolicy rule.
@@ -50,10 +50,28 @@ fn is_known_safe_command(tokens: &[String]) -> bool {
         .unwrap_or(cmd);
     matches!(
         basename,
-        "ls" | "cat" | "head" | "tail" | "wc" | "echo" | "pwd" | "date"
-            | "whoami" | "hostname" | "uname" | "which" | "type"
-            | "file" | "stat" | "du" | "df" | "env" | "printenv"
-            | "true" | "false" | "test" | "["
+        "ls" | "cat"
+            | "head"
+            | "tail"
+            | "wc"
+            | "echo"
+            | "pwd"
+            | "date"
+            | "whoami"
+            | "hostname"
+            | "uname"
+            | "which"
+            | "type"
+            | "file"
+            | "stat"
+            | "du"
+            | "df"
+            | "env"
+            | "printenv"
+            | "true"
+            | "false"
+            | "test"
+            | "["
     )
 }
 
@@ -74,7 +92,10 @@ mod tests {
 
     #[test]
     fn unknown_commands_are_not_safe() {
-        assert!(!is_known_safe_command(&cmd(&["curl", "https://example.com"])));
+        assert!(!is_known_safe_command(&cmd(&[
+            "curl",
+            "https://example.com"
+        ])));
         assert!(!is_known_safe_command(&cmd(&["python3", "-c", "code"])));
     }
 

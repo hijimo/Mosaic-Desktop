@@ -70,9 +70,7 @@ impl fmt::Display for ConfigLoadError {
 
 impl std::error::Error for ConfigLoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(|e| e as &dyn std::error::Error)
+        self.source.as_ref().map(|e| e as &dyn std::error::Error)
     }
 }
 
@@ -183,10 +181,7 @@ fn position_for_offset(contents: &str, index: usize) -> TextPosition {
         .rposition(|b| *b == b'\n')
         .map(|pos| pos + 1)
         .unwrap_or(0);
-    let line = bytes[..line_start]
-        .iter()
-        .filter(|b| **b == b'\n')
-        .count();
+    let line = bytes[..line_start].iter().filter(|b| **b == b'\n').count();
     let column = safe_index - line_start;
     TextPosition {
         line: line + 1,
@@ -217,10 +212,7 @@ mod tests {
 
     #[test]
     fn config_error_from_bad_toml() {
-        let err = config_error_from_typed_toml::<ConfigToml>(
-            Path::new("test.toml"),
-            "model = 123",
-        );
+        let err = config_error_from_typed_toml::<ConfigToml>(Path::new("test.toml"), "model = 123");
         assert!(err.is_some());
         let e = err.unwrap();
         assert_eq!(e.path, PathBuf::from("test.toml"));
@@ -243,10 +235,8 @@ mod tests {
 
     #[test]
     fn valid_toml_returns_none() {
-        let err = config_error_from_typed_toml::<ConfigToml>(
-            Path::new("ok.toml"),
-            "model = \"gpt-4\"",
-        );
+        let err =
+            config_error_from_typed_toml::<ConfigToml>(Path::new("ok.toml"), "model = \"gpt-4\"");
         assert!(err.is_none());
     }
 }

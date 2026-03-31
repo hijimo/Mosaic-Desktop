@@ -51,8 +51,8 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::core::skills::SkillScope;
+    use std::path::PathBuf;
 
     #[test]
     fn empty_skills_returns_none() {

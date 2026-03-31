@@ -35,10 +35,7 @@ impl NetworkApprovalService {
     }
 
     /// Begin a network approval flow. Returns `None` if no approval is needed.
-    pub async fn begin(
-        &self,
-        _spec: &NetworkApprovalSpec,
-    ) -> Option<DeferredNetworkApproval> {
+    pub async fn begin(&self, _spec: &NetworkApprovalSpec) -> Option<DeferredNetworkApproval> {
         // Stub: no network approval enforcement yet.
         None
     }

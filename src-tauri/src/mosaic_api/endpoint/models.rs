@@ -1,11 +1,11 @@
+use crate::core::models_manager::model_info::{ModelDescriptor, ModelsResponse};
 use crate::mosaic_api::auth::AuthProvider;
 use crate::mosaic_api::endpoint::session::EndpointSession;
 use crate::mosaic_api::error::ApiError;
 use crate::mosaic_api::provider::Provider;
 use crate::mosaic_client::{HttpTransport, RequestTelemetry, TransportError};
-use crate::core::models_manager::model_info::{ModelDescriptor, ModelsResponse};
-use http::{HeaderMap, Method};
 use http::header::ETAG;
+use http::{HeaderMap, Method};
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {

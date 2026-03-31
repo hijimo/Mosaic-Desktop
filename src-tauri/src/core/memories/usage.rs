@@ -114,7 +114,10 @@ mod tests {
     #[test]
     fn partial_match_not_confused() {
         // "memories/" alone without a known suffix should not match
-        assert_eq!(get_memory_kind("/home/user/.codex/memories/unknown.txt"), None);
+        assert_eq!(
+            get_memory_kind("/home/user/.codex/memories/unknown.txt"),
+            None
+        );
     }
 
     #[test]

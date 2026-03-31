@@ -10,25 +10,101 @@ use crate::protocol::error::{CodexError, ErrorCode};
 /// Embedded migration files, sorted by filename.
 /// Each entry is (version_number, filename, sql_content).
 const MIGRATIONS: &[(i64, &str, &str)] = &[
-    (1, "0001_threads", include_str!("../../migrations/0001_threads.sql")),
-    (2, "0002_logs", include_str!("../../migrations/0002_logs.sql")),
-    (3, "0003_logs_thread_id", include_str!("../../migrations/0003_logs_thread_id.sql")),
-    (4, "0004_thread_dynamic_tools", include_str!("../../migrations/0004_thread_dynamic_tools.sql")),
-    (5, "0005_threads_cli_version", include_str!("../../migrations/0005_threads_cli_version.sql")),
-    (6, "0006_memories", include_str!("../../migrations/0006_memories.sql")),
-    (7, "0007_threads_first_user_message", include_str!("../../migrations/0007_threads_first_user_message.sql")),
-    (8, "0008_backfill_state", include_str!("../../migrations/0008_backfill_state.sql")),
-    (9, "0009_stage1_outputs_rollout_slug", include_str!("../../migrations/0009_stage1_outputs_rollout_slug.sql")),
-    (10, "0010_logs_process_id", include_str!("../../migrations/0010_logs_process_id.sql")),
-    (11, "0011_logs_partition_prune_indexes", include_str!("../../migrations/0011_logs_partition_prune_indexes.sql")),
-    (12, "0012_logs_estimated_bytes", include_str!("../../migrations/0012_logs_estimated_bytes.sql")),
-    (13, "0013_threads_agent_nickname", include_str!("../../migrations/0013_threads_agent_nickname.sql")),
-    (14, "0014_agent_jobs", include_str!("../../migrations/0014_agent_jobs.sql")),
-    (15, "0015_agent_jobs_max_runtime_seconds", include_str!("../../migrations/0015_agent_jobs_max_runtime_seconds.sql")),
-    (16, "0016_memory_usage", include_str!("../../migrations/0016_memory_usage.sql")),
-    (17, "0017_phase2_selection_flag", include_str!("../../migrations/0017_phase2_selection_flag.sql")),
-    (18, "0018_phase2_selection_snapshot", include_str!("../../migrations/0018_phase2_selection_snapshot.sql")),
-    (19, "0019_mosaic_compat", include_str!("../../migrations/0019_mosaic_compat.sql")),
+    (
+        1,
+        "0001_threads",
+        include_str!("../../migrations/0001_threads.sql"),
+    ),
+    (
+        2,
+        "0002_logs",
+        include_str!("../../migrations/0002_logs.sql"),
+    ),
+    (
+        3,
+        "0003_logs_thread_id",
+        include_str!("../../migrations/0003_logs_thread_id.sql"),
+    ),
+    (
+        4,
+        "0004_thread_dynamic_tools",
+        include_str!("../../migrations/0004_thread_dynamic_tools.sql"),
+    ),
+    (
+        5,
+        "0005_threads_cli_version",
+        include_str!("../../migrations/0005_threads_cli_version.sql"),
+    ),
+    (
+        6,
+        "0006_memories",
+        include_str!("../../migrations/0006_memories.sql"),
+    ),
+    (
+        7,
+        "0007_threads_first_user_message",
+        include_str!("../../migrations/0007_threads_first_user_message.sql"),
+    ),
+    (
+        8,
+        "0008_backfill_state",
+        include_str!("../../migrations/0008_backfill_state.sql"),
+    ),
+    (
+        9,
+        "0009_stage1_outputs_rollout_slug",
+        include_str!("../../migrations/0009_stage1_outputs_rollout_slug.sql"),
+    ),
+    (
+        10,
+        "0010_logs_process_id",
+        include_str!("../../migrations/0010_logs_process_id.sql"),
+    ),
+    (
+        11,
+        "0011_logs_partition_prune_indexes",
+        include_str!("../../migrations/0011_logs_partition_prune_indexes.sql"),
+    ),
+    (
+        12,
+        "0012_logs_estimated_bytes",
+        include_str!("../../migrations/0012_logs_estimated_bytes.sql"),
+    ),
+    (
+        13,
+        "0013_threads_agent_nickname",
+        include_str!("../../migrations/0013_threads_agent_nickname.sql"),
+    ),
+    (
+        14,
+        "0014_agent_jobs",
+        include_str!("../../migrations/0014_agent_jobs.sql"),
+    ),
+    (
+        15,
+        "0015_agent_jobs_max_runtime_seconds",
+        include_str!("../../migrations/0015_agent_jobs_max_runtime_seconds.sql"),
+    ),
+    (
+        16,
+        "0016_memory_usage",
+        include_str!("../../migrations/0016_memory_usage.sql"),
+    ),
+    (
+        17,
+        "0017_phase2_selection_flag",
+        include_str!("../../migrations/0017_phase2_selection_flag.sql"),
+    ),
+    (
+        18,
+        "0018_phase2_selection_snapshot",
+        include_str!("../../migrations/0018_phase2_selection_snapshot.sql"),
+    ),
+    (
+        19,
+        "0019_mosaic_compat",
+        include_str!("../../migrations/0019_mosaic_compat.sql"),
+    ),
 ];
 
 /// The current schema version (number of migrations).
@@ -41,18 +117,27 @@ pub fn run_migrations(conn: &Connection) -> Result<(), CodexError> {
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL
-        )"
-    ).map_err(|e| CodexError::new(
-        ErrorCode::InternalError,
-        format!("failed to create _migrations table: {e}"),
-    ))?;
+        )",
+    )
+    .map_err(|e| {
+        CodexError::new(
+            ErrorCode::InternalError,
+            format!("failed to create _migrations table: {e}"),
+        )
+    })?;
 
     let max_version: i64 = conn
-        .query_row("SELECT COALESCE(MAX(version), 0) FROM _migrations", [], |r| r.get(0))
-        .map_err(|e| CodexError::new(
-            ErrorCode::InternalError,
-            format!("failed to query migration version: {e}"),
-        ))?;
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to query migration version: {e}"),
+            )
+        })?;
 
     for &(version, name, sql) in MIGRATIONS {
         if version <= max_version {
@@ -60,19 +145,24 @@ pub fn run_migrations(conn: &Connection) -> Result<(), CodexError> {
         }
         // Execute each statement in the migration file separately.
         // SQLite's execute_batch handles multiple statements separated by `;`.
-        conn.execute_batch(sql).map_err(|e| CodexError::new(
-            ErrorCode::InternalError,
-            format!("migration {version} ({name}) failed: {e}"),
-        ))?;
+        conn.execute_batch(sql).map_err(|e| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("migration {version} ({name}) failed: {e}"),
+            )
+        })?;
 
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![version, name, now],
-        ).map_err(|e| CodexError::new(
-            ErrorCode::InternalError,
-            format!("failed to record migration {version}: {e}"),
-        ))?;
+        )
+        .map_err(|e| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to record migration {version}: {e}"),
+            )
+        })?;
     }
 
     Ok(())
@@ -93,8 +183,12 @@ pub fn current_version(conn: &Connection) -> Result<i64, CodexError> {
         return Ok(0);
     }
 
-    conn.query_row("SELECT COALESCE(MAX(version), 0) FROM _migrations", [], |r| r.get(0))
-        .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))
+    conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM _migrations",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("{e}")))
 }
 
 #[cfg(test)]
@@ -103,7 +197,8 @@ mod tests {
 
     fn open_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .unwrap();
         conn
     }
 
@@ -164,10 +259,13 @@ mod tests {
              VALUES ('t1', '/tmp/r', 1000, 1000, 'cli', 'openai', '/tmp', 'test',
                      'read_only', 'on_request', '1.0', 'hello', 'nick', 'coder', 'enabled')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let title: String = conn
-            .query_row("SELECT title FROM threads WHERE id = 't1'", [], |r| r.get(0))
+            .query_row("SELECT title FROM threads WHERE id = 't1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(title, "test");
     }
@@ -196,7 +294,9 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let status: String = conn
-            .query_row("SELECT status FROM backfill_state WHERE id = 1", [], |r| r.get(0))
+            .query_row("SELECT status FROM backfill_state WHERE id = 1", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(status, "pending");
     }
@@ -212,7 +312,8 @@ mod tests {
              model_provider, cwd, title, sandbox_policy, approval_mode)
              VALUES ('t1', '/tmp/r', 1000, 1000, 'cli', 'openai', '/tmp', 'test', 'ro', 'or')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify columns from migrations 6,9,16,17,18
         conn.execute(
@@ -221,7 +322,8 @@ mod tests {
              selected_for_phase2, selected_for_phase2_source_updated_at)
              VALUES ('t1', 1000, 'mem', 'summary', 'slug', 1000, 5, 900, 1, 1000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM stage1_outputs", [], |r| r.get(0))
@@ -245,15 +347,17 @@ mod tests {
                 version INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 applied_at TEXT NOT NULL
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
 
         for &(version, name, sql) in &MIGRATIONS[..5] {
             conn.execute_batch(sql).unwrap();
             conn.execute(
                 "INSERT INTO _migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
                 rusqlite::params![version, name, "2026-01-01T00:00:00Z"],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         assert_eq!(current_version(&conn).unwrap(), 5);

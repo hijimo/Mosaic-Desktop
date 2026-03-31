@@ -102,10 +102,10 @@ pub struct RolloutLine {
 /// Whether a rollout item should be persisted for the given mode.
 pub fn is_persisted(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
-        RolloutItem::SessionMeta(_) | RolloutItem::Compacted(_) | RolloutItem::TurnContext(_)
-        | RolloutItem::ResponseItem(_) => {
-            true
-        }
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::ResponseItem(_) => true,
         RolloutItem::EventMsg(ev) => should_persist_event(ev, mode),
     }
 }
@@ -143,6 +143,7 @@ fn is_extended_event(ev: &EventMsg) -> bool {
     matches!(
         ev,
         EventMsg::Error(_)
+            | EventMsg::WebSearchBegin(_)
             | EventMsg::WebSearchEnd(_)
             | EventMsg::ExecCommandEnd(_)
             | EventMsg::PatchApplyEnd(_)

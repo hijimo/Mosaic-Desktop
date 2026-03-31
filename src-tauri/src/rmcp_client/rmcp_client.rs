@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use anyhow::anyhow;
-use futures::Future;
+use anyhow::Result;
 use futures::future::BoxFuture;
+use futures::Future;
 use oauth2::TokenResponse;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
@@ -68,8 +68,7 @@ type ServiceFuture = Pin<
 >;
 
 /// A factory closure that, given a LoggingClientHandler, returns a ServiceFuture.
-type TransportFactory =
-    Box<dyn FnOnce(LoggingClientHandler) -> ServiceFuture + Send>;
+type TransportFactory = Box<dyn FnOnce(LoggingClientHandler) -> ServiceFuture + Send>;
 
 enum ClientState {
     Connecting {
@@ -204,9 +203,8 @@ impl RmcpClient {
             });
         }
 
-        let factory: TransportFactory = Box::new(move |handler| {
-            Box::pin(service::serve_client(handler, transport))
-        });
+        let factory: TransportFactory =
+            Box::new(move |handler| Box::pin(service::serve_client(handler, transport)));
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
@@ -240,12 +238,7 @@ impl RmcpClient {
             // Try loading stored OAuth tokens
             match load_oauth_tokens(server_name, url) {
                 Ok(Some(tokens)) => {
-                    let access_token = tokens
-                        .token_response
-                        .0
-                        .access_token()
-                        .secret()
-                        .to_string();
+                    let access_token = tokens.token_response.0.access_token().secret().to_string();
                     Some(format!("Bearer {access_token}"))
                 }
                 Ok(None) => None,
@@ -262,9 +255,8 @@ impl RmcpClient {
 
         let transport = StreamableHttpClientTransport::from_config(config);
 
-        let factory: TransportFactory = Box::new(move |handler| {
-            Box::pin(service::serve_client(handler, transport))
-        });
+        let factory: TransportFactory =
+            Box::new(move |handler| Box::pin(service::serve_client(handler, transport)));
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {

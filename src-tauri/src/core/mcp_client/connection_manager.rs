@@ -2,14 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ListToolsRequest, ServerResult,
-};
-use rmcp::service::{RoleClient, RunningService, serve_client};
-use rmcp::transport::TokioChildProcess;
+use rmcp::model::{CallToolRequest, CallToolRequestParams, ListToolsRequest, ServerResult};
+use rmcp::service::{serve_client, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
+use rmcp::transport::TokioChildProcess;
 use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -100,9 +98,7 @@ impl McpConnectionManager {
                     config: config.clone(),
                     tools: HashMap::new(),
                     client: None,
-                    tool_timeout: config
-                        .tool_timeout_sec
-                        .unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                    tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
                 },
             );
             return Ok(());
@@ -119,9 +115,7 @@ impl McpConnectionManager {
                     config: config.clone(),
                     tools: HashMap::new(),
                     client: None,
-                    tool_timeout: config
-                        .tool_timeout_sec
-                        .unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                    tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
                 },
             );
         }
@@ -129,36 +123,34 @@ impl McpConnectionManager {
         let timeout = config
             .startup_timeout_sec
             .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-        let client = match tokio::time::timeout(
-            timeout,
-            self.build_client(server_name, &config.transport),
-        )
-        .await
-        {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => {
-                let msg = format!("MCP connect '{server_name}' failed: {e}");
-                self.mark_failed(server_name, &msg).await;
-                self.emit_error(&msg).await;
-                self.emit_startup_update(
-                    server_name,
-                    McpStartupStatus::Failed { error: msg.clone() },
-                )
-                .await;
-                return Err(CodexError::new(ErrorCode::McpServerUnavailable, msg));
-            }
-            Err(_) => {
-                let msg = format!("MCP connect '{server_name}' timed out after {timeout:?}");
-                self.mark_failed(server_name, &msg).await;
-                self.emit_error(&msg).await;
-                self.emit_startup_update(
-                    server_name,
-                    McpStartupStatus::Failed { error: msg.clone() },
-                )
-                .await;
-                return Err(CodexError::new(ErrorCode::McpServerUnavailable, msg));
-            }
-        };
+        let client =
+            match tokio::time::timeout(timeout, self.build_client(server_name, &config.transport))
+                .await
+            {
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    let msg = format!("MCP connect '{server_name}' failed: {e}");
+                    self.mark_failed(server_name, &msg).await;
+                    self.emit_error(&msg).await;
+                    self.emit_startup_update(
+                        server_name,
+                        McpStartupStatus::Failed { error: msg.clone() },
+                    )
+                    .await;
+                    return Err(CodexError::new(ErrorCode::McpServerUnavailable, msg));
+                }
+                Err(_) => {
+                    let msg = format!("MCP connect '{server_name}' timed out after {timeout:?}");
+                    self.mark_failed(server_name, &msg).await;
+                    self.emit_error(&msg).await;
+                    self.emit_startup_update(
+                        server_name,
+                        McpStartupStatus::Failed { error: msg.clone() },
+                    )
+                    .await;
+                    return Err(CodexError::new(ErrorCode::McpServerUnavailable, msg));
+                }
+            };
 
         let client = Arc::new(client);
         {
@@ -220,10 +212,7 @@ impl McpConnectionManager {
             .and_then(|c| c.config.disabled_reason.clone())
     }
 
-    pub async fn discover_tools(
-        &self,
-        server_name: &str,
-    ) -> Result<Vec<McpToolInfo>, CodexError> {
+    pub async fn discover_tools(&self, server_name: &str) -> Result<Vec<McpToolInfo>, CodexError> {
         self.discover_tools_internal(server_name).await
     }
 
@@ -552,7 +541,11 @@ fn sanitize_tool_name(name: &str) -> String {
         .collect()
 }
 
-pub fn is_tool_allowed(tool_name: &str, enabled: Option<&[String]>, disabled: Option<&[String]>) -> bool {
+pub fn is_tool_allowed(
+    tool_name: &str,
+    enabled: Option<&[String]>,
+    disabled: Option<&[String]>,
+) -> bool {
     if let Some(enabled) = enabled {
         return enabled.iter().any(|e| e == tool_name);
     }

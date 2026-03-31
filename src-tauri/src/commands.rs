@@ -1,15 +1,15 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use tracing::error;
 
-use crate::config::{deserialize_toml, ConfigLayerStack};
-use crate::core::rollout::{RolloutRecorder, RolloutRecorderParams};
+use crate::config::{deserialize_toml, ConfigLayerStack, ConfigRequirements, ConfigService};
 use crate::core::rollout::policy::{EventPersistenceMode, RolloutItem};
-use crate::core::state_db::{StateDb, PersistedThreadMeta};
+use crate::core::rollout::{RolloutRecorder, RolloutRecorderParams};
+use crate::core::state_db::{PersistedThreadMeta, StateDb};
 use crate::protocol::event::{Event, EventMsg};
 use crate::protocol::submission::{Op, Submission};
 use crate::share::types::{ShareMessageRequest, ShareMessageResponse};
@@ -42,6 +42,7 @@ pub struct AppState {
     pub thread_meta: Arc<Mutex<HashMap<String, ThreadMeta>>>,
     pub recorders: Arc<Mutex<HashMap<String, RolloutRecorder>>>,
     pub config: Arc<Mutex<ConfigLayerStack>>,
+    pub config_requirements: Arc<Mutex<ConfigRequirements>>,
     pub db: StateDb,
 }
 
@@ -60,16 +61,23 @@ pub fn spawn_event_bridge(
 ) {
     tauri::async_runtime::spawn(async move {
         // Store recorder reference for submit_op access
-        recorders.lock().await.insert(thread_id.clone(), recorder.clone());
+        recorders
+            .lock()
+            .await
+            .insert(thread_id.clone(), recorder.clone());
 
         while let Ok(event) = eq_rx.recv().await {
             // Persist event to rollout file
-            let _ = recorder.record_items(&[RolloutItem::EventMsg(event.msg.clone())]).await;
+            let _ = recorder
+                .record_items(&[RolloutItem::EventMsg(event.msg.clone())])
+                .await;
 
             // Additionally persist RawResponseItem as a structured RolloutItem::ResponseItem
             // so that resume can reconstruct full history including tool calls.
             if let EventMsg::RawResponseItem(ref raw) = event.msg {
-                let _ = recorder.record_items(&[RolloutItem::ResponseItem(raw.item.clone())]).await;
+                let _ = recorder
+                    .record_items(&[RolloutItem::ResponseItem(raw.item.clone())])
+                    .await;
             }
 
             // Update thread metadata from session_configured event
@@ -82,13 +90,15 @@ pub fn spawn_event_bridge(
                     m.model_provider_id = Some(cfg.model_provider_id.clone());
                     m.rollout_path = Some(rp.clone());
                 }
-                let _ = db.update_thread_fields(
-                    &thread_id,
-                    Some(&cfg.model),
-                    Some(&cfg.model_provider_id),
-                    None,
-                    Some(&rp),
-                ).await;
+                let _ = db
+                    .update_thread_fields(
+                        &thread_id,
+                        Some(&cfg.model),
+                        Some(&cfg.model_provider_id),
+                        None,
+                        Some(&rp),
+                    )
+                    .await;
             }
             // Update thread name
             if let EventMsg::ThreadNameUpdated(ref upd) = event.msg {
@@ -97,7 +107,9 @@ pub fn spawn_event_bridge(
                     m.name = upd.thread_name.clone();
                 }
                 if let Some(name) = &upd.thread_name {
-                    let _ = db.update_thread_fields(&thread_id, None, None, Some(name), None).await;
+                    let _ = db
+                        .update_thread_fields(&thread_id, None, None, Some(name), None)
+                        .await;
                 }
             }
 
@@ -126,6 +138,80 @@ fn mosaic_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".mosaic"))
 }
 
+fn find_project_root_for_markers(
+    cwd: &Path,
+    markers: &[String],
+) -> Result<Option<PathBuf>, String> {
+    if markers.is_empty() {
+        return Ok(None);
+    }
+
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    for ancestor in canonical_cwd.ancestors() {
+        for marker in markers {
+            let marker_path = ancestor.join(marker);
+            match std::fs::metadata(&marker_path) {
+                Ok(_) => return Ok(Some(ancestor.to_path_buf())),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect project root marker '{}': {err}",
+                        marker_path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn load_runtime_config_for_cwd_with_service(
+    service: &ConfigService,
+    cwd: &Path,
+    fallback_config: &ConfigLayerStack,
+    fallback_requirements: &ConfigRequirements,
+) -> Result<(ConfigLayerStack, ConfigRequirements), String> {
+    let markers = fallback_config
+        .merge()
+        .project_root_markers
+        .unwrap_or_else(|| vec![".git".to_string()]);
+    let project_root = find_project_root_for_markers(cwd, &markers)?;
+
+    let config = service
+        .load_layers(project_root.as_deref())
+        .map_err(|err| format!("failed to load config for '{}': {err}", cwd.display()))?;
+    let requirements = service
+        .load_requirements(project_root.as_deref())
+        .map_err(|err| format!("failed to load requirements for '{}': {err}", cwd.display()))?;
+
+    let config = if config.merge() == ConfigLayerStack::new().merge() {
+        fallback_config.clone()
+    } else {
+        config
+    };
+    let requirements = if requirements == ConfigRequirements::default() {
+        fallback_requirements.clone()
+    } else {
+        requirements
+    };
+
+    Ok((config, requirements))
+}
+
+fn load_runtime_config_for_cwd(
+    cwd: &Path,
+    fallback_config: &ConfigLayerStack,
+    fallback_requirements: &ConfigRequirements,
+) -> Result<(ConfigLayerStack, ConfigRequirements), String> {
+    let Some(codex_home) = ConfigService::find_codex_home() else {
+        return Ok((fallback_config.clone(), fallback_requirements.clone()));
+    };
+
+    let service = ConfigService::new(codex_home);
+    load_runtime_config_for_cwd_with_service(&service, cwd, fallback_config, fallback_requirements)
+}
+
 // ── Tauri commands ───────────────────────────────────────────────
 
 /// Submit an operation to a specific thread.
@@ -141,18 +227,37 @@ pub async fn submit_op(
     // Persist user message to rollout before sending to engine
     if let Some(items) = op.user_input_items() {
         if let Some(recorder) = state.recorders.lock().await.get(&thread_id) {
-            let content: Vec<crate::protocol::types::ContentItem> = items.iter().map(|i| match i {
-                crate::protocol::types::UserInput::Text { text, .. } =>
-                    crate::protocol::types::ContentItem::InputText { text: text.clone() },
-                crate::protocol::types::UserInput::Image { image_url } =>
-                    crate::protocol::types::ContentItem::InputImage { image_url: image_url.clone() },
-                crate::protocol::types::UserInput::LocalImage { path } =>
-                    crate::protocol::types::ContentItem::InputText { text: format!("[image: {}]", path.display()) },
-                crate::protocol::types::UserInput::Skill { name, path } =>
-                    crate::protocol::types::ContentItem::InputText { text: format!("<skill>\n<name>{name}</name>\n<path>{}</path>\n</skill>", path.display()) },
-                crate::protocol::types::UserInput::Mention { name, path } =>
-                    crate::protocol::types::ContentItem::InputText { text: format!("@{name} ({path})") },
-            }).collect();
+            let content: Vec<crate::protocol::types::ContentItem> = items
+                .iter()
+                .map(|i| match i {
+                    crate::protocol::types::UserInput::Text { text, .. } => {
+                        crate::protocol::types::ContentItem::InputText { text: text.clone() }
+                    }
+                    crate::protocol::types::UserInput::Image { image_url } => {
+                        crate::protocol::types::ContentItem::InputImage {
+                            image_url: image_url.clone(),
+                        }
+                    }
+                    crate::protocol::types::UserInput::LocalImage { path } => {
+                        crate::protocol::types::ContentItem::InputText {
+                            text: format!("[image: {}]", path.display()),
+                        }
+                    }
+                    crate::protocol::types::UserInput::Skill { name, path } => {
+                        crate::protocol::types::ContentItem::InputText {
+                            text: format!(
+                                "<skill>\n<name>{name}</name>\n<path>{}</path>\n</skill>",
+                                path.display()
+                            ),
+                        }
+                    }
+                    crate::protocol::types::UserInput::Mention { name, path } => {
+                        crate::protocol::types::ContentItem::InputText {
+                            text: format!("@{name} ({path})"),
+                        }
+                    }
+                })
+                .collect();
             let response_item = crate::protocol::types::ResponseItem::Message {
                 id: Some(uuid::Uuid::new_v4().to_string()),
                 role: "user".into(),
@@ -160,7 +265,9 @@ pub async fn submit_op(
                 end_turn: None,
                 phase: None,
             };
-            let _ = recorder.record_items(&[RolloutItem::ResponseItem(response_item)]).await;
+            let _ = recorder
+                .record_items(&[RolloutItem::ResponseItem(response_item)])
+                .await;
         }
     }
 
@@ -183,14 +290,21 @@ pub async fn thread_start(
     cwd: Option<String>,
 ) -> Result<String, String> {
     let thread_id = uuid::Uuid::new_v4().to_string();
-    let config = state.config.lock().await.clone();
     let work_dir = cwd
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let fallback_config = state.config.lock().await.clone();
+    let fallback_requirements = state.config_requirements.lock().await.clone();
+    let (config, config_requirements) =
+        load_runtime_config_for_cwd(&work_dir, &fallback_config, &fallback_requirements)?;
 
-    let handle = crate::core::codex::Codex::spawn(config, work_dir.clone())
-        .await
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let handle = crate::core::codex::Codex::spawn_with_requirements(
+        config,
+        config_requirements,
+        work_dir.clone(),
+    )
+    .await
+    .map_err(|e| format!("spawn failed: {e}"))?;
 
     let recorder = RolloutRecorder::new(
         &mosaic_home(),
@@ -218,21 +332,36 @@ pub async fn thread_start(
         forked_from: None,
         rollout_path: Some(rollout_path.clone()),
     };
-    state.thread_meta.lock().await.insert(thread_id.clone(), meta);
+    state
+        .thread_meta
+        .lock()
+        .await
+        .insert(thread_id.clone(), meta);
 
     // Persist to DB
-    let _ = state.db.upsert_thread(&PersistedThreadMeta {
-        thread_id: thread_id.clone(),
-        cwd: work_dir.to_string_lossy().into_owned(),
-        model: None,
-        model_provider_id: None,
-        name: None,
-        created_at: now.to_rfc3339(),
-        forked_from: None,
-        rollout_path: Some(rollout_path),
-    }).await;
+    let _ = state
+        .db
+        .upsert_thread(&PersistedThreadMeta {
+            thread_id: thread_id.clone(),
+            cwd: work_dir.to_string_lossy().into_owned(),
+            model: None,
+            model_provider_id: None,
+            name: None,
+            created_at: now.to_rfc3339(),
+            forked_from: None,
+            rollout_path: Some(rollout_path),
+        })
+        .await;
 
-    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
+    spawn_event_bridge(
+        app,
+        thread_id.clone(),
+        handle.rx_event,
+        state.thread_meta.clone(),
+        state.recorders.clone(),
+        recorder,
+        state.db.clone(),
+    );
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -292,7 +421,10 @@ pub async fn thread_get_info(
             return Ok(m.clone());
         }
     }
-    state.db.get_thread(&thread_id).await
+    state
+        .db
+        .get_thread(&thread_id)
+        .await
         .map(|p| ThreadMeta {
             thread_id: p.thread_id,
             cwd: p.cwd,
@@ -308,19 +440,19 @@ pub async fn thread_get_info(
 
 /// Archive (remove) a thread.
 #[tauri::command]
-pub async fn thread_archive(
-    state: State<'_, AppState>,
-    thread_id: String,
-) -> Result<(), String> {
+pub async fn thread_archive(state: State<'_, AppState>, thread_id: String) -> Result<(), String> {
     let mut threads = state.threads.lock().await;
     let handle = threads
         .remove(&thread_id)
         .ok_or_else(|| format!("thread not found: {thread_id}"))?;
     // Send shutdown to gracefully stop the engine
-    let _ = handle.sq_tx.send(Submission {
-        id: uuid::Uuid::new_v4().to_string(),
-        op: Op::Shutdown,
-    }).await;
+    let _ = handle
+        .sq_tx
+        .send(Submission {
+            id: uuid::Uuid::new_v4().to_string(),
+            op: Op::Shutdown,
+        })
+        .await;
     state.thread_meta.lock().await.remove(&thread_id);
     let _ = state.db.delete_thread(&thread_id).await;
     Ok(())
@@ -333,15 +465,20 @@ pub async fn thread_get_messages(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Vec<crate::core::thread_history::TurnGroup>, String> {
-    let persisted = state.db.get_thread(&thread_id).await
+    let persisted = state
+        .db
+        .get_thread(&thread_id)
+        .await
         .ok_or_else(|| format!("thread not found: {thread_id}"))?;
-    let rollout_path_str = persisted.rollout_path
+    let rollout_path_str = persisted
+        .rollout_path
         .ok_or_else(|| format!("no rollout path for thread: {thread_id}"))?;
     let path = std::path::PathBuf::from(&rollout_path_str);
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = tokio::fs::read_to_string(&path).await
+    let text = tokio::fs::read_to_string(&path)
+        .await
         .map_err(|e| format!("failed to read rollout: {e}"))?;
     let rollout_items = parse_rollout_items(&text);
     Ok(crate::core::thread_history::build_turn_groups_from_rollout_items(&rollout_items))
@@ -356,7 +493,9 @@ pub fn parse_rollout_items(text: &str) -> Vec<crate::core::rollout::policy::Roll
     let mut items = Vec::new();
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => continue,
@@ -367,10 +506,12 @@ pub fn parse_rollout_items(text: &str) -> Vec<crate::core::rollout::policy::Roll
             // Session metadata
             "session_meta" => {
                 if let Some(meta) = v.get("meta") {
-                    if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(serde_json::json!({
-                        "meta": meta,
-                        "git": v.get("git"),
-                    })) {
+                    if let Ok(meta_line) =
+                        serde_json::from_value::<SessionMetaLine>(serde_json::json!({
+                            "meta": meta,
+                            "git": v.get("git"),
+                        }))
+                    {
                         items.push(RolloutItem::SessionMeta(meta_line));
                     }
                 }
@@ -382,24 +523,45 @@ pub fn parse_rollout_items(text: &str) -> Vec<crate::core::rollout::policy::Roll
                 }
             }
             // FunctionCall/Output are also ResponseItems
-            "function_call" | "function_call_output" | "custom_tool_call"
-            | "custom_tool_call_output" | "local_shell_call" => {
+            "function_call"
+            | "function_call_output"
+            | "custom_tool_call"
+            | "custom_tool_call_output"
+            | "local_shell_call" => {
                 if let Ok(ri) = serde_json::from_value::<ResponseItem>(v) {
                     items.push(RolloutItem::ResponseItem(ri));
                 }
             }
             // Known EventMsg types — parse directly without clone
-            "task_started" | "task_complete" | "turn_aborted"
-            | "user_message" | "agent_message"
-            | "agent_reasoning" | "agent_reasoning_raw_content"
-            | "token_count" | "context_compacted" | "thread_rolled_back"
-            | "error" | "exec_command_end" | "mcp_tool_call_end"
-            | "patch_apply_end" | "web_search_end" | "apply_patch_approval_request"
-            | "view_image_tool_call" | "dynamic_tool_call_request" | "dynamic_tool_call_response"
-            | "item_started" | "item_completed"
-            | "collab_agent_spawn_end" | "collab_agent_interaction_end"
-            | "collab_waiting_end" | "collab_close_end" | "collab_resume_end"
-            | "entered_review_mode" | "exited_review_mode"
+            "task_started"
+            | "task_complete"
+            | "turn_aborted"
+            | "user_message"
+            | "agent_message"
+            | "agent_reasoning"
+            | "agent_reasoning_raw_content"
+            | "token_count"
+            | "context_compacted"
+            | "thread_rolled_back"
+            | "error"
+            | "exec_command_end"
+            | "mcp_tool_call_end"
+            | "patch_apply_end"
+            | "web_search_begin"
+            | "web_search_end"
+            | "apply_patch_approval_request"
+            | "view_image_tool_call"
+            | "dynamic_tool_call_request"
+            | "dynamic_tool_call_response"
+            | "item_started"
+            | "item_completed"
+            | "collab_agent_spawn_end"
+            | "collab_agent_interaction_end"
+            | "collab_waiting_end"
+            | "collab_close_end"
+            | "collab_resume_end"
+            | "entered_review_mode"
+            | "exited_review_mode"
             | "undo_completed" => {
                 if let Ok(ev) = serde_json::from_value::<EventMsg>(v) {
                     items.push(RolloutItem::EventMsg(ev));
@@ -439,15 +601,23 @@ pub async fn thread_resume(
     }
 
     // 2. Look up persisted metadata from DB.
-    let persisted = state.db.get_thread(&thread_id).await
+    let persisted = state
+        .db
+        .get_thread(&thread_id)
+        .await
         .ok_or_else(|| format!("thread not found in database: {thread_id}"))?;
 
-    let rollout_path_str = persisted.rollout_path.clone()
+    let rollout_path_str = persisted
+        .rollout_path
+        .clone()
         .ok_or_else(|| format!("no rollout path for thread: {thread_id}"))?;
     let rollout_path = PathBuf::from(&rollout_path_str);
 
     if !rollout_path.exists() {
-        return Err(format!("rollout file not found: {}", rollout_path.display()));
+        return Err(format!(
+            "rollout file not found: {}",
+            rollout_path.display()
+        ));
     }
 
     // 3. Load history from rollout file.
@@ -457,9 +627,13 @@ pub async fn thread_resume(
 
     // 4. Spawn Codex engine with resumed history (synchronous injection).
     let work_dir = PathBuf::from(&persisted.cwd);
-    let config = state.config.lock().await.clone();
-    let handle = crate::core::codex::Codex::spawn_with_history(
+    let fallback_config = state.config.lock().await.clone();
+    let fallback_requirements = state.config_requirements.lock().await.clone();
+    let (config, config_requirements) =
+        load_runtime_config_for_cwd(&work_dir, &fallback_config, &fallback_requirements)?;
+    let handle = crate::core::codex::Codex::spawn_with_history_and_requirements(
         config,
+        config_requirements,
         work_dir.clone(),
         crate::core::initial_history::InitialHistory::Resumed(resumed),
     )
@@ -488,13 +662,28 @@ pub async fn thread_resume(
         model: persisted.model,
         model_provider_id: persisted.model_provider_id,
         name: persisted.name,
-        created_at: persisted.created_at.parse().unwrap_or_else(|_| chrono::Utc::now()),
+        created_at: persisted
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now()),
         forked_from: persisted.forked_from,
         rollout_path: Some(rp),
     };
-    state.thread_meta.lock().await.insert(thread_id.clone(), meta.clone());
+    state
+        .thread_meta
+        .lock()
+        .await
+        .insert(thread_id.clone(), meta.clone());
 
-    spawn_event_bridge(app, thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
+    spawn_event_bridge(
+        app,
+        thread_id.clone(),
+        handle.rx_event,
+        state.thread_meta.clone(),
+        state.recorders.clone(),
+        recorder,
+        state.db.clone(),
+    );
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -555,13 +744,17 @@ pub async fn thread_fork(
     };
 
     let new_thread_id = uuid::Uuid::new_v4().to_string();
-    let config = state.config.lock().await.clone();
     let work_dir = cwd
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let fallback_config = state.config.lock().await.clone();
+    let fallback_requirements = state.config_requirements.lock().await.clone();
+    let (config, config_requirements) =
+        load_runtime_config_for_cwd(&work_dir, &fallback_config, &fallback_requirements)?;
 
-    let handle = crate::core::codex::Codex::spawn_with_history(
+    let handle = crate::core::codex::Codex::spawn_with_history_and_requirements(
         config,
+        config_requirements,
         work_dir.clone(),
         initial_history,
     )
@@ -601,20 +794,35 @@ pub async fn thread_fork(
         forked_from: Some(source_thread_id.clone()),
         rollout_path: Some(rollout_path.clone()),
     };
-    state.thread_meta.lock().await.insert(new_thread_id.clone(), meta);
+    state
+        .thread_meta
+        .lock()
+        .await
+        .insert(new_thread_id.clone(), meta);
 
-    let _ = state.db.upsert_thread(&PersistedThreadMeta {
-        thread_id: new_thread_id.clone(),
-        cwd: work_dir.to_string_lossy().into_owned(),
-        model: None,
-        model_provider_id: None,
-        name: None,
-        created_at: now.to_rfc3339(),
-        forked_from: Some(source_thread_id),
-        rollout_path: Some(rollout_path),
-    }).await;
+    let _ = state
+        .db
+        .upsert_thread(&PersistedThreadMeta {
+            thread_id: new_thread_id.clone(),
+            cwd: work_dir.to_string_lossy().into_owned(),
+            model: None,
+            model_provider_id: None,
+            name: None,
+            created_at: now.to_rfc3339(),
+            forked_from: Some(source_thread_id),
+            rollout_path: Some(rollout_path),
+        })
+        .await;
 
-    spawn_event_bridge(app, new_thread_id.clone(), handle.rx_event, state.thread_meta.clone(), state.recorders.clone(), recorder, state.db.clone());
+    spawn_event_bridge(
+        app,
+        new_thread_id.clone(),
+        handle.rx_event,
+        state.thread_meta.clone(),
+        state.recorders.clone(),
+        recorder,
+        state.db.clone(),
+    );
 
     let mut threads = state.threads.lock().await;
     threads.insert(
@@ -676,10 +884,7 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value,
 
 /// Update configuration from a TOML string.
 #[tauri::command]
-pub async fn update_config(
-    state: State<'_, AppState>,
-    toml_content: String,
-) -> Result<(), String> {
+pub async fn update_config(state: State<'_, AppState>, toml_content: String) -> Result<(), String> {
     let parsed = deserialize_toml(&toml_content).map_err(|e| e.message)?;
     let mut config = state.config.lock().await;
     config.add_layer(crate::config::ConfigLayer::Session, parsed);
@@ -696,17 +901,17 @@ pub fn get_cwd() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageResponse, String> {
-    crate::share::share_message(payload)
-        .await
-        .map_err(|e| {
-            error!("share message failed: {e:#}");
-            format!("share message failed: {e:#}")
-        })
+    crate::share::share_message(payload).await.map_err(|e| {
+        error!("share message failed: {e:#}");
+        format!("share message failed: {e:#}")
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigService;
+    use crate::protocol::types::WebSearchMode;
 
     #[test]
     fn parse_rollout_items_and_build_turn_groups() {
@@ -717,10 +922,19 @@ mod tests {
 {"timestamp":"2026-03-24T08:58:04.300Z","type":"task_complete","turn_id":"turn-1"}
 "#;
         let items = parse_rollout_items(rollout);
-        assert!(items.len() >= 3, "expected at least 3 items, got {}", items.len());
+        assert!(
+            items.len() >= 3,
+            "expected at least 3 items, got {}",
+            items.len()
+        );
 
         let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
-        assert_eq!(groups.len(), 1, "expected 1 turn group, got {}", groups.len());
+        assert_eq!(
+            groups.len(),
+            1,
+            "expected 1 turn group, got {}",
+            groups.len()
+        );
         assert_eq!(groups[0].turn_id, "turn-1");
         assert_eq!(groups[0].items.len(), 2); // user + agent
     }
@@ -737,6 +951,44 @@ mod tests {
         let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].items.len(), 2); // user + agent from ResponseItem::Message
+    }
+
+    #[test]
+    fn parse_rollout_items_preserves_web_search_lifecycle() {
+        let rollout = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","meta":{"id":"t1","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","cli_version":"0.1.0","source":"desktop"}}
+{"timestamp":"2026-01-01T00:00:01Z","type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}
+{"timestamp":"2026-01-01T00:00:02Z","type":"web_search_begin","call_id":"ws-1"}
+{"timestamp":"2026-01-01T00:00:03Z","type":"web_search_call","id":"ws-1","status":"completed","action":{"type":"search","query":"rust web search"}}
+{"timestamp":"2026-01-01T00:00:04Z","type":"web_search_end","call_id":"ws-1","query":"rust web search","action":{"type":"search","query":"rust web search"}}
+{"timestamp":"2026-01-01T00:00:05Z","type":"task_complete","turn_id":"turn-1"}
+"#;
+        let items = parse_rollout_items(rollout);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::WebSearchBegin(begin)) if begin.call_id == "ws-1"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            RolloutItem::ResponseItem(crate::protocol::types::ResponseItem::WebSearchCall { id, .. })
+                if id.as_deref() == Some("ws-1")
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::WebSearchEnd(end))
+                if end.call_id == "ws-1" && end.query == "rust web search"
+        )));
+
+        let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].items.len(), 1);
+        match &groups[0].items[0] {
+            crate::protocol::items::TurnItem::WebSearch(search) => {
+                assert_eq!(search.id, "ws-1");
+                assert_eq!(search.query, "rust web search");
+            }
+            other => panic!("expected web search item, got {other:?}"),
+        }
     }
 
     #[test]
@@ -757,7 +1009,9 @@ mod tests {
 {"timestamp":"2026-01-01T00:00:03Z","type":"message","id":"a1","role":"assistant","content":[{"type":"output_text","text":"hi there"}],"phase":"final_answer"}
 {"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","turn_id":"turn-1"}
 "#;
-        tokio::fs::write(&rollout_path, rollout_content).await.unwrap();
+        tokio::fs::write(&rollout_path, rollout_content)
+            .await
+            .unwrap();
 
         let meta = PersistedThreadMeta {
             thread_id: "t-test".into(),
@@ -787,18 +1041,85 @@ mod tests {
 
     #[tokio::test]
     async fn verify_real_rollout_fixture() {
-        let path = std::path::Path::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/test-rollout.jsonl")
-        );
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/test-rollout.jsonl"
+        ));
         assert!(path.exists(), "fixture file missing");
 
         let text = tokio::fs::read_to_string(path).await.unwrap();
         let items = parse_rollout_items(&text);
-        assert!(items.len() >= 5, "expected >=5 rollout items, got {}", items.len());
+        assert!(
+            items.len() >= 5,
+            "expected >=5 rollout items, got {}",
+            items.len()
+        );
 
         let groups = crate::core::thread_history::build_turn_groups_from_rollout_items(&items);
         assert!(!groups.is_empty(), "expected at least 1 turn group");
         let total: usize = groups.iter().map(|g| g.items.len()).sum();
         assert!(total >= 2, "expected >=2 items, got {total}");
+    }
+
+    #[test]
+    fn find_project_root_for_markers_walks_up_from_cwd() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().join("repo");
+        let nested = project.join("apps/desktop");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(project.join(".git"), "gitdir: /fake\n").unwrap();
+
+        let root =
+            find_project_root_for_markers(&nested, &[".git".to_string()]).expect("project root");
+
+        assert_eq!(root, Some(project));
+    }
+
+    #[test]
+    fn load_runtime_config_for_cwd_with_service_applies_project_layers() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let codex_home = tmp.path().join("codex-home");
+        let service = ConfigService::new(codex_home.clone());
+        let project = tmp.path().join("repo");
+        let cwd = project.join("apps/desktop");
+
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+
+        std::fs::write(
+            codex_home.join("config.toml"),
+            "model = \"user-model\"\nproject_root_markers = [\".git\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            codex_home.join("requirements.toml"),
+            "allowed_web_search_modes = [\"live\"]\n",
+        )
+        .unwrap();
+        std::fs::write(project.join(".git"), "gitdir: /fake\n").unwrap();
+        std::fs::write(
+            project.join(".codex").join("config.toml"),
+            "model = \"project-model\"\nweb_search = \"cached\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".codex").join("requirements.toml"),
+            "allowed_web_search_modes = [\"cached\"]\n",
+        )
+        .unwrap();
+
+        let (config, requirements) = load_runtime_config_for_cwd_with_service(
+            &service,
+            &cwd,
+            &ConfigLayerStack::new(),
+            &ConfigRequirements::default(),
+        )
+        .expect("runtime config");
+
+        let merged = config.merge();
+        assert_eq!(merged.model.as_deref(), Some("project-model"));
+        assert_eq!(merged.web_search, Some(WebSearchMode::Cached));
+        assert_eq!(requirements.web_search_mode.value(), WebSearchMode::Cached);
     }
 }

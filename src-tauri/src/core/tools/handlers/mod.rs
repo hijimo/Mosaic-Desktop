@@ -22,8 +22,8 @@ pub mod unified_exec;
 pub mod view_image;
 
 // Re-exports for convenience
-pub use agent_jobs::BatchJobHandler;
 pub use agent_jobs::AgentJobsHandler; // backward compat alias
+pub use agent_jobs::BatchJobHandler;
 pub use apply_patch::ApplyPatchHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::{JsReplHandler, JsReplResetHandler};
@@ -35,13 +35,13 @@ pub use plan::PlanHandler;
 pub use plan::PLAN_TOOL;
 pub use presentation_artifact::PresentationArtifactHandler;
 pub use read_file::ReadFileHandler;
-pub use request_user_input::RequestUserInputHandler;
 pub use request_user_input::request_user_input_tool_description;
+pub use request_user_input::RequestUserInputHandler;
 pub use search_tool_bm25::SearchToolBm25Handler;
-pub use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
 pub use search_tool_bm25::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
-pub use shell::ShellHandler;
+pub use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
 pub use shell::is_known_safe_command;
+pub use shell::ShellHandler;
 pub use shell_command::ShellCommandHandler;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
@@ -57,12 +57,18 @@ where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str(arguments).map_err(|e| {
-        CodexError::new(ErrorCode::InvalidInput, format!("failed to parse function arguments: {e}"))
+        CodexError::new(
+            ErrorCode::InvalidInput,
+            format!("failed to parse function arguments: {e}"),
+        )
     })
 }
 
 /// Parse JSON string arguments with a base path for resolving relative paths.
-pub fn parse_arguments_with_base_path<T>(arguments: &str, _base_path: &Path) -> Result<T, CodexError>
+pub fn parse_arguments_with_base_path<T>(
+    arguments: &str,
+    _base_path: &Path,
+) -> Result<T, CodexError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -73,7 +79,10 @@ where
 
 /// Resolve the effective working directory from arguments' `workdir` field.
 /// Matches source Codex `resolve_workdir_base_path` which uses `resolve_path`.
-pub fn resolve_workdir_base_path(arguments: &str, default_cwd: &Path) -> Result<PathBuf, CodexError> {
+pub fn resolve_workdir_base_path(
+    arguments: &str,
+    default_cwd: &Path,
+) -> Result<PathBuf, CodexError> {
     let args: serde_json::Value = parse_arguments(arguments)?;
     Ok(args
         .get("workdir")
@@ -98,7 +107,9 @@ fn resolve_path(base: &Path, path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in joined.components() {
         match component {
-            std::path::Component::ParentDir => { normalized.pop(); }
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
             std::path::Component::CurDir => {}
             other => normalized.push(other.as_os_str()),
         }
@@ -144,10 +155,16 @@ pub fn normalize_and_validate_additional_permissions(
             );
         };
         // Validate that at least one path is specified
-        let has_read = perms.get("file_system").and_then(|fs| fs.get("read"))
-            .and_then(|v| v.as_array()).map_or(false, |a| !a.is_empty());
-        let has_write = perms.get("file_system").and_then(|fs| fs.get("write"))
-            .and_then(|v| v.as_array()).map_or(false, |a| !a.is_empty());
+        let has_read = perms
+            .get("file_system")
+            .and_then(|fs| fs.get("read"))
+            .and_then(|v| v.as_array())
+            .map_or(false, |a| !a.is_empty());
+        let has_write = perms
+            .get("file_system")
+            .and_then(|fs| fs.get("write"))
+            .and_then(|v| v.as_array())
+            .map_or(false, |a| !a.is_empty());
         if !has_read && !has_write {
             return Err(
                 "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"

@@ -1,8 +1,8 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::protocol::error::{CodexError, ErrorCode};
 use super::SESSIONS_SUBDIR;
+use crate::protocol::error::{CodexError, ErrorCode};
 
 /// Map an `anyhow::Error` from session init into a user-friendly [`CodexError`].
 pub fn map_session_init_error(err: &anyhow::Error, mosaic_home: &Path) -> CodexError {

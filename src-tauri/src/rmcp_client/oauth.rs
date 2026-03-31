@@ -3,18 +3,18 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use oauth2::basic::BasicTokenType;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
-use oauth2::basic::BasicTokenType;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::map::Map as JsonMap;
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -89,10 +89,7 @@ struct FallbackTokenEntry {
     scopes: Vec<String>,
 }
 
-pub(crate) fn load_oauth_tokens(
-    server_name: &str,
-    url: &str,
-) -> Result<Option<StoredOAuthTokens>> {
+pub(crate) fn load_oauth_tokens(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
     load_oauth_tokens_from_file(server_name, url)
 }
 
@@ -100,10 +97,7 @@ pub(crate) fn has_oauth_tokens(server_name: &str, url: &str) -> Result<bool> {
     Ok(load_oauth_tokens(server_name, url)?.is_some())
 }
 
-pub fn save_oauth_tokens(
-    _server_name: &str,
-    tokens: &StoredOAuthTokens,
-) -> Result<()> {
+pub fn save_oauth_tokens(_server_name: &str, tokens: &StoredOAuthTokens) -> Result<()> {
     save_oauth_tokens_to_file(tokens)
 }
 
@@ -241,7 +235,10 @@ fn token_needs_refresh(expires_at: Option<u64>) -> bool {
 
 fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
     let mut payload = JsonMap::new();
-    payload.insert("type".to_string(), Value::String(MCP_SERVER_TYPE.to_string()));
+    payload.insert(
+        "type".to_string(),
+        Value::String(MCP_SERVER_TYPE.to_string()),
+    );
     payload.insert("url".to_string(), Value::String(server_url.to_string()));
     payload.insert("headers".to_string(), Value::Object(JsonMap::new()));
     let truncated = sha_256_prefix(&Value::Object(payload))?;

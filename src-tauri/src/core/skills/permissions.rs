@@ -93,15 +93,21 @@ fn normalize_permission_path(path: &PathBuf) -> Option<PathBuf> {
     if canonical.is_absolute() {
         Some(canonical)
     } else {
-        tracing::warn!("ignoring permission path: expected absolute, got {:?}", canonical);
+        tracing::warn!(
+            "ignoring permission path: expected absolute, got {:?}",
+            canonical
+        );
         None
     }
 }
 
 /// Check whether a skill's declared dependencies include env-var requirements.
 pub fn collect_env_var_dependencies(skill: &SkillMetadata) -> Vec<EnvVarDependency> {
-    let Some(deps) = &skill.dependencies else { return Vec::new() };
-    deps.tools.iter()
+    let Some(deps) = &skill.dependencies else {
+        return Vec::new();
+    };
+    deps.tools
+        .iter()
         .filter(|t| t.r#type == "env_var" && !t.value.is_empty())
         .map(|t| EnvVarDependency {
             skill_name: skill.name.clone(),
@@ -180,13 +186,20 @@ mod tests {
         skill.dependencies = Some(SkillDependencies {
             tools: vec![
                 SkillToolDependency {
-                    r#type: "env_var".into(), value: "API_KEY".into(),
+                    r#type: "env_var".into(),
+                    value: "API_KEY".into(),
                     description: Some("API key".into()),
-                    transport: None, command: None, url: None,
+                    transport: None,
+                    command: None,
+                    url: None,
                 },
                 SkillToolDependency {
-                    r#type: "tool".into(), value: "cargo".into(),
-                    description: None, transport: None, command: None, url: None,
+                    r#type: "tool".into(),
+                    value: "cargo".into(),
+                    description: None,
+                    transport: None,
+                    command: None,
+                    url: None,
                 },
             ],
         });

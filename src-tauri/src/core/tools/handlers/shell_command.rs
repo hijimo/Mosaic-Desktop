@@ -21,11 +21,15 @@ pub struct ShellCommandHandler {
 
 impl ShellCommandHandler {
     pub fn classic() -> Self {
-        Self { backend: ShellCommandBackend::Classic }
+        Self {
+            backend: ShellCommandBackend::Classic,
+        }
     }
 
     pub fn zsh_fork() -> Self {
-        Self { backend: ShellCommandBackend::ZshFork }
+        Self {
+            backend: ShellCommandBackend::ZshFork,
+        }
     }
 
     /// Resolve whether to use a login shell, matching source Codex `resolve_use_login_shell`.
@@ -45,7 +49,12 @@ impl ShellCommandHandler {
 
     /// Check if a shell_command invocation is safe (read-only).
     /// Derives the full command array and delegates to `is_known_safe_command`.
-    pub fn is_safe_command(command: &str, login: Option<bool>, allow_login_shell: bool, backend: ShellCommandBackend) -> bool {
+    pub fn is_safe_command(
+        command: &str,
+        login: Option<bool>,
+        allow_login_shell: bool,
+        backend: ShellCommandBackend,
+    ) -> bool {
         let use_login = match Self::resolve_use_login_shell(login, allow_login_shell) {
             Ok(v) => v,
             Err(_) => return false,
@@ -93,7 +102,10 @@ impl ToolHandler for ShellCommandHandler {
 
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: ShellCommandArgs = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid shell_command args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid shell_command args: {e}"),
+            )
         })?;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
@@ -109,7 +121,9 @@ impl ToolHandler for ShellCommandHandler {
             &shell_args,
             &std::env::current_dir().unwrap_or_default(),
             Some(params.timeout_ms.unwrap_or(120_000)),
-        ).await? {
+        )
+        .await?
+        {
             return Ok(result);
         }
 
@@ -127,13 +141,19 @@ impl ToolHandler for ShellCommandHandler {
         let timeout = std::time::Duration::from_millis(params.timeout_ms.unwrap_or(120_000));
 
         let child = cmd.spawn().map_err(|e| {
-            CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to spawn: {e}"))
+            CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("failed to spawn: {e}"),
+            )
         })?;
 
         let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
             Ok(Ok(o)) => o,
             Ok(Err(e)) => {
-                return Err(CodexError::new(ErrorCode::ToolExecutionFailed, format!("{e}")));
+                return Err(CodexError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    format!("{e}"),
+                ));
             }
             Err(_) => {
                 return Ok(serde_json::json!({

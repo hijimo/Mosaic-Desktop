@@ -1,6 +1,4 @@
-use crate::protocol::types::{
-    AskForApproval, Personality, ResponseInputItem, SandboxPolicy,
-};
+use crate::protocol::types::{AskForApproval, Personality, ResponseInputItem, SandboxPolicy};
 
 use std::path::Path;
 
@@ -64,17 +62,17 @@ pub fn build_settings_update(
         ));
     }
     if prev.personality != current.personality {
-        parts.push(format!(
-            "Personality changed to: {:?}",
-            current.personality
-        ));
+        parts.push(format!("Personality changed to: {:?}", current.personality));
     }
 
     if parts.is_empty() {
         return None;
     }
 
-    Some(ResponseInputItem::text_message("developer", parts.join("\n")))
+    Some(ResponseInputItem::text_message(
+        "developer",
+        parts.join("\n"),
+    ))
 }
 
 fn settings_to_message(snapshot: &TurnSettingsSnapshot) -> ResponseInputItem {
@@ -137,7 +135,10 @@ mod tests {
         let update = build_settings_update(Some(&prev), &current);
         assert!(update.is_some());
         if let Some(ref item) = &update {
-            assert!(item.message_text().unwrap().contains("Sandbox policy changed"));
+            assert!(item
+                .message_text()
+                .unwrap()
+                .contains("Sandbox policy changed"));
         }
     }
 }

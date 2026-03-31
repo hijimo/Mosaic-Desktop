@@ -41,9 +41,7 @@ pub fn normalize_network_rule_host(raw: &str) -> Result<String> {
         }
     } else if host.matches(':').count() == 1 {
         if let Some((candidate, port)) = host.rsplit_once(':') {
-            if !candidate.is_empty()
-                && !port.is_empty()
-                && port.chars().all(|c| c.is_ascii_digit())
+            if !candidate.is_empty() && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
             {
                 host = candidate;
             }

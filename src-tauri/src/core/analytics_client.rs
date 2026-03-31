@@ -143,11 +143,7 @@ mod tests {
     #[tokio::test]
     async fn track_skill_invocations_does_not_panic() {
         let client = AnalyticsEventsClient::new();
-        let ctx = build_track_events_context(
-            "gpt-4".into(),
-            "thread-1".into(),
-            "turn-1".into(),
-        );
+        let ctx = build_track_events_context("gpt-4".into(), "thread-1".into(), "turn-1".into());
         client.track_skill_invocations(
             ctx,
             vec![SkillInvocation {
@@ -163,11 +159,7 @@ mod tests {
     #[tokio::test]
     async fn track_app_used_does_not_panic() {
         let client = AnalyticsEventsClient::new();
-        let ctx = build_track_events_context(
-            "gpt-4".into(),
-            "thread-1".into(),
-            "turn-1".into(),
-        );
+        let ctx = build_track_events_context("gpt-4".into(), "thread-1".into(), "turn-1".into());
         client.track_app_used(
             ctx,
             AppInvocation {

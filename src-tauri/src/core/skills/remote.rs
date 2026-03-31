@@ -255,14 +255,20 @@ fn detect_common_prefix(archive: &zip::ZipArchive<Cursor<&[u8]>>) -> Option<Path
 pub fn normalize_zip_name(name: &str, prefix_candidates: &[String]) -> Option<String> {
     let mut trimmed = name.trim_start_matches("./");
     for prefix in prefix_candidates {
-        if prefix.is_empty() { continue; }
+        if prefix.is_empty() {
+            continue;
+        }
         let with_slash = format!("{prefix}/");
         if let Some(rest) = trimmed.strip_prefix(&with_slash) {
             trimmed = rest;
             break;
         }
     }
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Errors from remote skill operations.
@@ -327,10 +333,7 @@ mod tests {
             normalize_zip_name("./abc123/scripts/run.py", &["abc123".to_string()]),
             Some("scripts/run.py".to_string())
         );
-        assert_eq!(
-            normalize_zip_name("abc123/", &["abc123".to_string()]),
-            None
-        );
+        assert_eq!(normalize_zip_name("abc123/", &["abc123".to_string()]), None);
         assert_eq!(
             normalize_zip_name("other/SKILL.md", &["abc123".to_string()]),
             Some("other/SKILL.md".to_string())

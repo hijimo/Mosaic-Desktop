@@ -15,8 +15,11 @@ impl ToolRuntime for ShellRuntime {
         let command = args
             .get("command")
             .and_then(|v| {
-                v.as_array()
-                    .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<_>>())
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
             })
             .unwrap_or_default();
 

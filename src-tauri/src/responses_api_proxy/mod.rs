@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
-use reqwest::Url;
+use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
-use reqwest::header::{AUTHORIZATION, HOST, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, HOST};
+use reqwest::Url;
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -177,9 +177,13 @@ fn forward_request(
         }
     }
 
-    let content_length = upstream_resp
-        .content_length()
-        .and_then(|len| if len <= usize::MAX as u64 { Some(len as usize) } else { None });
+    let content_length = upstream_resp.content_length().and_then(|len| {
+        if len <= usize::MAX as u64 {
+            Some(len as usize)
+        } else {
+            None
+        }
+    });
 
     let response = Response::new(
         StatusCode(status.as_u16()),

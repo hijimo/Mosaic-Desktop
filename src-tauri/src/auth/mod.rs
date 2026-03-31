@@ -226,9 +226,7 @@ impl AuthManager {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(if status.as_u16() == 400 || status.as_u16() == 401 {
-                RefreshTokenError::Permanent(format!(
-                    "refresh token rejected ({status}): {body}"
-                ))
+                RefreshTokenError::Permanent(format!("refresh token rejected ({status}): {body}"))
             } else {
                 RefreshTokenError::Transient(format!("refresh failed ({status}): {body}"))
             });

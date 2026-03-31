@@ -18,9 +18,9 @@ pub use config_requirements::{
 };
 pub use constraint::{Constrained, ConstraintError, ConstraintResult};
 pub use diagnostics::{
-    ConfigError, ConfigLoadError, TextPosition, TextRange, config_error_from_toml,
-    config_error_from_typed_toml, format_config_error, format_config_error_with_source,
-    io_error_from_config_error, validate_config_file,
+    config_error_from_toml, config_error_from_typed_toml, format_config_error,
+    format_config_error_with_source, io_error_from_config_error, validate_config_file, ConfigError,
+    ConfigLoadError, TextPosition, TextRange,
 };
 pub use edit::ConfigEdit;
 pub use fingerprint::{record_origins, version_for_toml};
@@ -30,7 +30,9 @@ pub use overrides::build_cli_overrides_layer;
 pub use permissions::{NetworkMode, NetworkToml, PermissionsToml};
 pub use schema::{config_schema, config_schema_json, validate_config_keys};
 pub use service::{ConfigService, ConfigServiceError};
-pub use toml_types::{ConfigProfile, ConfigToml, McpServerConfig, McpServerTransportConfig, McpToolFilter};
+pub use toml_types::{
+    ConfigProfile, ConfigToml, McpServerConfig, McpServerTransportConfig, McpToolFilter,
+};
 
 use crate::protocol::error::{CodexError, ErrorCode};
 

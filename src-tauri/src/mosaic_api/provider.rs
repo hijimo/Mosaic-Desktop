@@ -144,10 +144,7 @@ mod tests {
             Some("https://example.com")
         ));
 
-        let negative_cases = [
-            "https://api.openai.com/v1",
-            "https://example.com/openai",
-        ];
+        let negative_cases = ["https://api.openai.com/v1", "https://example.com/openai"];
 
         for base_url in negative_cases {
             assert!(

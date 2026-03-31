@@ -101,10 +101,7 @@ pub(super) async fn run(
         return;
     }
 
-    let model = config
-        .extract_model
-        .as_deref()
-        .unwrap_or(DEFAULT_MODEL);
+    let model = config.extract_model.as_deref().unwrap_or(DEFAULT_MODEL);
 
     info!("memory phase-1: claimed {} job(s)", claimed.len());
 
@@ -163,7 +160,10 @@ async fn process_job(
 
     match result {
         Err(e) => {
-            warn!("phase-1 extraction failed for {}: {}", claim.thread.id, e.message);
+            warn!(
+                "phase-1 extraction failed for {}: {}",
+                claim.thread.id, e.message
+            );
             let _ = db.mark_stage1_job_failed(
                 claim.thread.id,
                 &claim.ownership_token,
@@ -188,10 +188,8 @@ async fn process_job(
             };
 
             if output.raw_memory.is_empty() && output.rollout_summary.is_empty() {
-                let _ = db.mark_stage1_job_succeeded_no_output(
-                    claim.thread.id,
-                    &claim.ownership_token,
-                );
+                let _ =
+                    db.mark_stage1_job_succeeded_no_output(claim.thread.id, &claim.ownership_token);
                 return true;
             }
 
@@ -206,7 +204,10 @@ async fn process_job(
             ) {
                 Ok(true) => true,
                 Ok(false) => {
-                    warn!("phase-1 mark succeeded returned false for {}", claim.thread.id);
+                    warn!(
+                        "phase-1 mark succeeded returned false for {}",
+                        claim.thread.id
+                    );
                     false
                 }
                 Err(e) => {

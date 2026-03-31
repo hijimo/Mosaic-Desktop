@@ -19,9 +19,12 @@ mod frontend_op_compat {
             "sandbox_policy": { "type": "danger-full-access" }
         }"#;
 
-        let op: Op = serde_json::from_str(json).expect("frontend user_turn JSON should deserialize");
+        let op: Op =
+            serde_json::from_str(json).expect("frontend user_turn JSON should deserialize");
         match op {
-            Op::UserTurn { items, cwd, model, .. } => {
+            Op::UserTurn {
+                items, cwd, model, ..
+            } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(cwd.to_string_lossy(), ".");
                 assert_eq!(model, "");

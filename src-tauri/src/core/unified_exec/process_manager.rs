@@ -17,11 +17,10 @@ use super::async_watcher::{spawn_exit_watcher, start_streaming_output};
 use super::head_tail_buffer::HeadTailBuffer;
 use super::process::{OutputBuffer, OutputHandles, UnifiedExecProcess};
 use super::{
-    apply_exec_env, clamp_yield_time, generate_chunk_id, resolve_max_tokens,
-    ExecCommandRequest, ProcessEntry, ProcessStore, UnifiedExecError, UnifiedExecProcessManager,
-    UnifiedExecResponse, WriteStdinRequest,
-    MAX_PROCESSES, MAX_YIELD_TIME_MS, MIN_EMPTY_YIELD_TIME_MS, MIN_YIELD_TIME_MS,
-    OUTPUT_MAX_TOKENS, WARNING_PROCESSES,
+    apply_exec_env, clamp_yield_time, generate_chunk_id, resolve_max_tokens, ExecCommandRequest,
+    ProcessEntry, ProcessStore, UnifiedExecError, UnifiedExecProcessManager, UnifiedExecResponse,
+    WriteStdinRequest, MAX_PROCESSES, MAX_YIELD_TIME_MS, MIN_EMPTY_YIELD_TIME_MS,
+    MIN_YIELD_TIME_MS, OUTPUT_MAX_TOKENS, WARNING_PROCESSES,
 };
 
 impl UnifiedExecProcessManager {
@@ -127,10 +126,8 @@ impl UnifiedExecProcessManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = formatted_truncate_text(
-            &text,
-            TruncationPolicy::KeepRecentTokens { max_tokens },
-        );
+        let output =
+            formatted_truncate_text(&text, TruncationPolicy::KeepRecentTokens { max_tokens });
         let exit_code = process.exit_code();
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
@@ -210,22 +207,20 @@ impl UnifiedExecProcessManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = formatted_truncate_text(
-            &text,
-            TruncationPolicy::KeepRecentTokens { max_tokens },
-        );
+        let output =
+            formatted_truncate_text(&text, TruncationPolicy::KeepRecentTokens { max_tokens });
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
         // Check if process has exited
         let status = self.refresh_process_state(&prepared.process_id).await;
         let (process_id, exit_code, event_call_id) = match status {
-            ProcessStatus::Alive { exit_code, call_id, process_id } => {
-                (Some(process_id), exit_code, call_id)
-            }
-            ProcessStatus::Exited { exit_code, call_id } => {
-                (None, exit_code, call_id)
-            }
+            ProcessStatus::Alive {
+                exit_code,
+                call_id,
+                process_id,
+            } => (Some(process_id), exit_code, call_id),
+            ProcessStatus::Exited { exit_code, call_id } => (None, exit_code, call_id),
             ProcessStatus::Unknown => {
                 return Err(UnifiedExecError::UnknownProcessId {
                     process_id: request.process_id.to_string(),
@@ -402,12 +397,13 @@ impl UnifiedExecProcessManager {
         process_id: &str,
     ) -> Result<PreparedProcessHandles, UnifiedExecError> {
         let mut store = self.process_store.lock().await;
-        let entry = store
-            .processes
-            .get_mut(process_id)
-            .ok_or(UnifiedExecError::UnknownProcessId {
-                process_id: process_id.to_string(),
-            })?;
+        let entry =
+            store
+                .processes
+                .get_mut(process_id)
+                .ok_or(UnifiedExecError::UnknownProcessId {
+                    process_id: process_id.to_string(),
+                })?;
         entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,

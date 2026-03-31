@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::config::ConfigLayerStack;
 use crate::protocol::error::{CodexError, ErrorCode};
@@ -44,10 +44,7 @@ impl CodexThread {
         let id = uuid::Uuid::new_v4().to_string();
         self.handle
             .tx_sub
-            .send(Submission {
-                id: id.clone(),
-                op,
-            })
+            .send(Submission { id: id.clone(), op })
             .await
             .map_err(|e| {
                 CodexError::new(ErrorCode::InternalError, format!("submit failed: {e}"))
@@ -57,9 +54,11 @@ impl CodexThread {
 
     /// Receive the next event from this thread.
     pub async fn next_event(&self) -> Result<Event, CodexError> {
-        self.handle.rx_event.recv().await.map_err(|e| {
-            CodexError::new(ErrorCode::InternalError, format!("recv failed: {e}"))
-        })
+        self.handle
+            .rx_event
+            .recv()
+            .await
+            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("recv failed: {e}")))
     }
 
     /// Drain all currently available events without blocking.
@@ -131,7 +130,10 @@ impl ThreadManager {
         let session_configured = wait_for_session_configured(&handle).await?;
 
         let thread = Arc::new(CodexThread::new(handle, thread_id));
-        self.threads.write().await.insert(thread_id, Arc::clone(&thread));
+        self.threads
+            .write()
+            .await
+            .insert(thread_id, Arc::clone(&thread));
         let _ = self.thread_created_tx.send(thread_id);
 
         Ok(NewThread {
@@ -224,24 +226,35 @@ impl ThreadManager {
             if threads.len() >= self.max_threads {
                 return Err(CodexError::new(
                     ErrorCode::InternalError,
-                    format!("thread limit reached ({}/{})", threads.len(), self.max_threads),
+                    format!(
+                        "thread limit reached ({}/{})",
+                        threads.len(),
+                        self.max_threads
+                    ),
                 ));
             }
         }
 
-        let text = tokio::fs::read_to_string(rollout_path)
-            .await
-            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("failed to read rollout: {e}")))?;
+        let text = tokio::fs::read_to_string(rollout_path).await.map_err(|e| {
+            CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to read rollout: {e}"),
+            )
+        })?;
         let items = crate::commands::parse_rollout_items(&text);
 
         let truncated = truncate_before_nth_user_message(&items, nth_user_message);
 
         let thread_id = ThreadId::new();
-        let handle = Codex::spawn_with_history(config, cwd, InitialHistory::Forked(truncated)).await?;
+        let handle =
+            Codex::spawn_with_history(config, cwd, InitialHistory::Forked(truncated)).await?;
         let session_configured = wait_for_session_configured(&handle).await?;
 
         let thread = Arc::new(CodexThread::new(handle, thread_id));
-        self.threads.write().await.insert(thread_id, Arc::clone(&thread));
+        self.threads
+            .write()
+            .await
+            .insert(thread_id, Arc::clone(&thread));
         let _ = self.thread_created_tx.send(thread_id);
 
         Ok(NewThread {

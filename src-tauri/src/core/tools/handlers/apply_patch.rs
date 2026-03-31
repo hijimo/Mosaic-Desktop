@@ -18,9 +18,16 @@ struct ApplyPatchArgs {
 /// Represents a parsed file change from the patch.
 #[derive(Debug, Clone)]
 pub enum PatchFileChange {
-    Add { path: String },
-    Delete { path: String },
-    Update { path: String, move_to: Option<String> },
+    Add {
+        path: String,
+    },
+    Delete {
+        path: String,
+    },
+    Update {
+        path: String,
+        move_to: Option<String>,
+    },
 }
 
 #[async_trait]
@@ -62,26 +69,37 @@ impl ToolHandler for ApplyPatchHandler {
             s.to_string()
         } else {
             let params: ApplyPatchArgs = serde_json::from_value(args).map_err(|e| {
-                CodexError::new(ErrorCode::InvalidInput, format!("invalid apply_patch args: {e}"))
+                CodexError::new(
+                    ErrorCode::InvalidInput,
+                    format!("invalid apply_patch args: {e}"),
+                )
             })?;
             params.input
         };
 
         if patch_text.trim().is_empty() {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "empty patch input"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "empty patch input",
+            ));
         }
 
         // Parse the patch to extract file paths for approval tracking
         let file_changes = parse_patch_file_changes(&patch_text);
-        let file_paths: Vec<String> = file_changes.iter().flat_map(|c| match c {
-            PatchFileChange::Add { path } => vec![path.clone()],
-            PatchFileChange::Delete { path } => vec![path.clone()],
-            PatchFileChange::Update { path, move_to } => {
-                let mut paths = vec![path.clone()];
-                if let Some(dest) = move_to { paths.push(dest.clone()); }
-                paths
-            }
-        }).collect();
+        let file_paths: Vec<String> = file_changes
+            .iter()
+            .flat_map(|c| match c {
+                PatchFileChange::Add { path } => vec![path.clone()],
+                PatchFileChange::Delete { path } => vec![path.clone()],
+                PatchFileChange::Update { path, move_to } => {
+                    let mut paths = vec![path.clone()];
+                    if let Some(dest) = move_to {
+                        paths.push(dest.clone());
+                    }
+                    paths
+                }
+            })
+            .collect();
 
         // Apply the patch using git apply
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -109,7 +127,10 @@ async fn apply_patch_via_git(patch_text: &str, cwd: &Path) -> Result<ApplyResult
     cmd.stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
-        CodexError::new(ErrorCode::ToolExecutionFailed, format!("failed to spawn git apply: {e}"))
+        CodexError::new(
+            ErrorCode::ToolExecutionFailed,
+            format!("failed to spawn git apply: {e}"),
+        )
     })?;
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -119,12 +140,19 @@ async fn apply_patch_via_git(patch_text: &str, cwd: &Path) -> Result<ApplyResult
     }
 
     let output = child.wait_with_output().await.map_err(|e| {
-        CodexError::new(ErrorCode::ToolExecutionFailed, format!("git apply error: {e}"))
+        CodexError::new(
+            ErrorCode::ToolExecutionFailed,
+            format!("git apply error: {e}"),
+        )
     })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = if stderr.is_empty() { stdout.to_string() } else { format!("{stdout}\n{stderr}") };
+    let combined = if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
 
     Ok(ApplyResult {
         success: output.status.success(),
@@ -140,9 +168,13 @@ pub fn parse_patch_file_changes(patch: &str) -> Vec<PatchFileChange> {
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
         if let Some(path) = trimmed.strip_prefix("*** Add File: ") {
-            changes.push(PatchFileChange::Add { path: path.trim().to_string() });
+            changes.push(PatchFileChange::Add {
+                path: path.trim().to_string(),
+            });
         } else if let Some(path) = trimmed.strip_prefix("*** Delete File: ") {
-            changes.push(PatchFileChange::Delete { path: path.trim().to_string() });
+            changes.push(PatchFileChange::Delete {
+                path: path.trim().to_string(),
+            });
         } else if let Some(path) = trimmed.strip_prefix("*** Update File: ") {
             let path = path.trim().to_string();
             // Check for optional Move to
@@ -201,15 +233,20 @@ pub async fn intercept_apply_patch(
     // Apply the patch
     let result = apply_patch_via_git(&patch_text, cwd).await?;
     let file_changes = parse_patch_file_changes(&patch_text);
-    let file_paths: Vec<String> = file_changes.iter().flat_map(|c| match c {
-        PatchFileChange::Add { path } => vec![path.clone()],
-        PatchFileChange::Delete { path } => vec![path.clone()],
-        PatchFileChange::Update { path, move_to } => {
-            let mut paths = vec![path.clone()];
-            if let Some(dest) = move_to { paths.push(dest.clone()); }
-            paths
-        }
-    }).collect();
+    let file_paths: Vec<String> = file_changes
+        .iter()
+        .flat_map(|c| match c {
+            PatchFileChange::Add { path } => vec![path.clone()],
+            PatchFileChange::Delete { path } => vec![path.clone()],
+            PatchFileChange::Update { path, move_to } => {
+                let mut paths = vec![path.clone()];
+                if let Some(dest) = move_to {
+                    paths.push(dest.clone());
+                }
+                paths
+            }
+        })
+        .collect();
 
     Ok(Some(serde_json::json!({
         "success": result.success,
@@ -225,7 +262,9 @@ fn extract_patch_text(command: &[String]) -> Option<String> {
         Some(prog) => {
             let base = prog.rsplit('/').next().unwrap_or(prog);
             if matches!(base, "bash" | "zsh" | "sh") {
-                command.iter().position(|a| a == "-c")
+                command
+                    .iter()
+                    .position(|a| a == "-c")
                     .and_then(|pos| command.get(pos + 1))
                     .and_then(|cmd| {
                         if cmd.starts_with("apply_patch ") {
@@ -262,8 +301,8 @@ fn validate_patch_structure(patch: &str) -> PatchValidation {
         );
     }
     // Check that there's at least one file operation
-    let has_file_op = trimmed.contains("*** Add File:") 
-        || trimmed.contains("*** Delete File:") 
+    let has_file_op = trimmed.contains("*** Add File:")
+        || trimmed.contains("*** Delete File:")
         || trimmed.contains("*** Update File:");
     if !has_file_op {
         return PatchValidation::CorrectnessError(
@@ -284,7 +323,9 @@ pub fn is_apply_patch_command(command: &[String]) -> bool {
                 command.get(1).map(|s| s.as_str()) == Some("apply")
             } else if matches!(base, "bash" | "zsh" | "sh") {
                 // Check -c argument for "apply_patch" or "git apply"
-                command.iter().position(|a| a == "-c")
+                command
+                    .iter()
+                    .position(|a| a == "-c")
                     .and_then(|pos| command.get(pos + 1))
                     .map(|cmd| cmd.starts_with("apply_patch") || cmd.starts_with("git apply"))
                     .unwrap_or(false)

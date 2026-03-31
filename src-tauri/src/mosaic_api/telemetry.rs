@@ -1,7 +1,7 @@
 use crate::mosaic_api::error::ApiError;
 use crate::mosaic_client::{
-    Request, RequestTelemetry, Response, RetryPolicy, StreamResponse, TransportError,
-    run_with_retry,
+    run_with_retry, Request, RequestTelemetry, Response, RetryPolicy, StreamResponse,
+    TransportError,
 };
 use http::StatusCode;
 use std::future::Future;
@@ -32,7 +32,12 @@ pub trait WebsocketTelemetry: Send + Sync {
     fn on_ws_event(
         &self,
         result: &Result<
-            Option<Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>>,
+            Option<
+                Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            >,
             ApiError,
         >,
         duration: Duration,

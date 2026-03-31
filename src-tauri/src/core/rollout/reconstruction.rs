@@ -81,7 +81,10 @@ fn finalize_active_segment<'a>(
 
     if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
         && (segment.counts_as_user_turn
-            || matches!(segment.reference_context_item, TurnReferenceContextItem::Cleared))
+            || matches!(
+                segment.reference_context_item,
+                TurnReferenceContextItem::Cleared
+            ))
     {
         *reference_context_item = segment.reference_context_item;
     }
@@ -120,7 +123,10 @@ pub fn reconstruct_history_from_rollout(
             RolloutItem::Compacted(compacted) => {
                 let seg = active_segment.get_or_insert_with(ActiveReplaySegment::default);
                 // Compaction clears any older baseline
-                if matches!(seg.reference_context_item, TurnReferenceContextItem::NeverSet) {
+                if matches!(
+                    seg.reference_context_item,
+                    TurnReferenceContextItem::NeverSet
+                ) {
                     seg.reference_context_item = TurnReferenceContextItem::Cleared;
                 }
                 if seg.base_replacement_history.is_none() {
@@ -131,8 +137,8 @@ pub fn reconstruct_history_from_rollout(
                 }
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                pending_rollback_turns = pending_rollback_turns
-                    .saturating_add(rollback.num_turns as usize);
+                pending_rollback_turns =
+                    pending_rollback_turns.saturating_add(rollback.num_turns as usize);
             }
             RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
                 let seg = active_segment.get_or_insert_with(ActiveReplaySegment::default);
@@ -159,8 +165,10 @@ pub fn reconstruct_history_from_rollout(
                 seg.counts_as_user_turn = true;
             }
             RolloutItem::ResponseItem(resp) => {
-                let input: ResponseInputItem = resp.clone().into();
-                if matches!(&input, ResponseInputItem::Message { role, .. } if role == "user") {
+                if matches!(
+                    resp.to_input_item().as_ref(),
+                    Some(ResponseInputItem::Message { role, .. }) if role == "user"
+                ) {
                     let seg = active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     seg.counts_as_user_turn = true;
                 }
@@ -170,15 +178,15 @@ pub fn reconstruct_history_from_rollout(
                 if seg.turn_id.is_none() {
                     seg.turn_id = ctx.turn_id.clone();
                 }
-                if turn_ids_are_compatible(
-                    seg.turn_id.as_deref(),
-                    ctx.turn_id.as_deref(),
-                ) {
+                if turn_ids_are_compatible(seg.turn_id.as_deref(), ctx.turn_id.as_deref()) {
                     seg.previous_turn_settings = Some(PreviousTurnSettings {
                         model: ctx.model.clone(),
                         realtime_active: ctx.realtime_active,
                     });
-                    if matches!(seg.reference_context_item, TurnReferenceContextItem::NeverSet) {
+                    if matches!(
+                        seg.reference_context_item,
+                        TurnReferenceContextItem::NeverSet
+                    ) {
                         seg.reference_context_item =
                             TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                     }
@@ -186,10 +194,7 @@ pub fn reconstruct_history_from_rollout(
             }
             RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                 if active_segment.as_ref().is_some_and(|seg| {
-                    turn_ids_are_compatible(
-                        seg.turn_id.as_deref(),
-                        Some(event.turn_id.as_str()),
-                    )
+                    turn_ids_are_compatible(seg.turn_id.as_deref(), Some(event.turn_id.as_str()))
                 }) {
                     if let Some(seg) = active_segment.take() {
                         finalize_active_segment(
@@ -202,8 +207,7 @@ pub fn reconstruct_history_from_rollout(
                     }
                 }
             }
-            RolloutItem::EventMsg(_)
-            | RolloutItem::SessionMeta(_) => {}
+            RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
         }
 
         // Early exit once we have all metadata.
@@ -237,8 +241,9 @@ pub fn reconstruct_history_from_rollout(
     for item in rollout_suffix {
         match item {
             RolloutItem::ResponseItem(response_item) => {
-                let input_item: ResponseInputItem = response_item.clone().into();
-                history.record_items_with_policy(std::iter::once(input_item), item_truncation);
+                if let Some(input_item) = response_item.to_input_item() {
+                    history.record_items_with_policy(std::iter::once(input_item), item_truncation);
+                }
             }
             RolloutItem::Compacted(compacted) => {
                 if let Some(ref replacement) = compacted.replacement_history {
@@ -246,12 +251,16 @@ pub fn reconstruct_history_from_rollout(
                 } else {
                     saw_legacy_compaction_without_replacement_history = true;
                     // Legacy compaction: rebuild with recent user messages + summary.
-                    let user_messages: Vec<String> = history.raw_items().iter()
+                    let user_messages: Vec<String> = history
+                        .raw_items()
+                        .iter()
                         .filter_map(|item| match item {
                             ResponseInputItem::Message { role, content, .. } if role == "user" => {
                                 content.iter().find_map(|c| match c {
                                     crate::protocol::types::ContentItem::InputText { text }
-                                    | crate::protocol::types::ContentItem::OutputText { text } => Some(text.clone()),
+                                    | crate::protocol::types::ContentItem::OutputText { text } => {
+                                        Some(text.clone())
+                                    }
                                     _ => None,
                                 })
                             }
@@ -319,8 +328,8 @@ pub fn reconstruct_history_from_rollout(
 mod tests {
     use super::*;
     use crate::protocol::event::{
-        AgentMessageEvent, ThreadRolledBackEvent, TurnCompleteEvent,
-        TurnStartedEvent, UserMessageEvent,
+        AgentMessageEvent, ThreadRolledBackEvent, TurnCompleteEvent, TurnStartedEvent,
+        UserMessageEvent,
     };
     use crate::protocol::types::{ContentItem, ModeKind, ResponseItem};
 
@@ -488,7 +497,10 @@ mod tests {
         // First: preserved user message from before compaction
         assert_eq!(result.history[0].message_text().unwrap(), "old");
         // Second: summary
-        assert!(result.history[1].message_text().unwrap().contains("summary"));
+        assert!(result.history[1]
+            .message_text()
+            .unwrap()
+            .contains("summary"));
         // Third+Fourth: new turn
         assert_eq!(result.history[2].message_text().unwrap(), "new");
         assert_eq!(result.history[3].message_text().unwrap(), "new-a");
@@ -529,8 +541,8 @@ mod tests {
 
     #[test]
     fn response_item_variant_recorded() {
-        let items = vec![
-            RolloutItem::ResponseItem(crate::protocol::types::ResponseItem::Message {
+        let items = vec![RolloutItem::ResponseItem(
+            crate::protocol::types::ResponseItem::Message {
                 id: Some("m1".to_string()),
                 role: "assistant".to_string(),
                 content: vec![crate::protocol::types::ContentItem::OutputText {
@@ -538,11 +550,30 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            }),
-        ];
+            },
+        )];
         let result = reconstruct_history_from_rollout(&items, Default::default());
         assert_eq!(result.history.len(), 1);
-        assert_eq!(result.history[0].message_text().unwrap(), "from response item");
+        assert_eq!(
+            result.history[0].message_text().unwrap(),
+            "from response item"
+        );
+    }
+
+    #[test]
+    fn web_search_response_item_is_skipped_from_reconstructed_history() {
+        let items = vec![RolloutItem::ResponseItem(
+            crate::protocol::types::ResponseItem::WebSearchCall {
+                id: Some("ws1".to_string()),
+                status: Some("completed".to_string()),
+                action: Some(crate::protocol::types::WebSearchAction::Search {
+                    query: Some("mosaic".to_string()),
+                    queries: None,
+                }),
+            },
+        )];
+        let result = reconstruct_history_from_rollout(&items, Default::default());
+        assert!(result.history.is_empty());
     }
 
     // ── Test: reference_context_item extracted ───────────────────

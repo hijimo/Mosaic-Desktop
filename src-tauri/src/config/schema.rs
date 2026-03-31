@@ -6,7 +6,8 @@ use super::toml_types::ConfigToml;
 /// This is a lightweight alternative to schemars — it produces a schema from
 /// the default value so that frontends can discover available keys.
 pub fn config_schema() -> Value {
-    let default_val = serde_json::to_value(ConfigToml::default()).unwrap_or(Value::Object(Map::new()));
+    let default_val =
+        serde_json::to_value(ConfigToml::default()).unwrap_or(Value::Object(Map::new()));
     build_schema_from_value(&default_val)
 }
 

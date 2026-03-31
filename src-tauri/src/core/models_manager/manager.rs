@@ -50,9 +50,7 @@ impl ModelsManager {
     ) -> Self {
         let cache_path = mosaic_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        let models = initial_catalog
-            .map(|c| c.models)
-            .unwrap_or_default();
+        let models = initial_catalog.map(|c| c.models).unwrap_or_default();
         Self {
             models: RwLock::new(models),
             etag: RwLock::new(None),
@@ -76,12 +74,15 @@ impl ModelsManager {
     /// Look up model metadata by slug. Falls back to a minimal descriptor.
     pub async fn get_model_info(&self, slug: &str) -> ModelDescriptor {
         let models = self.models.read().await;
-        find_by_longest_prefix(slug, &models)
-            .unwrap_or_else(|| ModelDescriptor::fallback(slug))
+        find_by_longest_prefix(slug, &models).unwrap_or_else(|| ModelDescriptor::fallback(slug))
     }
 
     /// Get the default model slug.
-    pub async fn get_default_model(&self, explicit: &Option<String>, strategy: RefreshStrategy) -> String {
+    pub async fn get_default_model(
+        &self,
+        explicit: &Option<String>,
+        strategy: RefreshStrategy,
+    ) -> String {
         if let Some(m) = explicit {
             return m.clone();
         }
@@ -119,9 +120,7 @@ impl ModelsManager {
     }
 
     /// List collaboration mode presets.
-    pub fn list_collaboration_modes(
-        &self,
-    ) -> Vec<crate::protocol::types::CollaborationModeMask> {
+    pub fn list_collaboration_modes(&self) -> Vec<crate::protocol::types::CollaborationModeMask> {
         builtin_collaboration_mode_presets(self.collaboration_modes_config)
     }
 

@@ -9,7 +9,9 @@ pub struct SearchToolBm25Handler;
 pub const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 pub const SEARCH_TOOL_BM25_DEFAULT_LIMIT: usize = 8;
 
-fn default_limit() -> usize { SEARCH_TOOL_BM25_DEFAULT_LIMIT }
+fn default_limit() -> usize {
+    SEARCH_TOOL_BM25_DEFAULT_LIMIT
+}
 
 #[derive(Deserialize)]
 struct SearchToolBm25Args {
@@ -31,10 +33,24 @@ pub struct ToolEntry {
 }
 
 impl ToolEntry {
-    pub fn build_search_text(name: &str, server_name: &str, title: Option<&str>, description: Option<&str>, input_keys: &[String]) -> String {
+    pub fn build_search_text(
+        name: &str,
+        server_name: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        input_keys: &[String],
+    ) -> String {
         let mut parts = vec![name.to_string(), server_name.to_string()];
-        if let Some(t) = title { if !t.trim().is_empty() { parts.push(t.to_string()); } }
-        if let Some(d) = description { if !d.trim().is_empty() { parts.push(d.to_string()); } }
+        if let Some(t) = title {
+            if !t.trim().is_empty() {
+                parts.push(t.to_string());
+            }
+        }
+        if let Some(d) = description {
+            if !d.trim().is_empty() {
+                parts.push(d.to_string());
+            }
+        }
         parts.extend(input_keys.iter().cloned());
         parts.join(" ")
     }
@@ -52,15 +68,24 @@ impl ToolHandler for SearchToolBm25Handler {
 
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: SearchToolBm25Args = serde_json::from_value(args).map_err(|e| {
-            CodexError::new(ErrorCode::InvalidInput, format!("invalid search_tool_bm25 args: {e}"))
+            CodexError::new(
+                ErrorCode::InvalidInput,
+                format!("invalid search_tool_bm25 args: {e}"),
+            )
         })?;
 
         let query = params.query.trim();
         if query.is_empty() {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "query must not be empty"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "query must not be empty",
+            ));
         }
         if params.limit == 0 {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "limit must be greater than zero"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "limit must be greater than zero",
+            ));
         }
 
         // Full implementation builds a BM25 search engine from MCP tools via:

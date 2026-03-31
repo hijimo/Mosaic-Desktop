@@ -7,16 +7,16 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use thiserror::Error;
 use tokio::fs;
 use tokio::sync::RwLock;
-use thiserror::Error;
 use tracing::debug;
 
+use crate::execpolicy::amend::{blocking_append_allow_prefix_rule, blocking_append_network_rule};
 use crate::execpolicy::{
     AmendError, Decision, Evaluation, MatchOptions, NetworkRuleProtocol, Policy, PolicyParser,
     RuleMatch,
 };
-use crate::execpolicy::amend::{blocking_append_allow_prefix_rule, blocking_append_network_rule};
 use crate::protocol::types::{AskForApproval, ExecPolicyAmendment, SandboxPolicy};
 
 use super::bash::{parse_shell_lc_plain_commands, parse_shell_lc_single_command_prefix};
@@ -35,12 +35,29 @@ const REJECT_RULES_REASON: &str =
 
 /// Banned prefix suggestions — too broad to be useful as auto-amendments.
 static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
-    &["python3"], &["python3", "-c"], &["python"], &["python", "-c"],
-    &["bash"], &["bash", "-lc"], &["sh"], &["sh", "-c"],
-    &["zsh"], &["zsh", "-lc"], &["/bin/bash"], &["/bin/bash", "-lc"],
-    &["/bin/zsh"], &["/bin/zsh", "-lc"],
-    &["sudo"], &["git"], &["node"], &["node", "-e"],
-    &["env"], &["ruby"], &["ruby", "-e"], &["perl"], &["perl", "-e"],
+    &["python3"],
+    &["python3", "-c"],
+    &["python"],
+    &["python", "-c"],
+    &["bash"],
+    &["bash", "-lc"],
+    &["sh"],
+    &["sh", "-c"],
+    &["zsh"],
+    &["zsh", "-lc"],
+    &["/bin/bash"],
+    &["/bin/bash", "-lc"],
+    &["/bin/zsh"],
+    &["/bin/zsh", "-lc"],
+    &["sudo"],
+    &["git"],
+    &["node"],
+    &["node", "-e"],
+    &["env"],
+    &["ruby"],
+    &["ruby", "-e"],
+    &["perl"],
+    &["perl", "-e"],
 ];
 
 // ── Error types ──────────────────────────────────────────────────
@@ -48,11 +65,20 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
 #[derive(Debug, Error)]
 pub enum ExecPolicyError {
     #[error("failed to read rules dir {dir}: {source}")]
-    ReadDir { dir: PathBuf, source: std::io::Error },
+    ReadDir {
+        dir: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to read rules file {path}: {source}")]
-    ReadFile { path: PathBuf, source: std::io::Error },
+    ReadFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to parse rules file {path}: {source}")]
-    ParsePolicy { path: String, source: crate::execpolicy::ExecPolicyError },
+    ParsePolicy {
+        path: String,
+        source: crate::execpolicy::ExecPolicyError,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -62,7 +88,10 @@ pub enum ExecPolicyUpdateError {
     #[error("failed to join blocking task: {source}")]
     JoinBlockingTask { source: tokio::task::JoinError },
     #[error("failed to update in-memory rules: {source}")]
-    AddRule { #[from] source: crate::execpolicy::ExecPolicyError },
+    AddRule {
+        #[from]
+        source: crate::execpolicy::ExecPolicyError,
+    },
 }
 
 // ── Approval requirement ─────────────────────────────────────────
@@ -92,13 +121,17 @@ pub struct ExecPolicyManager {
 
 impl Default for ExecPolicyManager {
     fn default() -> Self {
-        Self { policy: RwLock::new(Arc::new(Policy::empty())) }
+        Self {
+            policy: RwLock::new(Arc::new(Policy::empty())),
+        }
     }
 }
 
 impl ExecPolicyManager {
     pub fn new(policy: Arc<Policy>) -> Self {
-        Self { policy: RwLock::new(policy) }
+        Self {
+            policy: RwLock::new(policy),
+        }
     }
 
     /// Load policy from `.rules` files under `mosaic_home/rules/`.
@@ -131,14 +164,18 @@ impl ExecPolicyManager {
                 used_complex_parsing,
             )
         };
-        let opts = MatchOptions { resolve_host_executables: true };
-        let evaluation = exec_policy.check_multiple_with_options(
-            commands.iter(), &fallback, &opts,
-        );
+        let opts = MatchOptions {
+            resolve_host_executables: true,
+        };
+        let evaluation = exec_policy.check_multiple_with_options(commands.iter(), &fallback, &opts);
 
         let requested_amendment = derive_requested_amendment(
-            prefix_rule.as_ref(), &evaluation.matched_rules,
-            &exec_policy, &commands, &fallback, &opts,
+            prefix_rule.as_ref(),
+            &evaluation.matched_rules,
+            &exec_policy,
+            &commands,
+            &fallback,
+            &opts,
         );
 
         match evaluation.decision {
@@ -146,9 +183,10 @@ impl ExecPolicyManager {
                 reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
-                let prompt_is_rule = evaluation.matched_rules.iter().any(|m| {
-                    is_policy_match(m) && m.decision() == Decision::Prompt
-                });
+                let prompt_is_rule = evaluation
+                    .matched_rules
+                    .iter()
+                    .any(|m| is_policy_match(m) && m.decision() == Decision::Prompt);
                 match prompt_is_rejected(approval_policy, prompt_is_rule) {
                     Some(reason) => ExecApprovalRequirement::Forbidden {
                         reason: reason.to_string(),
@@ -166,9 +204,10 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                bypass_sandbox: evaluation.matched_rules.iter().any(|m| {
-                    is_policy_match(m) && m.decision() == Decision::Allow
-                }),
+                bypass_sandbox: evaluation
+                    .matched_rules
+                    .iter()
+                    .any(|m| is_policy_match(m) && m.decision() == Decision::Allow),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_amendment_for_allow(&evaluation.matched_rules)
                 } else {
@@ -193,7 +232,10 @@ impl ExecPolicyManager {
         })
         .await
         .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
-        .map_err(|source| ExecPolicyUpdateError::AppendRule { path: policy_path, source })?;
+        .map_err(|source| ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        })?;
 
         let mut guard = self.policy.write().await;
         let mut updated = guard.as_ref().clone();
@@ -217,13 +259,22 @@ impl ExecPolicyManager {
             let policy_path = policy_path.clone();
             let host = host.clone();
             let justification = justification.clone();
-            move || blocking_append_network_rule(
-                &policy_path, &host, protocol, decision, justification.as_deref(),
-            )
+            move || {
+                blocking_append_network_rule(
+                    &policy_path,
+                    &host,
+                    protocol,
+                    decision,
+                    justification.as_deref(),
+                )
+            }
         })
         .await
         .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
-        .map_err(|source| ExecPolicyUpdateError::AppendRule { path: policy_path, source })?;
+        .map_err(|source| ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        })?;
 
         let mut guard = self.policy.write().await;
         let mut updated = guard.as_ref().clone();
@@ -242,13 +293,17 @@ pub async fn load_exec_policy(mosaic_home: &Path) -> Result<Policy, ExecPolicyEr
 
     let mut parser = PolicyParser::new();
     for path in &policy_paths {
-        let contents = fs::read_to_string(path).await.map_err(|source| {
-            ExecPolicyError::ReadFile { path: path.clone(), source }
-        })?;
+        let contents =
+            fs::read_to_string(path)
+                .await
+                .map_err(|source| ExecPolicyError::ReadFile {
+                    path: path.clone(),
+                    source,
+                })?;
         let id = path.to_string_lossy().to_string();
-        parser.parse(&id, &contents).map_err(|source| {
-            ExecPolicyError::ParsePolicy { path: id, source }
-        })?;
+        parser
+            .parse(&id, &contents)
+            .map_err(|source| ExecPolicyError::ParsePolicy { path: id, source })?;
     }
 
     debug!("loaded rules from {} files", policy_paths.len());
@@ -260,16 +315,31 @@ pub async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicy
     let mut read_dir = match fs::read_dir(dir).await {
         Ok(rd) => rd,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => return Err(ExecPolicyError::ReadDir { dir: dir.to_path_buf(), source }),
+        Err(source) => {
+            return Err(ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            })
+        }
     };
 
     let mut paths = Vec::new();
-    while let Some(entry) = read_dir.next_entry().await.map_err(|source| {
-        ExecPolicyError::ReadDir { dir: dir.to_path_buf(), source }
-    })? {
+    while let Some(entry) =
+        read_dir
+            .next_entry()
+            .await
+            .map_err(|source| ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            })?
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some(RULE_EXTENSION)
-            && entry.file_type().await.map(|ft| ft.is_file()).unwrap_or(false)
+            && entry
+                .file_type()
+                .await
+                .map(|ft| ft.is_file())
+                .unwrap_or(false)
         {
             paths.push(path);
         }
@@ -303,13 +373,19 @@ fn is_policy_match(m: &RuleMatch) -> bool {
 }
 
 fn try_derive_amendment_for_prompt(matched: &[RuleMatch]) -> Option<ExecPolicyAmendment> {
-    if matched.iter().any(|m| is_policy_match(m) && m.decision() == Decision::Prompt) {
+    if matched
+        .iter()
+        .any(|m| is_policy_match(m) && m.decision() == Decision::Prompt)
+    {
         return None;
     }
     matched.iter().find_map(|m| match m {
-        RuleMatch::HeuristicsRuleMatch { command, decision: Decision::Prompt } => {
-            Some(ExecPolicyAmendment { command: command.clone() })
-        }
+        RuleMatch::HeuristicsRuleMatch {
+            command,
+            decision: Decision::Prompt,
+        } => Some(ExecPolicyAmendment {
+            command: command.clone(),
+        }),
         _ => None,
     })
 }
@@ -319,9 +395,12 @@ fn try_derive_amendment_for_allow(matched: &[RuleMatch]) -> Option<ExecPolicyAme
         return None;
     }
     matched.iter().find_map(|m| match m {
-        RuleMatch::HeuristicsRuleMatch { command, decision: Decision::Allow } => {
-            Some(ExecPolicyAmendment { command: command.clone() })
-        }
+        RuleMatch::HeuristicsRuleMatch {
+            command,
+            decision: Decision::Allow,
+        } => Some(ExecPolicyAmendment {
+            command: command.clone(),
+        }),
         _ => None,
     })
 }
@@ -339,15 +418,16 @@ fn derive_requested_amendment(
         return None;
     }
     if BANNED_PREFIX_SUGGESTIONS.iter().any(|banned| {
-        prefix.len() == banned.len()
-            && prefix.iter().map(String::as_str).eq(banned.iter().copied())
+        prefix.len() == banned.len() && prefix.iter().map(String::as_str).eq(banned.iter().copied())
     }) {
         return None;
     }
     if matched_rules.iter().any(is_policy_match) {
         return None;
     }
-    let amendment = ExecPolicyAmendment { command: prefix.clone() };
+    let amendment = ExecPolicyAmendment {
+        command: prefix.clone(),
+    };
     if prefix_rule_would_approve_all(exec_policy, &amendment.command, commands, fallback, opts) {
         Some(amendment)
     } else {
@@ -366,21 +446,25 @@ fn prefix_rule_would_approve_all(
     if policy.add_prefix_rule(prefix, Decision::Allow).is_err() {
         return false;
     }
-    commands.iter().all(|cmd| {
-        policy.check_with_options(cmd, fallback, opts).decision == Decision::Allow
-    })
+    commands
+        .iter()
+        .all(|cmd| policy.check_with_options(cmd, fallback, opts).decision == Decision::Allow)
 }
 
 // ── Reason derivation ────────────────────────────────────────────
 
-fn prompt_is_rejected(approval_policy: AskForApproval, prompt_is_rule: bool) -> Option<&'static str> {
+fn prompt_is_rejected(
+    approval_policy: AskForApproval,
+    prompt_is_rule: bool,
+) -> Option<&'static str> {
     match approval_policy {
         AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
         AskForApproval::Reject(rc) => {
             if prompt_is_rule {
                 rc.rejects_rules_approval().then_some(REJECT_RULES_REASON)
             } else {
-                rc.rejects_sandbox_approval().then_some(REJECT_SANDBOX_REASON)
+                rc.rejects_sandbox_approval()
+                    .then_some(REJECT_SANDBOX_REASON)
             }
         }
         _ => None,
@@ -389,11 +473,16 @@ fn prompt_is_rejected(approval_policy: AskForApproval, prompt_is_rule: bool) -> 
 
 fn derive_prompt_reason(command: &[String], evaluation: &Evaluation) -> Option<String> {
     let cmd_str = render_shlex(command);
-    evaluation.matched_rules.iter()
+    evaluation
+        .matched_rules
+        .iter()
         .filter_map(|m| match m {
-            RuleMatch::PrefixRuleMatch { matched_prefix, decision: Decision::Prompt, justification, .. } => {
-                Some((matched_prefix.len(), justification.as_deref()))
-            }
+            RuleMatch::PrefixRuleMatch {
+                matched_prefix,
+                decision: Decision::Prompt,
+                justification,
+                ..
+            } => Some((matched_prefix.len(), justification.as_deref())),
             _ => None,
         })
         .max_by_key(|(len, _)| *len)
@@ -405,11 +494,16 @@ fn derive_prompt_reason(command: &[String], evaluation: &Evaluation) -> Option<S
 
 fn derive_forbidden_reason(command: &[String], evaluation: &Evaluation) -> String {
     let cmd_str = render_shlex(command);
-    evaluation.matched_rules.iter()
+    evaluation
+        .matched_rules
+        .iter()
         .filter_map(|m| match m {
-            RuleMatch::PrefixRuleMatch { matched_prefix, decision: Decision::Forbidden, justification, .. } => {
-                Some((matched_prefix, justification.as_deref()))
-            }
+            RuleMatch::PrefixRuleMatch {
+                matched_prefix,
+                decision: Decision::Forbidden,
+                justification,
+                ..
+            } => Some((matched_prefix, justification.as_deref())),
             _ => None,
         })
         .max_by_key(|(prefix, _)| prefix.len())
@@ -431,7 +525,10 @@ fn render_shlex(args: &[String]) -> String {
 
 trait PolicyExt {
     fn check_multiple_with_options<'a, I, F>(
-        &self, commands: I, fallback: &F, opts: &MatchOptions,
+        &self,
+        commands: I,
+        fallback: &F,
+        opts: &MatchOptions,
     ) -> Evaluation
     where
         I: IntoIterator<Item = &'a Vec<String>>,
@@ -440,7 +537,10 @@ trait PolicyExt {
 
 impl PolicyExt for Policy {
     fn check_multiple_with_options<'a, I, F>(
-        &self, commands: I, fallback: &F, opts: &MatchOptions,
+        &self,
+        commands: I,
+        fallback: &F,
+        opts: &MatchOptions,
     ) -> Evaluation
     where
         I: IntoIterator<Item = &'a Vec<String>>,
@@ -450,8 +550,15 @@ impl PolicyExt for Policy {
             .into_iter()
             .flat_map(|cmd| self.matches_for_command_with_options(cmd, Some(fallback), opts))
             .collect();
-        let decision = matched.iter().map(RuleMatch::decision).max().unwrap_or(Decision::Prompt);
-        Evaluation { decision, matched_rules: matched }
+        let decision = matched
+            .iter()
+            .map(RuleMatch::decision)
+            .max()
+            .unwrap_or(Decision::Prompt);
+        Evaluation {
+            decision,
+            matched_rules: matched,
+        }
     }
 }
 
@@ -474,57 +581,74 @@ mod tests {
     #[tokio::test]
     async fn empty_policy_uses_heuristics() {
         let mgr = ExecPolicyManager::default();
-        let req = mgr.evaluate_command(
-            &cmd(&["ls", "-la"]),
-            AskForApproval::OnRequest,
-            &SandboxPolicy::new_read_only_policy(),
-            None,
-        ).await;
+        let req = mgr
+            .evaluate_command(
+                &cmd(&["ls", "-la"]),
+                AskForApproval::OnRequest,
+                &SandboxPolicy::new_read_only_policy(),
+                None,
+            )
+            .await;
         assert!(matches!(req, ExecApprovalRequirement::Skip { .. }));
     }
 
     #[tokio::test]
     async fn forbidden_command_by_policy() {
         let mut parser = PolicyParser::new();
-        parser.parse("test", r#"prefix_rule(pattern=["rm"], decision="forbidden")"#).unwrap();
+        parser
+            .parse(
+                "test",
+                r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+            )
+            .unwrap();
         let mgr = ExecPolicyManager::new(Arc::new(parser.build()));
 
-        let req = mgr.evaluate_command(
-            &cmd(&["rm", "-rf", "/"]),
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            None,
-        ).await;
+        let req = mgr
+            .evaluate_command(
+                &cmd(&["rm", "-rf", "/"]),
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                None,
+            )
+            .await;
         assert!(matches!(req, ExecApprovalRequirement::Forbidden { .. }));
     }
 
     #[tokio::test]
     async fn prompt_command_by_policy() {
         let mut parser = PolicyParser::new();
-        parser.parse("test", r#"prefix_rule(pattern=["npm"], decision="prompt")"#).unwrap();
+        parser
+            .parse("test", r#"prefix_rule(pattern=["npm"], decision="prompt")"#)
+            .unwrap();
         let mgr = ExecPolicyManager::new(Arc::new(parser.build()));
 
-        let req = mgr.evaluate_command(
-            &cmd(&["npm", "install"]),
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            None,
-        ).await;
+        let req = mgr
+            .evaluate_command(
+                &cmd(&["npm", "install"]),
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                None,
+            )
+            .await;
         assert!(matches!(req, ExecApprovalRequirement::NeedsApproval { .. }));
     }
 
     #[tokio::test]
     async fn prompt_rejected_by_never_policy() {
         let mut parser = PolicyParser::new();
-        parser.parse("test", r#"prefix_rule(pattern=["rm"], decision="prompt")"#).unwrap();
+        parser
+            .parse("test", r#"prefix_rule(pattern=["rm"], decision="prompt")"#)
+            .unwrap();
         let mgr = ExecPolicyManager::new(Arc::new(parser.build()));
 
-        let req = mgr.evaluate_command(
-            &cmd(&["rm"]),
-            AskForApproval::Never,
-            &SandboxPolicy::DangerFullAccess,
-            None,
-        ).await;
+        let req = mgr
+            .evaluate_command(
+                &cmd(&["rm"]),
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                None,
+            )
+            .await;
         match req {
             ExecApprovalRequirement::Forbidden { reason } => {
                 assert_eq!(reason, PROMPT_CONFLICT_REASON);
@@ -536,15 +660,22 @@ mod tests {
     #[tokio::test]
     async fn bash_lc_evaluates_inner_commands() {
         let mut parser = PolicyParser::new();
-        parser.parse("test", r#"prefix_rule(pattern=["rm"], decision="forbidden")"#).unwrap();
+        parser
+            .parse(
+                "test",
+                r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+            )
+            .unwrap();
         let mgr = ExecPolicyManager::new(Arc::new(parser.build()));
 
-        let req = mgr.evaluate_command(
-            &cmd(&["bash", "-lc", "rm -rf /some/folder"]),
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            None,
-        ).await;
+        let req = mgr
+            .evaluate_command(
+                &cmd(&["bash", "-lc", "rm -rf /some/folder"]),
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                None,
+            )
+            .await;
         assert!(matches!(req, ExecApprovalRequirement::Forbidden { .. }));
     }
 
@@ -552,7 +683,9 @@ mod tests {
     async fn append_amendment_updates_policy() {
         let tmp = tempfile::tempdir().unwrap();
         let mgr = ExecPolicyManager::default();
-        let amendment = ExecPolicyAmendment { command: vec!["echo".into(), "hello".into()] };
+        let amendment = ExecPolicyAmendment {
+            command: vec!["echo".into(), "hello".into()],
+        };
 
         mgr.append_amendment(tmp.path(), &amendment).await.unwrap();
 
@@ -570,7 +703,8 @@ mod tests {
         std::fs::write(
             rules_dir.join("test.rules"),
             r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let policy = load_exec_policy(tmp.path()).await.unwrap();
         let eval = policy.check(&cmd(&["rm"]), &heuristic);
@@ -580,13 +714,16 @@ mod tests {
     #[tokio::test]
     async fn collect_empty_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let files = collect_policy_files(&tmp.path().join("nonexistent")).await.unwrap();
+        let files = collect_policy_files(&tmp.path().join("nonexistent"))
+            .await
+            .unwrap();
         assert!(files.is_empty());
     }
 
     #[test]
     fn commands_for_exec_policy_parses_bash_lc() {
-        let (cmds, complex) = commands_for_exec_policy(&cmd(&["bash", "-lc", "cargo build && echo ok"]));
+        let (cmds, complex) =
+            commands_for_exec_policy(&cmd(&["bash", "-lc", "cargo build && echo ok"]));
         assert!(!complex);
         assert_eq!(cmds.len(), 2);
     }

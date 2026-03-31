@@ -102,8 +102,7 @@ impl UnifiedExecHandler {
         })?;
 
         // Resolve shell
-        let default_shell =
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let default_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let shell_path = params.shell.as_deref().unwrap_or(&default_shell);
 
         // Login shell check
@@ -141,13 +140,11 @@ impl UnifiedExecHandler {
 
         // Intercept apply_patch
         let cwd = std::env::current_dir().unwrap_or_default();
-        let timeout_ms = params.timeout_ms.unwrap_or(params.yield_time_ms.max(120_000));
-        if let Some(result) = super::apply_patch::intercept_apply_patch(
-            &shell_args,
-            &cwd,
-            Some(timeout_ms),
-        )
-        .await?
+        let timeout_ms = params
+            .timeout_ms
+            .unwrap_or(params.yield_time_ms.max(120_000));
+        if let Some(result) =
+            super::apply_patch::intercept_apply_patch(&shell_args, &cwd, Some(timeout_ms)).await?
         {
             return Ok(result);
         }

@@ -51,11 +51,8 @@ async fn upload_attachments(
     for (index, attachment) in attachments.iter().enumerate() {
         let source_path = Path::new(&attachment.source_path);
         let safe_name = sanitize_file_name(&attachment.display_name);
-        let object_key = build_object_key(
-            config,
-            share_id,
-            &format!("assets/{index:02}-{safe_name}"),
-        );
+        let object_key =
+            build_object_key(config, share_id, &format!("assets/{index:02}-{safe_name}"));
 
         oss::upload_file(
             config,
@@ -96,7 +93,10 @@ fn sanitize_file_name(name: &str) -> String {
         }
     }
 
-    sanitized.trim_matches('-').to_string().if_empty("attachment")
+    sanitized
+        .trim_matches('-')
+        .to_string()
+        .if_empty("attachment")
 }
 
 fn render_markdownish_html(markdown: &str) -> String {
@@ -236,9 +236,6 @@ mod tests {
 
     #[test]
     fn sanitize_file_name_keeps_extension() {
-        assert_eq!(
-            sanitize_file_name("图表 / demo?.png"),
-            "demo-.png"
-        );
+        assert_eq!(sanitize_file_name("图表 / demo?.png"), "demo-.png");
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::types::{
@@ -172,10 +173,33 @@ pub struct PermissionsToml {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case", default)]
 pub struct ShellEnvironmentPolicyToml {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
     pub inherit: Vec<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub set: HashMap<String, String>,
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    let value = Option::<StringOrVec>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(StringOrVec::One(value)) => vec![value],
+        Some(StringOrVec::Many(values)) => values,
+        None => Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -263,7 +287,10 @@ impl From<&MemoriesToml> for MemoriesConfig {
                 .max_raw_memories_for_consolidation
                 .unwrap_or(d.max_raw_memories_for_consolidation)
                 .min(4096),
-            max_unused_days: toml.max_unused_days.unwrap_or(d.max_unused_days).clamp(0, 365),
+            max_unused_days: toml
+                .max_unused_days
+                .unwrap_or(d.max_unused_days)
+                .clamp(0, 365),
             max_rollout_age_days: toml
                 .max_rollout_age_days
                 .unwrap_or(d.max_rollout_age_days)
@@ -306,7 +333,7 @@ pub enum McpServerTransportConfig {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub struct McpServerConfig {
     pub transport: McpServerTransportConfig,
@@ -328,6 +355,72 @@ pub struct McpServerConfig {
     pub scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_resource: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct McpServerConfigCompat {
+            #[serde(default)]
+            transport: Option<McpServerTransportConfig>,
+            #[serde(default)]
+            command: Option<String>,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default)]
+            env: HashMap<String, String>,
+            #[serde(default = "default_true")]
+            enabled: bool,
+            #[serde(default)]
+            required: bool,
+            #[serde(default)]
+            disabled_reason: Option<String>,
+            #[serde(default)]
+            startup_timeout_sec: Option<std::time::Duration>,
+            #[serde(default)]
+            tool_timeout_sec: Option<std::time::Duration>,
+            #[serde(default)]
+            enabled_tools: Option<Vec<String>>,
+            #[serde(default)]
+            disabled_tools: Option<Vec<String>>,
+            #[serde(default)]
+            scopes: Option<Vec<String>>,
+            #[serde(default)]
+            oauth_resource: Option<String>,
+        }
+
+        let compat = McpServerConfigCompat::deserialize(deserializer)?;
+        let transport = match (compat.transport, compat.command) {
+            (Some(transport), _) => transport,
+            (None, Some(command)) => McpServerTransportConfig::Stdio {
+                command,
+                args: compat.args,
+                env: compat.env,
+            },
+            (None, None) => {
+                return Err(de::Error::custom(
+                    "missing MCP server transport: expected `transport` or legacy `command`",
+                ));
+            }
+        };
+
+        Ok(Self {
+            transport,
+            enabled: compat.enabled,
+            required: compat.required,
+            disabled_reason: compat.disabled_reason,
+            startup_timeout_sec: compat.startup_timeout_sec,
+            tool_timeout_sec: compat.tool_timeout_sec,
+            enabled_tools: compat.enabled_tools,
+            disabled_tools: compat.disabled_tools,
+            scopes: compat.scopes,
+            oauth_resource: compat.oauth_resource,
+        })
+    }
 }
 
 fn default_true() -> bool {
@@ -401,21 +494,21 @@ mod tests {
     #[test]
     fn mcp_server_roundtrip() {
         let server = McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
-                        command: "node".into(),
-                        args: vec!["server.js".into()],
-                        env: HashMap::new(),
-                    },
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: None,
-                    tool_timeout_sec: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth_resource: None,
-                };
+            transport: McpServerTransportConfig::Stdio {
+                command: "node".into(),
+                args: vec!["server.js".into()],
+                env: HashMap::new(),
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+        };
         let config = ConfigToml {
             mcp_servers: HashMap::from([("test".into(), server)]),
             ..Default::default()
@@ -423,5 +516,52 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let decoded: ConfigToml = toml::from_str(&toml_str).unwrap();
         assert_eq!(config, decoded);
+    }
+
+    #[test]
+    fn shell_environment_policy_accepts_scalar_inherit() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [shell_environment_policy]
+            inherit = "core"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.shell_environment_policy.inherit, vec!["core"]);
+    }
+
+    #[test]
+    fn mcp_server_accepts_legacy_flat_stdio_shape() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [mcp_servers.playwright]
+            command = "npx"
+            args = ["@playwright/mcp@latest", "--browser", "chromium"]
+            enabled = true
+
+            [mcp_servers.playwright.env]
+            FOO = "bar"
+            "#,
+        )
+        .unwrap();
+
+        let server = config.mcp_servers.get("playwright").unwrap();
+        assert_eq!(server.enabled, true);
+        match &server.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "npx");
+                assert_eq!(
+                    args,
+                    &vec![
+                        "@playwright/mcp@latest".to_string(),
+                        "--browser".to_string(),
+                        "chromium".to_string()
+                    ]
+                );
+                assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
+            }
+            other => panic!("expected stdio transport, got {other:?}"),
+        }
     }
 }

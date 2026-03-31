@@ -23,8 +23,7 @@ pub fn system_cache_root_dir(codex_home: &Path) -> PathBuf {
 /// Uses a fingerprint marker to skip reinstallation when unchanged.
 pub fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
     let skills_root = codex_home.join(SKILLS_DIR_NAME);
-    fs::create_dir_all(&skills_root)
-        .map_err(|e| SystemSkillsError::io("create skills root", e))?;
+    fs::create_dir_all(&skills_root).map_err(|e| SystemSkillsError::io("create skills root", e))?;
 
     let dest = system_cache_root_dir(codex_home);
     let marker_path = dest.join(MARKER_FILENAME);

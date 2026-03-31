@@ -7,10 +7,12 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseInputItem>) {
 
     for (idx, item) in items.iter().enumerate() {
         if let ResponseInputItem::FunctionCall { call_id, .. } = item {
-            let has_output = items.iter().any(|i| matches!(
-                i,
-                ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
-            ));
+            let has_output = items.iter().any(|i| {
+                matches!(
+                    i,
+                    ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
+                )
+            });
             if !has_output {
                 inserts.push((
                     idx,
@@ -54,16 +56,20 @@ pub(crate) fn remove_corresponding(
 ) {
     match removed {
         ResponseInputItem::FunctionCall { call_id, .. } => {
-            items.retain(|i| !matches!(
-                i,
-                ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
-            ));
+            items.retain(|i| {
+                !matches!(
+                    i,
+                    ResponseInputItem::FunctionCallOutput { call_id: cid, .. } if cid == call_id
+                )
+            });
         }
         ResponseInputItem::FunctionCallOutput { call_id, .. } => {
-            items.retain(|i| !matches!(
-                i,
-                ResponseInputItem::FunctionCall { call_id: cid, .. } if cid == call_id
-            ));
+            items.retain(|i| {
+                !matches!(
+                    i,
+                    ResponseInputItem::FunctionCall { call_id: cid, .. } if cid == call_id
+                )
+            });
         }
         _ => {}
     }
@@ -98,7 +104,9 @@ mod tests {
         let mut items = vec![user_msg("hi"), func_call("c1")];
         ensure_call_outputs_present(&mut items);
         assert_eq!(items.len(), 3);
-        assert!(matches!(&items[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
+        assert!(
+            matches!(&items[2], ResponseInputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
     }
 
     #[test]

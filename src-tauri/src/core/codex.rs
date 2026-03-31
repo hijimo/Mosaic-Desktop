@@ -5,15 +5,19 @@ use async_channel::{Receiver, Sender};
 use tokio::sync::Mutex;
 
 use crate::config::ConfigLayerStack;
+use crate::config::ConfigRequirements;
 use crate::protocol::error::{CodexError, ErrorCode};
-use crate::protocol::event::{Event, EventMsg, SessionConfiguredEvent};
+use crate::protocol::event::{
+    Event, EventMsg, ItemCompletedEvent, ItemStartedEvent, SessionConfiguredEvent,
+    WebSearchBeginEvent, WebSearchEndEvent,
+};
 use crate::protocol::submission::{Op, Submission};
-use crate::protocol::types::TurnContextOverrides;
+use crate::protocol::types::{TurnContextOverrides, WebSearchAction};
 
 use super::session::Session;
 use super::skills::loader::SkillRoot;
-use super::skills::model::{SkillScope, SkillMetadata};
 use super::skills::manager::SkillsManager;
+use super::skills::model::{SkillMetadata, SkillScope};
 use super::tools::handlers::dynamic::DynamicToolHandler;
 
 /// Handle returned by `Codex::spawn`, giving the caller access to the SQ/EQ channels.
@@ -34,6 +38,8 @@ pub struct Codex {
     session: Arc<Mutex<Option<Session>>>,
     /// Configuration stack (kept for session creation).
     config: ConfigLayerStack,
+    /// Runtime config requirements propagated into new sessions.
+    config_requirements: ConfigRequirements,
     /// Working directory.
     cwd: PathBuf,
     /// Whether the engine is running.
@@ -47,14 +53,72 @@ pub struct Codex {
 }
 
 use super::initial_history::InitialHistory;
-use super::rollout::reconstruction::{PreviousTurnSettings, RolloutReconstruction, reconstruct_history_from_rollout};
+use super::rollout::reconstruction::{
+    reconstruct_history_from_rollout, PreviousTurnSettings, RolloutReconstruction,
+};
 use super::rollout::recorder::ResumedHistory;
+
+fn web_search_added_events(
+    thread_id: &str,
+    turn_id: &str,
+    item: &crate::protocol::types::ResponseItem,
+) -> Option<(WebSearchBeginEvent, ItemStartedEvent)> {
+    let turn_item = crate::core::event_mapping::parse_turn_item(item)?;
+    let crate::protocol::items::TurnItem::WebSearch(search) = turn_item else {
+        return None;
+    };
+
+    Some((
+        WebSearchBeginEvent {
+            call_id: search.id.clone(),
+        },
+        ItemStartedEvent {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item: crate::protocol::items::TurnItem::WebSearch(search),
+        },
+    ))
+}
+
+fn web_search_completed_events(
+    thread_id: &str,
+    turn_id: &str,
+    item: &crate::protocol::types::ResponseItem,
+) -> Option<(WebSearchEndEvent, ItemCompletedEvent)> {
+    let turn_item = crate::core::event_mapping::parse_turn_item(item)?;
+    let crate::protocol::items::TurnItem::WebSearch(search) = turn_item else {
+        return None;
+    };
+
+    Some((
+        WebSearchEndEvent {
+            call_id: search.id.clone(),
+            query: search.query.clone(),
+            action: search.action.clone().unwrap_or(WebSearchAction::Other),
+        },
+        ItemCompletedEvent {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item: crate::protocol::items::TurnItem::WebSearch(search),
+        },
+    ))
+}
 
 impl Codex {
     pub fn new(
         sq_rx: Receiver<Submission>,
         eq_tx: Sender<Event>,
         config: ConfigLayerStack,
+        cwd: PathBuf,
+    ) -> Self {
+        Self::new_with_requirements(sq_rx, eq_tx, config, ConfigRequirements::default(), cwd)
+    }
+
+    pub fn new_with_requirements(
+        sq_rx: Receiver<Submission>,
+        eq_tx: Sender<Event>,
+        config: ConfigLayerStack,
+        config_requirements: ConfigRequirements,
         cwd: PathBuf,
     ) -> Self {
         let codex_home = dirs::home_dir()
@@ -79,6 +143,7 @@ impl Codex {
             eq_tx,
             session: Arc::new(Mutex::new(None)),
             config,
+            config_requirements,
             cwd,
             running: Arc::new(Mutex::new(false)),
             skills_manager: Arc::new(skills_manager),
@@ -89,7 +154,27 @@ impl Codex {
 
     /// Spawn a new Codex engine, returning a handle with SQ/EQ channels.
     pub async fn spawn(config: ConfigLayerStack, cwd: PathBuf) -> Result<CodexHandle, CodexError> {
-        Self::spawn_with_history(config, cwd, InitialHistory::New).await
+        Self::spawn_with_history_and_requirements(
+            config,
+            ConfigRequirements::default(),
+            cwd,
+            InitialHistory::New,
+        )
+        .await
+    }
+
+    pub async fn spawn_with_requirements(
+        config: ConfigLayerStack,
+        config_requirements: ConfigRequirements,
+        cwd: PathBuf,
+    ) -> Result<CodexHandle, CodexError> {
+        Self::spawn_with_history_and_requirements(
+            config,
+            config_requirements,
+            cwd,
+            InitialHistory::New,
+        )
+        .await
     }
 
     /// Spawn a Codex engine with initial history.
@@ -98,10 +183,25 @@ impl Codex {
         cwd: PathBuf,
         initial_history: InitialHistory,
     ) -> Result<CodexHandle, CodexError> {
+        Self::spawn_with_history_and_requirements(
+            config,
+            ConfigRequirements::default(),
+            cwd,
+            initial_history,
+        )
+        .await
+    }
+
+    pub async fn spawn_with_history_and_requirements(
+        config: ConfigLayerStack,
+        config_requirements: ConfigRequirements,
+        cwd: PathBuf,
+        initial_history: InitialHistory,
+    ) -> Result<CodexHandle, CodexError> {
         let (sq_tx, sq_rx) = async_channel::unbounded();
         let (eq_tx, eq_rx) = async_channel::unbounded();
 
-        let codex = Self::new(sq_rx, eq_tx, config, cwd);
+        let codex = Self::new_with_requirements(sq_rx, eq_tx, config, config_requirements, cwd);
 
         tokio::spawn(async move {
             if let Err(e) = codex.run_with_history(initial_history).await {
@@ -140,6 +240,9 @@ impl Codex {
             self.eq_tx.clone(),
             Some(self.agent_control.clone()),
         );
+        session
+            .set_config_requirements(self.config_requirements.clone())
+            .await;
         // Apply the profile from config so TurnContext picks up model_provider etc.
         session.set_active_profile(merged_config.profile.clone());
         let session_id = session.id().to_string();
@@ -203,8 +306,12 @@ impl Codex {
                     }
                 }
 
-                session.set_previous_turn_settings(reconstruction.previous_turn_settings).await;
-                session.set_reference_context_item(reconstruction.reference_context_item).await;
+                session
+                    .set_previous_turn_settings(reconstruction.previous_turn_settings)
+                    .await;
+                session
+                    .set_reference_context_item(reconstruction.reference_context_item)
+                    .await;
 
                 if !reconstruction.history.is_empty() {
                     session.add_to_history(reconstruction.history).await;
@@ -499,7 +606,12 @@ impl Codex {
             Op::AddToHistory { text, role } => {
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
-                    s.add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message(&role, text.clone())])
+                    s.add_to_history(vec![
+                        crate::protocol::types::ResponseInputItem::text_message(
+                            &role,
+                            text.clone(),
+                        ),
+                    ])
                     .await;
                 }
                 // Emit as RawResponseItem so user messages are persisted as
@@ -514,7 +626,8 @@ impl Codex {
                             phase: None,
                         },
                     },
-                )).await;
+                ))
+                .await;
             }
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let session_guard = self.session.lock().await;
@@ -558,9 +671,8 @@ impl Codex {
                 .await;
             }
             Op::Review { review_request } => {
-                self.spawn_task(Arc::new(
-                    crate::core::tasks::review::ReviewTask,
-                ), vec![]).await;
+                self.spawn_task(Arc::new(crate::core::tasks::review::ReviewTask), vec![])
+                    .await;
             }
             Op::Compact => {
                 // Compact runs inline because it needs session access.
@@ -591,9 +703,8 @@ impl Codex {
                 }
             }
             Op::Undo => {
-                self.spawn_task(Arc::new(
-                    crate::core::tasks::undo::UndoTask,
-                ), vec![]).await;
+                self.spawn_task(Arc::new(crate::core::tasks::undo::UndoTask), vec![])
+                    .await;
             }
             Op::ThreadRollback { num_turns } => {
                 let session_guard = self.session.lock().await;
@@ -661,21 +772,18 @@ impl Codex {
                 .await;
             }
             Op::ListCustomPrompts => {
-                let prompts = if let Some(dir) = crate::core::custom_prompts::default_prompts_dir() {
+                let prompts = if let Some(dir) = crate::core::custom_prompts::default_prompts_dir()
+                {
                     crate::core::custom_prompts::discover_prompts_in(&dir).await
                 } else {
                     vec![]
                 };
                 let custom_prompts = prompts
                     .into_iter()
-                    .filter_map(|p| {
-                        serde_json::to_value(&p).ok()
-                    })
+                    .filter_map(|p| serde_json::to_value(&p).ok())
                     .collect();
                 self.emit(EventMsg::ListCustomPromptsResponse(
-                    crate::protocol::event::ListCustomPromptsResponseEvent {
-                        custom_prompts,
-                    },
+                    crate::protocol::event::ListCustomPromptsResponseEvent { custom_prompts },
                 ))
                 .await;
             }
@@ -812,7 +920,12 @@ impl Codex {
             .join("\n");
         if !user_text.is_empty() {
             session
-                .add_to_history(vec![crate::protocol::types::ResponseInputItem::text_message("user", user_text.clone())])
+                .add_to_history(vec![
+                    crate::protocol::types::ResponseInputItem::text_message(
+                        "user",
+                        user_text.clone(),
+                    ),
+                ])
                 .await;
         }
 
@@ -829,14 +942,16 @@ impl Codex {
                     turn_id: turn_id_str.clone(),
                     item: user_item.clone(),
                 },
-            )).await;
+            ))
+            .await;
             self.emit(EventMsg::ItemCompleted(
                 crate::protocol::event::ItemCompletedEvent {
                     thread_id: thread_id_str,
                     turn_id: turn_id_str,
                     item: user_item,
                 },
-            )).await;
+            ))
+            .await;
         }
 
         // Resolve model and provider from turn context + config
@@ -969,9 +1084,12 @@ impl Codex {
 
         // Collect tool specs from the router for the model API
         let tool_specs = {
-            let router = session.tool_router().await;
-            let specs = router.collect_tool_specs();
-            if specs.is_empty() { None } else { Some(specs) }
+            let specs = session.collect_tool_specs_for_current_turn().await;
+            if specs.is_empty() {
+                None
+            } else {
+                Some(specs)
+            }
         };
 
         // Call the Responses API with agentic tool-call loop
@@ -1001,12 +1119,15 @@ impl Codex {
             if round > MAX_TOOL_ROUNDS {
                 self.emit(EventMsg::Warning(crate::protocol::event::WarningEvent {
                     message: format!("Tool call loop exceeded {MAX_TOOL_ROUNDS} rounds, stopping"),
-                })).await;
+                }))
+                .await;
                 break;
             }
 
             // Rebuild API input from current history each round
-            let api_input: Vec<serde_json::Value> = session.history().await
+            let api_input: Vec<serde_json::Value> = session
+                .history()
+                .await
                 .iter()
                 .map(crate::core::client::history_item_to_api)
                 .collect();
@@ -1020,7 +1141,8 @@ impl Codex {
                 api_input,
                 None,
                 tool_specs.clone(),
-            ).await;
+            )
+            .await;
 
             let mut needs_follow_up = false;
             accumulated_text.clear();
@@ -1043,7 +1165,8 @@ impl Codex {
                     self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                         message: format!("Failed to start API stream: {}", e.message),
                         codex_error_info: None,
-                    })).await;
+                    }))
+                    .await;
                     break;
                 }
                 Ok(mut stream) => {
@@ -1054,7 +1177,8 @@ impl Codex {
                                 self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                                     message: format!("Stream error: {}", e.message),
                                     codex_error_info: None,
-                                })).await;
+                                }))
+                                .await;
                                 break;
                             }
                             Ok(crate::core::client::ResponseEvent::OutputTextDelta { delta }) => {
@@ -1062,20 +1186,22 @@ impl Codex {
                                     // Emit ItemStarted on first text delta for this agent message
                                     if !agent_msg_item_started {
                                         agent_msg_item_started = true;
-                                        let placeholder_item = crate::protocol::items::TurnItem::AgentMessage(
-                                            crate::protocol::items::AgentMessageItem {
-                                                id: agent_msg_item_id.clone(),
-                                                content: Vec::new(),
-                                                phase: None,
-                                            },
-                                        );
+                                        let placeholder_item =
+                                            crate::protocol::items::TurnItem::AgentMessage(
+                                                crate::protocol::items::AgentMessageItem {
+                                                    id: agent_msg_item_id.clone(),
+                                                    content: Vec::new(),
+                                                    phase: None,
+                                                },
+                                            );
                                         self.emit(EventMsg::ItemStarted(
                                             crate::protocol::event::ItemStartedEvent {
                                                 thread_id: thread_id_str.clone(),
                                                 turn_id: turn_id_str.clone(),
                                                 item: placeholder_item,
                                             },
-                                        )).await;
+                                        ))
+                                        .await;
                                     }
 
                                     accumulated_text.push_str(&delta);
@@ -1088,18 +1214,25 @@ impl Codex {
                                             item_id: agent_msg_item_id.clone(),
                                             delta,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::FunctionCall { call_id, name, arguments }) => {
+                            Ok(crate::core::client::ResponseEvent::FunctionCall {
+                                call_id,
+                                name,
+                                arguments,
+                            }) => {
                                 // Record the function_call in history
-                                session.add_to_history(vec![
-                                    crate::protocol::types::ResponseInputItem::FunctionCall {
-                                        call_id: call_id.clone(),
-                                        name: name.clone(),
-                                        arguments: arguments.clone(),
-                                    },
-                                ]).await;
+                                session
+                                    .add_to_history(vec![
+                                        crate::protocol::types::ResponseInputItem::FunctionCall {
+                                            call_id: call_id.clone(),
+                                            name: name.clone(),
+                                            arguments: arguments.clone(),
+                                        },
+                                    ])
+                                    .await;
                                 // Emit as RawResponseItem so it gets persisted in rollout
                                 self.emit(EventMsg::RawResponseItem(
                                     crate::protocol::event::RawResponseItemEvent {
@@ -1110,8 +1243,17 @@ impl Codex {
                                             call_id: call_id.clone(),
                                         },
                                     },
-                                )).await;
+                                ))
+                                .await;
                                 pending_calls.push((call_id, name, arguments));
+                            }
+                            Ok(crate::core::client::ResponseEvent::OutputItemAdded(item)) => {
+                                if let Some((begin, started)) =
+                                    web_search_added_events(&thread_id_str, &turn_id_str, &item)
+                                {
+                                    self.emit(EventMsg::WebSearchBegin(begin)).await;
+                                    self.emit(EventMsg::ItemStarted(started)).await;
+                                }
                             }
                             Ok(crate::core::client::ResponseEvent::OutputItemDone(item)) => {
                                 // Emit as RawResponseItem so it gets persisted in rollout
@@ -1119,20 +1261,34 @@ impl Codex {
                                     crate::protocol::event::RawResponseItemEvent {
                                         item: item.clone(),
                                     },
-                                )).await;
+                                ))
+                                .await;
 
                                 // Convert to TurnItem for structured events
-                                if let Some(turn_item) = crate::core::event_mapping::parse_turn_item(&item) {
+                                if let Some((end, completed)) =
+                                    web_search_completed_events(&thread_id_str, &turn_id_str, &item)
+                                {
+                                    self.emit(EventMsg::WebSearchEnd(end)).await;
+                                    self.emit(EventMsg::ItemCompleted(completed)).await;
+                                } else if let Some(turn_item) =
+                                    crate::core::event_mapping::parse_turn_item(&item)
+                                {
                                     self.emit(EventMsg::ItemCompleted(
                                         crate::protocol::event::ItemCompletedEvent {
                                             thread_id: thread_id_str.clone(),
                                             turn_id: turn_id_str.clone(),
                                             item: turn_item,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
 
-                                if let crate::protocol::types::ResponseItem::Message { role, content, .. } = &item {
+                                if let crate::protocol::types::ResponseItem::Message {
+                                    role,
+                                    content,
+                                    ..
+                                } = &item
+                                {
                                     if role == "assistant" {
                                         let text: String = content.iter().filter_map(|c| {
                                             if let crate::protocol::types::ContentItem::OutputText { text } = c {
@@ -1151,57 +1307,70 @@ impl Codex {
                                     }
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryPartAdded { summary_index }) => {
+                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryPartAdded {
+                                summary_index,
+                            }) => {
                                 current_summary_index = summary_index;
                                 // Ensure reasoning item is started
                                 if !reasoning_item_started {
                                     reasoning_item_started = true;
-                                    let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
-                                        crate::protocol::items::ReasoningItem {
-                                            id: reasoning_item_id.clone(),
-                                            summary_text: Vec::new(),
-                                            raw_content: Vec::new(),
-                                        },
-                                    );
-                                    self.emit(EventMsg::ItemStarted(
-                                        crate::protocol::event::ItemStartedEvent {
-                                            thread_id: thread_id_str.clone(),
-                                            turn_id: turn_id_str.clone(),
-                                            item: placeholder_item,
-                                        },
-                                    )).await;
-                                }
-                                // Ensure the summary_text vec has enough slots
-                                while accumulated_reasoning_summary.len() <= summary_index as usize {
-                                    accumulated_reasoning_summary.push(String::new());
-                                }
-                            }
-                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryDelta { delta, summary_index }) => {
-                                if !delta.is_empty() {
-                                    // Ensure reasoning item is started
-                                    if !reasoning_item_started {
-                                        reasoning_item_started = true;
-                                        let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
+                                    let placeholder_item =
+                                        crate::protocol::items::TurnItem::Reasoning(
                                             crate::protocol::items::ReasoningItem {
                                                 id: reasoning_item_id.clone(),
                                                 summary_text: Vec::new(),
                                                 raw_content: Vec::new(),
                                             },
                                         );
+                                    self.emit(EventMsg::ItemStarted(
+                                        crate::protocol::event::ItemStartedEvent {
+                                            thread_id: thread_id_str.clone(),
+                                            turn_id: turn_id_str.clone(),
+                                            item: placeholder_item,
+                                        },
+                                    ))
+                                    .await;
+                                }
+                                // Ensure the summary_text vec has enough slots
+                                while accumulated_reasoning_summary.len() <= summary_index as usize
+                                {
+                                    accumulated_reasoning_summary.push(String::new());
+                                }
+                            }
+                            Ok(crate::core::client::ResponseEvent::ReasoningSummaryDelta {
+                                delta,
+                                summary_index,
+                            }) => {
+                                if !delta.is_empty() {
+                                    // Ensure reasoning item is started
+                                    if !reasoning_item_started {
+                                        reasoning_item_started = true;
+                                        let placeholder_item =
+                                            crate::protocol::items::TurnItem::Reasoning(
+                                                crate::protocol::items::ReasoningItem {
+                                                    id: reasoning_item_id.clone(),
+                                                    summary_text: Vec::new(),
+                                                    raw_content: Vec::new(),
+                                                },
+                                            );
                                         self.emit(EventMsg::ItemStarted(
                                             crate::protocol::event::ItemStartedEvent {
                                                 thread_id: thread_id_str.clone(),
                                                 turn_id: turn_id_str.clone(),
                                                 item: placeholder_item,
                                             },
-                                        )).await;
+                                        ))
+                                        .await;
                                     }
 
                                     // Accumulate summary text
-                                    while accumulated_reasoning_summary.len() <= summary_index as usize {
+                                    while accumulated_reasoning_summary.len()
+                                        <= summary_index as usize
+                                    {
                                         accumulated_reasoning_summary.push(String::new());
                                     }
-                                    accumulated_reasoning_summary[summary_index as usize].push_str(&delta);
+                                    accumulated_reasoning_summary[summary_index as usize]
+                                        .push_str(&delta);
 
                                     // Structured v2 event
                                     self.emit(EventMsg::ReasoningContentDelta(
@@ -1212,35 +1381,43 @@ impl Codex {
                                             delta,
                                             summary_index,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::ReasoningContentDelta { delta, content_index }) => {
+                            Ok(crate::core::client::ResponseEvent::ReasoningContentDelta {
+                                delta,
+                                content_index,
+                            }) => {
                                 if !delta.is_empty() {
                                     // Ensure reasoning item is started
                                     if !reasoning_item_started {
                                         reasoning_item_started = true;
-                                        let placeholder_item = crate::protocol::items::TurnItem::Reasoning(
-                                            crate::protocol::items::ReasoningItem {
-                                                id: reasoning_item_id.clone(),
-                                                summary_text: Vec::new(),
-                                                raw_content: Vec::new(),
-                                            },
-                                        );
+                                        let placeholder_item =
+                                            crate::protocol::items::TurnItem::Reasoning(
+                                                crate::protocol::items::ReasoningItem {
+                                                    id: reasoning_item_id.clone(),
+                                                    summary_text: Vec::new(),
+                                                    raw_content: Vec::new(),
+                                                },
+                                            );
                                         self.emit(EventMsg::ItemStarted(
                                             crate::protocol::event::ItemStartedEvent {
                                                 thread_id: thread_id_str.clone(),
                                                 turn_id: turn_id_str.clone(),
                                                 item: placeholder_item,
                                             },
-                                        )).await;
+                                        ))
+                                        .await;
                                     }
 
                                     // Accumulate raw content
-                                    while accumulated_reasoning_raw.len() <= content_index as usize {
+                                    while accumulated_reasoning_raw.len() <= content_index as usize
+                                    {
                                         accumulated_reasoning_raw.push(String::new());
                                     }
-                                    accumulated_reasoning_raw[content_index as usize].push_str(&delta);
+                                    accumulated_reasoning_raw[content_index as usize]
+                                        .push_str(&delta);
                                     current_content_index = content_index;
 
                                     // Structured v2 event
@@ -1252,58 +1429,76 @@ impl Codex {
                                             delta,
                                             content_index,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
                             }
-                            Ok(crate::core::client::ResponseEvent::Completed { token_usage, .. }) => {
+                            Ok(crate::core::client::ResponseEvent::Completed {
+                                token_usage,
+                                ..
+                            }) => {
                                 if let Some(usage) = token_usage {
                                     self.emit(EventMsg::TokenCount(
                                         crate::protocol::event::TokenCountEvent {
                                             info: Some(crate::protocol::types::TokenUsageInfo {
-                                                total_token_usage: crate::protocol::types::TokenUsage {
-                                                    input_tokens: usage.input_tokens,
-                                                    cached_input_tokens: usage.cached_input_tokens,
-                                                    output_tokens: usage.output_tokens,
-                                                    reasoning_output_tokens: usage.reasoning_output_tokens,
-                                                    total_tokens: usage.total_tokens,
-                                                },
-                                                last_token_usage: crate::protocol::types::TokenUsage {
-                                                    input_tokens: usage.input_tokens,
-                                                    cached_input_tokens: usage.cached_input_tokens,
-                                                    output_tokens: usage.output_tokens,
-                                                    reasoning_output_tokens: usage.reasoning_output_tokens,
-                                                    total_tokens: usage.total_tokens,
-                                                },
+                                                total_token_usage:
+                                                    crate::protocol::types::TokenUsage {
+                                                        input_tokens: usage.input_tokens,
+                                                        cached_input_tokens: usage
+                                                            .cached_input_tokens,
+                                                        output_tokens: usage.output_tokens,
+                                                        reasoning_output_tokens: usage
+                                                            .reasoning_output_tokens,
+                                                        total_tokens: usage.total_tokens,
+                                                    },
+                                                last_token_usage:
+                                                    crate::protocol::types::TokenUsage {
+                                                        input_tokens: usage.input_tokens,
+                                                        cached_input_tokens: usage
+                                                            .cached_input_tokens,
+                                                        output_tokens: usage.output_tokens,
+                                                        reasoning_output_tokens: usage
+                                                            .reasoning_output_tokens,
+                                                        total_tokens: usage.total_tokens,
+                                                    },
                                                 model_context_window: None,
                                             }),
                                             rate_limits: None,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
 
                                 // Emit ItemCompleted for reasoning if we accumulated any
                                 if reasoning_item_started {
-                                    let reasoning_item = crate::protocol::items::TurnItem::Reasoning(
-                                        crate::protocol::items::ReasoningItem {
-                                            id: reasoning_item_id.clone(),
-                                            summary_text: accumulated_reasoning_summary.clone(),
-                                            raw_content: accumulated_reasoning_raw.clone(),
-                                        },
-                                    );
+                                    let reasoning_item =
+                                        crate::protocol::items::TurnItem::Reasoning(
+                                            crate::protocol::items::ReasoningItem {
+                                                id: reasoning_item_id.clone(),
+                                                summary_text: accumulated_reasoning_summary.clone(),
+                                                raw_content: accumulated_reasoning_raw.clone(),
+                                            },
+                                        );
                                     self.emit(EventMsg::ItemCompleted(
                                         crate::protocol::event::ItemCompletedEvent {
                                             thread_id: thread_id_str.clone(),
                                             turn_id: turn_id_str.clone(),
                                             item: reasoning_item,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
 
                                 if !accumulated_text.is_empty() && last_agent_message.is_none() {
                                     last_agent_message = Some(accumulated_text.clone());
-                                    session.add_to_history(vec![
-                                        crate::protocol::types::ResponseInputItem::text_message("assistant", accumulated_text.clone()),
-                                    ]).await;
+                                    session
+                                        .add_to_history(vec![
+                                            crate::protocol::types::ResponseInputItem::text_message(
+                                                "assistant",
+                                                accumulated_text.clone(),
+                                            ),
+                                        ])
+                                        .await;
 
                                     // Emit ItemCompleted for the agent message built from accumulated deltas
                                     let completed_item = crate::protocol::items::TurnItem::AgentMessage(
@@ -1321,7 +1516,8 @@ impl Codex {
                                             turn_id: turn_id_str.clone(),
                                             item: completed_item,
                                         },
-                                    )).await;
+                                    ))
+                                    .await;
                                 }
                                 break;
                             }
@@ -1329,10 +1525,11 @@ impl Codex {
                                 self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
                                     message: format!("API error [{code}]: {message}"),
                                     codex_error_info: None,
-                                })).await;
+                                }))
+                                .await;
                                 break;
                             }
-                            // Created, OutputItemAdded, ServerModel, RateLimits
+                            // Created, ServerModel, RateLimits
                             _ => {}
                         }
                     }
@@ -1341,37 +1538,51 @@ impl Codex {
 
             // Dispatch pending tool calls in parallel
             if !pending_calls.is_empty() {
-                let futs: Vec<_> = pending_calls.iter().map(|(call_id, name, arguments)| {
-                    let args: serde_json::Value = serde_json::from_str(arguments)
-                        .unwrap_or(serde_json::Value::Object(Default::default()));
-                    let call_id = call_id.clone();
-                    let name = name.clone();
-                    async move {
-                        let result = self.dispatch_tool_call(session, turn_id, &call_id, &name, args).await;
-                        (call_id, result)
-                    }
-                }).collect();
+                let futs: Vec<_> = pending_calls
+                    .iter()
+                    .map(|(call_id, name, arguments)| {
+                        let args: serde_json::Value = serde_json::from_str(arguments)
+                            .unwrap_or(serde_json::Value::Object(Default::default()));
+                        let call_id = call_id.clone();
+                        let name = name.clone();
+                        async move {
+                            let result = self
+                                .dispatch_tool_call(session, turn_id, &call_id, &name, args)
+                                .await;
+                            (call_id, result)
+                        }
+                    })
+                    .collect();
                 let results = futures::future::join_all(futs).await;
                 for (call_id, tool_result) in results {
                     let output_str = match &tool_result {
                         Ok(v) => v.to_string(),
                         Err(e) => format!("Error: {}", e.message),
                     };
-                    session.add_to_history(vec![
-                        crate::protocol::types::ResponseInputItem::FunctionCallOutput {
-                            call_id: call_id.clone(),
-                            output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str.clone()),
-                        },
-                    ]).await;
+                    session
+                        .add_to_history(vec![
+                            crate::protocol::types::ResponseInputItem::FunctionCallOutput {
+                                call_id: call_id.clone(),
+                                output:
+                                    crate::protocol::types::FunctionCallOutputPayload::from_text(
+                                        output_str.clone(),
+                                    ),
+                            },
+                        ])
+                        .await;
                     // Persist function call output in rollout
                     self.emit(EventMsg::RawResponseItem(
                         crate::protocol::event::RawResponseItemEvent {
                             item: crate::protocol::types::ResponseItem::FunctionCallOutput {
                                 call_id,
-                                output: crate::protocol::types::FunctionCallOutputPayload::from_text(output_str),
+                                output:
+                                    crate::protocol::types::FunctionCallOutputPayload::from_text(
+                                        output_str,
+                                    ),
                             },
                         },
-                    )).await;
+                    ))
+                    .await;
                 }
                 needs_follow_up = true;
             }
@@ -1409,16 +1620,20 @@ impl Codex {
                     &api_key_clone,
                     &model_clone,
                     &user_text_clone,
-                ).await {
-                    let _ = eq_tx.send(Event {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        msg: EventMsg::ThreadNameUpdated(
-                            crate::protocol::event::ThreadNameUpdatedEvent {
-                                thread_id: session_id,
-                                thread_name: Some(name),
-                            },
-                        ),
-                    }).await;
+                )
+                .await
+                {
+                    let _ = eq_tx
+                        .send(Event {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            msg: EventMsg::ThreadNameUpdated(
+                                crate::protocol::event::ThreadNameUpdatedEvent {
+                                    thread_id: session_id,
+                                    thread_name: Some(name),
+                                },
+                            ),
+                        })
+                        .await;
                 }
             });
         }
@@ -1510,7 +1725,7 @@ impl Codex {
                         crate::protocol::types::ResponseInputItem::FunctionCallOutput {
                             call_id: call_id.to_string(),
                             output: crate::protocol::types::FunctionCallOutputPayload::from_text(
-                                    value.to_string(),
+                                value.to_string(),
                             ),
                         },
                     ])
@@ -1640,6 +1855,7 @@ impl Codex {
 mod tests {
     use super::*;
     use crate::config::ConfigLayerStack;
+    use crate::protocol::items::TurnItem;
     use crate::protocol::types::{AskForApproval, SandboxPolicy, UserInput};
 
     /// Helper: create a Codex with unbounded channels and return (sq_tx, eq_rx, codex).
@@ -1836,6 +2052,56 @@ mod tests {
         // Verify no error events were emitted
         let events = drain_events(&eq_rx);
         assert!(!events.iter().any(|e| matches!(&e.msg, EventMsg::Error(_))));
+    }
+
+    #[test]
+    fn web_search_added_response_maps_to_begin_and_started_item() {
+        let item = crate::protocol::types::ResponseItem::WebSearchCall {
+            id: Some("ws-1".into()),
+            status: Some("in_progress".into()),
+            action: None,
+        };
+
+        let (begin, started) =
+            web_search_added_events("thread-1", "turn-1", &item).expect("web search events");
+
+        assert_eq!(begin.call_id, "ws-1");
+        assert_eq!(started.thread_id, "thread-1");
+        assert_eq!(started.turn_id, "turn-1");
+        match started.item {
+            TurnItem::WebSearch(search) => {
+                assert_eq!(search.id, "ws-1");
+                assert!(search.query.is_empty());
+            }
+            other => panic!("expected WebSearch item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn web_search_done_response_maps_to_end_and_completed_item() {
+        let item = crate::protocol::types::ResponseItem::WebSearchCall {
+            id: Some("ws-2".into()),
+            status: Some("completed".into()),
+            action: Some(crate::protocol::types::WebSearchAction::Search {
+                query: Some("weather seattle".into()),
+                queries: None,
+            }),
+        };
+
+        let (end, completed) =
+            web_search_completed_events("thread-1", "turn-1", &item).expect("web search events");
+
+        assert_eq!(end.call_id, "ws-2");
+        assert_eq!(end.query, "weather seattle");
+        assert_eq!(completed.thread_id, "thread-1");
+        assert_eq!(completed.turn_id, "turn-1");
+        match completed.item {
+            TurnItem::WebSearch(search) => {
+                assert_eq!(search.id, "ws-2");
+                assert_eq!(search.query, "weather seattle");
+            }
+            other => panic!("expected WebSearch item, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -2668,7 +2934,11 @@ async fn generate_thread_name(
         .and_then(|v| v.as_str())?;
 
     let name: String = text.trim().chars().take(15).collect();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Extract the last MCP tool selection state from a rollout.
@@ -2685,7 +2955,9 @@ fn extract_mcp_tool_selection_from_rollout(
     let mut active_selected_tools: Option<Vec<String>> = None;
 
     for item in rollout_items {
-        let RolloutItem::ResponseItem(response_item) = item else { continue };
+        let RolloutItem::ResponseItem(response_item) = item else {
+            continue;
+        };
         match response_item {
             crate::protocol::types::ResponseItem::FunctionCall { name, call_id, .. }
                 if name == "search_bm25" =>
@@ -2693,14 +2965,28 @@ fn extract_mcp_tool_selection_from_rollout(
                 search_call_ids.insert(call_id.clone());
             }
             crate::protocol::types::ResponseItem::FunctionCallOutput { call_id, output } => {
-                if !search_call_ids.contains(call_id) { continue; }
-                let Some(content) = output.text_content() else { continue; };
-                let Ok(payload) = serde_json::from_str::<serde_json::Value>(content) else { continue; };
-                let Some(tools) = payload.get("active_selected_tools")
-                    .and_then(|v| v.as_array()) else { continue; };
-                let Some(tools) = tools.iter()
+                if !search_call_ids.contains(call_id) {
+                    continue;
+                }
+                let Some(content) = output.text_content() else {
+                    continue;
+                };
+                let Ok(payload) = serde_json::from_str::<serde_json::Value>(content) else {
+                    continue;
+                };
+                let Some(tools) = payload
+                    .get("active_selected_tools")
+                    .and_then(|v| v.as_array())
+                else {
+                    continue;
+                };
+                let Some(tools) = tools
+                    .iter()
                     .map(|v| v.as_str().map(str::to_string))
-                    .collect::<Option<Vec<_>>>() else { continue; };
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
                 active_selected_tools = Some(tools);
             }
             _ => {}

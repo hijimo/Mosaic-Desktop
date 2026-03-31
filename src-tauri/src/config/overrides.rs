@@ -55,17 +55,15 @@ mod tests {
 
     #[test]
     fn flat_override() {
-        let layer = build_cli_overrides_layer(&[
-            ("model".into(), TomlValue::String("gpt-4o".into())),
-        ]);
+        let layer =
+            build_cli_overrides_layer(&[("model".into(), TomlValue::String("gpt-4o".into()))]);
         assert_eq!(layer["model"].as_str(), Some("gpt-4o"));
     }
 
     #[test]
     fn nested_override() {
-        let layer = build_cli_overrides_layer(&[
-            ("tui.theme".into(), TomlValue::String("dark".into())),
-        ]);
+        let layer =
+            build_cli_overrides_layer(&[("tui.theme".into(), TomlValue::String("dark".into()))]);
         assert_eq!(layer["tui"]["theme"].as_str(), Some("dark"));
     }
 

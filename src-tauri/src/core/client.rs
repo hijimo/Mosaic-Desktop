@@ -196,8 +196,7 @@ impl ModelClientState {
             ),
             ws_version: self.ws_version,
             ws_disabled: std::sync::atomic::AtomicBool::new(
-                self.ws_disabled
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.ws_disabled.load(std::sync::atomic::Ordering::Relaxed),
             ),
             fallback_config: self.fallback_config.clone(),
         }
@@ -336,7 +335,8 @@ impl ModelClientSession {
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
-    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError>
+    {
         let state = &self.client.state;
 
         // If fallback is configured, try models in order
@@ -373,7 +373,8 @@ impl ModelClientSession {
         &mut self,
         prompt: &Prompt,
         model: &str,
-    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError>
+    {
         let state = &self.client.state;
 
         // Try WebSocket first if available
@@ -381,7 +382,10 @@ impl ModelClientSession {
             match self.stream_via_ws(prompt, model).await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
-                    tracing::warn!("WebSocket stream failed, falling back to SSE: {}", e.message);
+                    tracing::warn!(
+                        "WebSocket stream failed, falling back to SSE: {}",
+                        e.message
+                    );
                     self.client.disable_ws();
                 }
             }
@@ -396,7 +400,8 @@ impl ModelClientSession {
         &mut self,
         prompt: &Prompt,
         model: &str,
-    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError>
+    {
         let request = ResponsesApiRequest {
             model: model.to_string(),
             input: prompt.input.clone(),
@@ -454,7 +459,8 @@ impl ModelClientSession {
         &mut self,
         prompt: &Prompt,
         model: &str,
-    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<ResponseEvent, CodexError>>, CodexError>
+    {
         use tokio_tungstenite::tungstenite::Message;
 
         let state = &self.client.state;
@@ -464,11 +470,8 @@ impl ModelClientSession {
             .map_err(|e| CodexError::new(ErrorCode::InternalError, e))?;
 
         // Build WebSocket request with auth headers
-        let ws_url_with_auth = format!(
-            "{}{}",
-            ws_url,
-            if ws_url.contains('?') { "&" } else { "?" }
-        );
+        let ws_url_with_auth =
+            format!("{}{}", ws_url, if ws_url.contains('?') { "&" } else { "?" });
 
         // tokio-tungstenite uses http::Request for custom headers
         let mut request = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -480,9 +483,9 @@ impl ModelClientSession {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let request = request
-            .body(())
-            .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("ws request build: {e}")))?;
+        let request = request.body(()).map_err(|e| {
+            CodexError::new(ErrorCode::InternalError, format!("ws request build: {e}"))
+        })?;
 
         let (ws_stream, _) = tokio_tungstenite::connect_async(request)
             .await
@@ -608,8 +611,7 @@ impl ModelClientSession {
 // ── Retry logic ──────────────────────────────────────────────────
 
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status.is_server_error()
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
 fn backoff_delay(attempt: u32, base: Duration) -> Duration {
@@ -656,7 +658,10 @@ async fn stream_with_retry(
     }
 
     Err(last_err.unwrap_or_else(|| {
-        CodexError::new(ErrorCode::InternalError, "all retry attempts exhausted".to_string())
+        CodexError::new(
+            ErrorCode::InternalError,
+            "all retry attempts exhausted".to_string(),
+        )
     }))
 }
 
@@ -674,10 +679,12 @@ async fn try_stream_request(
 ) -> Result<impl futures::Stream<Item = Result<ResponseEvent, CodexError>>, RetryableError> {
     let mut req = reqwest::Client::builder()
         .build()
-        .map_err(|e| RetryableError::Fatal(CodexError::new(
-            ErrorCode::InternalError,
-            format!("failed to build HTTP client: {e}"),
-        )))?
+        .map_err(|e| {
+            RetryableError::Fatal(CodexError::new(
+                ErrorCode::InternalError,
+                format!("failed to build HTTP client: {e}"),
+            ))
+        })?
         .post(url)
         .bearer_auth(api_key)
         .json(request);
@@ -800,34 +807,75 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
             let item_val = json.get("item").cloned().unwrap_or(Value::Null);
             // Check if this is a function_call item
             if item_val.get("type").and_then(Value::as_str) == Some("function_call") {
-                let call_id = item_val.get("call_id").and_then(Value::as_str).unwrap_or("").to_string();
-                let name = item_val.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                let arguments = item_val.get("arguments").and_then(Value::as_str).unwrap_or("{}").to_string();
-                return Some(Ok(ResponseEvent::FunctionCall { call_id, name, arguments }));
+                let call_id = item_val
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let name = item_val
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = item_val
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}")
+                    .to_string();
+                return Some(Ok(ResponseEvent::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                }));
             }
-            if let Ok(item) = serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val) {
+            if let Ok(item) =
+                serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val)
+            {
                 return Some(Ok(ResponseEvent::OutputItemDone(item)));
             }
             None
         }
         "response.output_item.added" => {
             let item_val = json.get("item").cloned()?;
-            let item = serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val).ok()?;
+            let item =
+                serde_json::from_value::<crate::protocol::types::ResponseItem>(item_val).ok()?;
             Some(Ok(ResponseEvent::OutputItemAdded(item)))
         }
         "response.reasoning_summary_text.delta" => {
-            let delta = json.get("delta").and_then(Value::as_str).unwrap_or("").to_string();
-            let summary_index = json.get("summary_index").and_then(Value::as_i64).unwrap_or(0);
-            Some(Ok(ResponseEvent::ReasoningSummaryDelta { delta, summary_index }))
+            let delta = json
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let summary_index = json
+                .get("summary_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            Some(Ok(ResponseEvent::ReasoningSummaryDelta {
+                delta,
+                summary_index,
+            }))
         }
         "response.reasoning_text.delta" => {
-            let delta = json.get("delta").and_then(Value::as_str).unwrap_or("").to_string();
-            let content_index = json.get("content_index").and_then(Value::as_i64).unwrap_or(0);
-            Some(Ok(ResponseEvent::ReasoningContentDelta { delta, content_index }))
+            let delta = json
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let content_index = json
+                .get("content_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            Some(Ok(ResponseEvent::ReasoningContentDelta {
+                delta,
+                content_index,
+            }))
         }
         "response.reasoning_summary_part.added" => {
             let summary_index = json.get("summary_index").and_then(Value::as_i64)?;
-            Some(Ok(ResponseEvent::ReasoningSummaryPartAdded { summary_index }))
+            Some(Ok(ResponseEvent::ReasoningSummaryPartAdded {
+                summary_index,
+            }))
         }
         "response.created" => {
             if json.get("response").is_some() {
@@ -843,9 +891,7 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let token_usage = resp_obj
-                .and_then(|r| r.get("usage"))
-                .map(parse_token_usage);
+            let token_usage = resp_obj.and_then(|r| r.get("usage")).map(parse_token_usage);
             Some(Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
@@ -853,7 +899,8 @@ fn parse_ws_event(kind: &str, json: &Value) -> Option<Result<ResponseEvent, Code
             }))
         }
         "response.incomplete" => {
-            let reason = json.get("response")
+            let reason = json
+                .get("response")
                 .and_then(|r| r.get("incomplete_details"))
                 .and_then(|d| d.get("reason"))
                 .and_then(Value::as_str)
@@ -934,14 +981,17 @@ pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> 
     match item {
         crate::protocol::types::ResponseInputItem::Message { role, content } => {
             // Responses API requires: user → input_text, assistant → output_text
-            let api_content: Vec<Value> = content.iter().map(|item| {
-                match item {
-                    crate::protocol::types::ContentItem::InputText { text } if role == "assistant" => {
+            let api_content: Vec<Value> = content
+                .iter()
+                .map(|item| match item {
+                    crate::protocol::types::ContentItem::InputText { text }
+                        if role == "assistant" =>
+                    {
                         serde_json::json!({"type": "output_text", "text": text})
                     }
                     other => serde_json::to_value(other).unwrap_or(Value::Null),
-                }
-            }).collect();
+                })
+                .collect();
             serde_json::json!({
                 "type": "message",
                 "role": role,
@@ -966,7 +1016,9 @@ pub fn history_item_to_api(item: &crate::protocol::types::ResponseInputItem) -> 
                 crate::protocol::types::FunctionCallOutputBody::ContentItems(items) => items
                     .iter()
                     .filter_map(|i| match i {
-                        crate::protocol::types::FunctionCallOutputContentItem::InputText { text } => Some(text.clone()),
+                        crate::protocol::types::FunctionCallOutputContentItem::InputText {
+                            text,
+                        } => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -1049,7 +1101,10 @@ pub async fn complete_structured(
     }
 
     let resp = req.send().await.map_err(|e| {
-        CodexError::new(ErrorCode::InternalError, format!("HTTP request failed: {e}"))
+        CodexError::new(
+            ErrorCode::InternalError,
+            format!("HTTP request failed: {e}"),
+        )
     })?;
 
     let status = resp.status();
@@ -1061,9 +1116,10 @@ pub async fn complete_structured(
         ));
     }
 
-    let json: Value = resp.json().await.map_err(|e| {
-        CodexError::new(ErrorCode::InternalError, format!("JSON parse error: {e}"))
-    })?;
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| CodexError::new(ErrorCode::InternalError, format!("JSON parse error: {e}")))?;
 
     json.get("output")
         .and_then(|o| o.as_array())
@@ -1103,7 +1159,11 @@ pub async fn stream_response(
         stream: true,
         instructions: instructions.map(String::from),
         previous_response_id: previous_response_id.map(String::from),
-        tool_choice: if tools.is_some() { Some("auto".into()) } else { None },
+        tool_choice: if tools.is_some() {
+            Some("auto".into())
+        } else {
+            None
+        },
         tools,
         parallel_tool_calls: None,
         text: None,
@@ -1166,10 +1226,7 @@ mod tests {
     fn build_text_param_wraps_schema() {
         let schema = serde_json::json!({"type": "object"});
         let result = build_text_param(&Some(schema.clone())).unwrap();
-        assert_eq!(
-            result["format"]["type"].as_str(),
-            Some("json_schema")
-        );
+        assert_eq!(result["format"]["type"].as_str(), Some("json_schema"));
         assert_eq!(result["format"]["schema"], schema);
     }
 
@@ -1187,7 +1244,9 @@ mod tests {
     #[test]
     fn is_retryable_status_checks_correctly() {
         assert!(is_retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
-        assert!(is_retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_retryable_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
         assert!(is_retryable_status(reqwest::StatusCode::BAD_GATEWAY));
         assert!(!is_retryable_status(reqwest::StatusCode::BAD_REQUEST));
         assert!(!is_retryable_status(reqwest::StatusCode::UNAUTHORIZED));
@@ -1196,7 +1255,8 @@ mod tests {
 
     #[test]
     fn history_item_to_api_message() {
-        let item = crate::protocol::types::ResponseInputItem::text_message("user", "hello".to_string());
+        let item =
+            crate::protocol::types::ResponseInputItem::text_message("user", "hello".to_string());
         let v = history_item_to_api(&item);
         assert_eq!(v["type"], "message");
         assert_eq!(v["role"], "user");
@@ -1286,7 +1346,9 @@ mod tests {
     #[test]
     fn parse_ws_event_output_text_delta() {
         let json = serde_json::json!({"type": "response.output_text.delta", "delta": "hello"});
-        let ev = parse_ws_event("response.output_text.delta", &json).unwrap().unwrap();
+        let ev = parse_ws_event("response.output_text.delta", &json)
+            .unwrap()
+            .unwrap();
         match ev {
             ResponseEvent::OutputTextDelta { delta } => assert_eq!(delta, "hello"),
             _ => panic!("expected OutputTextDelta"),
@@ -1299,9 +1361,15 @@ mod tests {
             "type": "response.completed",
             "response": {"id": "resp-1", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
         });
-        let ev = parse_ws_event("response.completed", &json).unwrap().unwrap();
+        let ev = parse_ws_event("response.completed", &json)
+            .unwrap()
+            .unwrap();
         match ev {
-            ResponseEvent::Completed { response_id, token_usage, can_append } => {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                can_append,
+            } => {
                 assert_eq!(response_id, "resp-1");
                 assert_eq!(token_usage.unwrap().total_tokens, 15);
                 assert!(!can_append);

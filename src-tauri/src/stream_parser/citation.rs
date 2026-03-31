@@ -71,8 +71,8 @@ pub fn strip_citations(text: &str) -> (String, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::CitationStreamParser;
     use super::strip_citations;
+    use super::CitationStreamParser;
     use crate::stream_parser::StreamTextChunk;
     use crate::stream_parser::StreamTextParser;
     use pretty_assertions::assert_eq;

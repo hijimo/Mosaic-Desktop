@@ -32,7 +32,9 @@ fn render_js_repl_instructions(features: &Features) -> Option<String> {
     }
 
     let mut s = String::from("## JavaScript REPL (Node)\n");
-    s.push_str("- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n");
+    s.push_str(
+        "- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n",
+    );
     s.push_str("- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n");
     s.push_str("- Helpers: `codex.tmpDir` and `codex.tool(name, args?)`.\n");
     s.push_str("- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike.\n");
@@ -140,8 +142,7 @@ pub fn discover_project_doc_paths(opts: &ProjectDocOptions) -> std::io::Result<V
     };
 
     // Build candidate filenames list.
-    let mut candidate_names: Vec<&str> =
-        Vec::with_capacity(2 + opts.fallback_filenames.len());
+    let mut candidate_names: Vec<&str> = Vec::with_capacity(2 + opts.fallback_filenames.len());
     candidate_names.push(LOCAL_PROJECT_DOC_FILENAME);
     candidate_names.push(DEFAULT_PROJECT_DOC_FILENAME);
     for name in &opts.fallback_filenames {
@@ -294,7 +295,8 @@ mod tests {
     #[tokio::test]
     async fn no_doc_file_returns_none() {
         let tmp = TempDir::new().unwrap();
-        let res = get_user_instructions(&make_opts(&tmp, 4096), &default_features(), None, None).await;
+        let res =
+            get_user_instructions(&make_opts(&tmp, 4096), &default_features(), None, None).await;
         assert!(res.is_none());
     }
 
@@ -329,7 +331,9 @@ mod tests {
 
         let mut opts = make_opts(&repo, 4096);
         opts.cwd = nested;
-        let res = get_user_instructions(&opts, &default_features(), None, None).await.unwrap();
+        let res = get_user_instructions(&opts, &default_features(), None, None)
+            .await
+            .unwrap();
         assert_eq!(res, "root level doc");
     }
 
@@ -345,9 +349,14 @@ mod tests {
     async fn merges_existing_instructions_with_project_doc() {
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
-        let res = get_user_instructions(&make_opts(&tmp, 4096), &default_features(), Some("base instructions"), None)
-            .await
-            .unwrap();
+        let res = get_user_instructions(
+            &make_opts(&tmp, 4096),
+            &default_features(),
+            Some("base instructions"),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             res,
             format!("base instructions{PROJECT_DOC_SEPARATOR}proj doc")
@@ -357,8 +366,13 @@ mod tests {
     #[tokio::test]
     async fn keeps_existing_instructions_when_doc_missing() {
         let tmp = TempDir::new().unwrap();
-        let res = get_user_instructions(&make_opts(&tmp, 4096), &default_features(), Some("some instructions"), None)
-            .await;
+        let res = get_user_instructions(
+            &make_opts(&tmp, 4096),
+            &default_features(),
+            Some("some instructions"),
+            None,
+        )
+        .await;
         assert_eq!(res, Some("some instructions".to_string()));
     }
 
@@ -373,7 +387,9 @@ mod tests {
 
         let mut opts = make_opts(&repo, 4096);
         opts.cwd = nested;
-        let res = get_user_instructions(&opts, &default_features(), None, None).await.unwrap();
+        let res = get_user_instructions(&opts, &default_features(), None, None)
+            .await
+            .unwrap();
         assert_eq!(res, "root doc\n\ncrate doc");
     }
 
@@ -394,7 +410,9 @@ mod tests {
         fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
         let mut opts = make_opts(&tmp, 4096);
         opts.fallback_filenames = vec!["EXAMPLE.md".to_string()];
-        let res = get_user_instructions(&opts, &default_features(), None, None).await.unwrap();
+        let res = get_user_instructions(&opts, &default_features(), None, None)
+            .await
+            .unwrap();
         assert_eq!(res, "example instructions");
     }
 
@@ -405,7 +423,9 @@ mod tests {
         fs::write(tmp.path().join("EXAMPLE.md"), "secondary").unwrap();
         let mut opts = make_opts(&tmp, 4096);
         opts.fallback_filenames = vec!["EXAMPLE.md".to_string()];
-        let res = get_user_instructions(&opts, &default_features(), None, None).await.unwrap();
+        let res = get_user_instructions(&opts, &default_features(), None, None)
+            .await
+            .unwrap();
         assert_eq!(res, "primary");
     }
 
@@ -421,7 +441,9 @@ mod tests {
         let mut opts = make_opts(&root, 4096);
         opts.cwd = nested;
         opts.project_root_markers = vec![".codex-root".to_string()];
-        let res = get_user_instructions(&opts, &default_features(), None, None).await.unwrap();
+        let res = get_user_instructions(&opts, &default_features(), None, None)
+            .await
+            .unwrap();
         assert_eq!(res, "parent doc\n\nchild doc");
     }
 
@@ -429,10 +451,14 @@ mod tests {
     async fn skills_section_appended() {
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
-        let res =
-            get_user_instructions(&make_opts(&tmp, 4096), &default_features(), None, Some("## Skills\n- my-skill"))
-                .await
-                .unwrap();
+        let res = get_user_instructions(
+            &make_opts(&tmp, 4096),
+            &default_features(),
+            None,
+            Some("## Skills\n- my-skill"),
+        )
+        .await
+        .unwrap();
         assert_eq!(res, "base doc\n\n## Skills\n- my-skill");
     }
 
@@ -491,14 +517,10 @@ mod tests {
         let mut f = Features::with_defaults();
         f.enable(Feature::JsRepl);
         f.enable(Feature::ChildAgentsMd);
-        let res = get_user_instructions(
-            &make_opts(&tmp, 4096),
-            &f,
-            Some("base"),
-            Some("## Skills"),
-        )
-        .await
-        .unwrap();
+        let res =
+            get_user_instructions(&make_opts(&tmp, 4096), &f, Some("base"), Some("## Skills"))
+                .await
+                .unwrap();
         // Order: base -> project doc -> js_repl -> skills -> child_agents_md
         let base_pos = res.find("base").unwrap();
         let proj_pos = res.find("proj doc").unwrap();

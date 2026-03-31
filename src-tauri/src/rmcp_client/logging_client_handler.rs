@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use rmcp::ClientHandler;
-use rmcp::RoleClient;
 use rmcp::model::CancelledNotificationParam;
 use rmcp::model::ClientInfo;
 use rmcp::model::CreateElicitationRequestParams;
@@ -12,6 +10,8 @@ use rmcp::model::ProgressNotificationParam;
 use rmcp::model::ResourceUpdatedNotificationParam;
 use rmcp::service::NotificationContext;
 use rmcp::service::RequestContext;
+use rmcp::ClientHandler;
+use rmcp::RoleClient;
 use tracing::debug;
 use tracing::error;
 use tracing::info;

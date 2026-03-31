@@ -3,14 +3,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, Notify};
 use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use crate::pty::ProcessHandle;
 use super::head_tail_buffer::HeadTailBuffer;
+use crate::pty::ProcessHandle;
 
 pub type OutputBuffer = Arc<Mutex<HeadTailBuffer>>;
 

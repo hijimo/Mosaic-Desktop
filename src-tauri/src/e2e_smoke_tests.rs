@@ -67,14 +67,22 @@ mod e2e_smoke {
         let provider = resolved.model_provider.clone().unwrap_or_default();
         eprintln!("[e2e] profile={profile}, model={model}, provider={provider}");
 
-        assert!(!model.is_empty(), "model not configured in ~/.codex/config.toml");
-        assert!(!provider.is_empty(), "provider not configured in ~/.codex/config.toml");
+        assert!(
+            !model.is_empty(),
+            "model not configured in ~/.codex/config.toml"
+        );
+        assert!(
+            !provider.is_empty(),
+            "provider not configured in ~/.codex/config.toml"
+        );
 
         let cwd = std::env::current_dir().unwrap();
         let mut stack = ConfigLayerStack::new();
         stack.add_layer(ConfigLayer::User, resolved);
 
-        let handle = Codex::spawn(stack, cwd.clone()).await.expect("Codex::spawn");
+        let handle = Codex::spawn(stack, cwd.clone())
+            .await
+            .expect("Codex::spawn");
 
         for _ in 0..50 {
             if let Ok(ev) = handle.rx_event.try_recv() {
@@ -306,10 +314,7 @@ mod e2e_smoke {
         send_and_collect(&engine, "list-prompts", Op::ListCustomPrompts, 10, |msg| {
             if let EventMsg::ListCustomPromptsResponse(resp) = msg {
                 prompts = resp.custom_prompts.clone();
-                eprintln!(
-                    "[e2e] ListCustomPromptsResponse: {} prompts",
-                    prompts.len()
-                );
+                eprintln!("[e2e] ListCustomPromptsResponse: {} prompts", prompts.len());
                 for p in &prompts {
                     eprintln!("[e2e]   prompt: {}", p);
                 }
@@ -320,7 +325,10 @@ mod e2e_smoke {
         })
         .await;
 
-        eprintln!("[e2e] ✅ list_custom_prompts completed, {} prompts", prompts.len());
+        eprintln!(
+            "[e2e] ✅ list_custom_prompts completed, {} prompts",
+            prompts.len()
+        );
 
         shutdown(&engine).await;
     }

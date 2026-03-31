@@ -13,11 +13,7 @@ pub fn get_thread_id_from_citations(citations: Vec<String>) -> Vec<ThreadId> {
     for citation in citations {
         let ids_block = extract_ids_block(&citation);
         if let Some(block) = ids_block {
-            for id in block
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
+            for id in block.lines().map(str::trim).filter(|line| !line.is_empty()) {
                 if let Ok(thread_id) = ThreadId::try_from(id) {
                     result.push(thread_id);
                 }

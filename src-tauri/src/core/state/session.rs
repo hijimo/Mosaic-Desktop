@@ -186,7 +186,10 @@ mod tests {
         ]);
         assert_eq!(
             merged,
-            vec!["mcp__rmcp__echo".to_string(), "mcp__rmcp__image".to_string()]
+            vec![
+                "mcp__rmcp__echo".to_string(),
+                "mcp__rmcp__image".to_string()
+            ]
         );
 
         let merged = state.merge_mcp_tool_selection(vec![
@@ -214,7 +217,10 @@ mod tests {
         let merged = state.merge_mcp_tool_selection(Vec::new());
         assert_eq!(
             merged,
-            vec!["mcp__rmcp__echo".to_string(), "mcp__rmcp__image".to_string()]
+            vec![
+                "mcp__rmcp__echo".to_string(),
+                "mcp__rmcp__image".to_string()
+            ]
         );
     }
 
@@ -303,14 +309,13 @@ mod tests {
     #[test]
     fn record_and_replace_history() {
         let mut state = SessionState::new();
-        state.record_items(vec![
-            ResponseInputItem::text_message("user", "hello".into()),
-        ]);
+        state.record_items(vec![ResponseInputItem::text_message(
+            "user",
+            "hello".into(),
+        )]);
         assert_eq!(state.history.len(), 1);
 
-        state.replace_history(vec![
-            ResponseInputItem::text_message("user", "new".into()),
-        ]);
+        state.replace_history(vec![ResponseInputItem::text_message("user", "new".into())]);
         assert_eq!(state.history.len(), 1);
     }
 

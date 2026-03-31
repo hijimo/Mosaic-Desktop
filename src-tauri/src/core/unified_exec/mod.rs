@@ -200,24 +200,34 @@ impl ProcessManager {
         let stderr_handle = child.stderr.take();
 
         let read_stdout = async move {
-            let Some(mut s) = stdout_handle else { return String::new() };
+            let Some(mut s) = stdout_handle else {
+                return String::new();
+            };
             let mut buf = Vec::with_capacity(4096);
             let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
-            if buf.len() > OUTPUT_MAX_BYTES { buf.truncate(OUTPUT_MAX_BYTES); }
+            if buf.len() > OUTPUT_MAX_BYTES {
+                buf.truncate(OUTPUT_MAX_BYTES);
+            }
             String::from_utf8_lossy(&buf).into_owned()
         };
         let read_stderr = async move {
-            let Some(mut s) = stderr_handle else { return String::new() };
+            let Some(mut s) = stderr_handle else {
+                return String::new();
+            };
             let mut buf = Vec::with_capacity(4096);
             let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
-            if buf.len() > OUTPUT_MAX_BYTES { buf.truncate(OUTPUT_MAX_BYTES); }
+            if buf.len() > OUTPUT_MAX_BYTES {
+                buf.truncate(OUTPUT_MAX_BYTES);
+            }
             String::from_utf8_lossy(&buf).into_owned()
         };
 
         let (stdout_str, stderr_str) = tokio::join!(read_stdout, read_stderr);
 
         let wait_result = if let Some(t) = cmd.timeout {
-            tokio::time::timeout(t, child.wait()).await.map_err(|_| "timeout".to_string())?
+            tokio::time::timeout(t, child.wait())
+                .await
+                .map_err(|_| "timeout".to_string())?
         } else {
             child.wait().await
         };
@@ -247,9 +257,15 @@ impl ProcessManager {
             .spawn()
             .map_err(|e| format!("spawn failed: {e}"))?;
         let id = uuid::Uuid::new_v4().to_string();
-        processes.insert(id.clone(), ProcessHandle {
-            id: id.clone(), child, command: cmd.command.clone(), cwd: cmd.cwd.clone(),
-        });
+        processes.insert(
+            id.clone(),
+            ProcessHandle {
+                id: id.clone(),
+                child,
+                command: cmd.command.clone(),
+                cwd: cmd.cwd.clone(),
+            },
+        );
         Ok(id)
     }
 
@@ -258,7 +274,11 @@ impl ProcessManager {
         let Some(mut handle) = processes.remove(id) else {
             return Err(format!("process {id} not found"));
         };
-        handle.child.kill().await.map_err(|e| format!("kill failed: {e}"))
+        handle
+            .child
+            .kill()
+            .await
+            .map_err(|e| format!("kill failed: {e}"))
     }
 
     pub async fn list(&self) -> Vec<String> {
@@ -271,7 +291,9 @@ impl ProcessManager {
 }
 
 impl Default for ProcessManager {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

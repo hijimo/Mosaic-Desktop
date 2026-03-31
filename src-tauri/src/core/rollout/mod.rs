@@ -16,8 +16,8 @@ pub mod truncation;
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 
-pub use list::find_thread_path_by_id_str;
 pub use list::find_archived_thread_path_by_id_str;
+pub use list::find_thread_path_by_id_str;
 pub use list::rollout_date_parts;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;

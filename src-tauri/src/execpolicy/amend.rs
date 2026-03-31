@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 use thiserror::Error;
 
-use super::prefix_rule::{Decision, NetworkRuleProtocol};
 use super::network_rule::normalize_network_rule_host;
+use super::prefix_rule::{Decision, NetworkRuleProtocol};
 
 #[derive(Debug, Error)]
 pub enum AmendError {
@@ -105,8 +105,8 @@ pub fn blocking_append_network_rule(
         format!("decision={decision_json}"),
     ];
     if let Some(j) = justification {
-        let j_json = serde_json::to_string(j)
-            .map_err(|s| AmendError::SerializeNetworkRule { source: s })?;
+        let j_json =
+            serde_json::to_string(j).map_err(|s| AmendError::SerializeNetworkRule { source: s })?;
         args.push(format!("justification={j_json}"));
     }
     let rule = format!("network_rule({})", args.join(", "));
@@ -223,7 +223,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let policy_path = tmp.path().join("rules").join("default.rules");
         std::fs::create_dir_all(policy_path.parent().unwrap()).unwrap();
-        std::fs::write(&policy_path, "prefix_rule(pattern=[\"ls\"], decision=\"allow\")").unwrap();
+        std::fs::write(
+            &policy_path,
+            "prefix_rule(pattern=[\"ls\"], decision=\"allow\")",
+        )
+        .unwrap();
         blocking_append_allow_prefix_rule(&policy_path, &["echo".to_string()]).unwrap();
         let contents = std::fs::read_to_string(&policy_path).unwrap();
         assert!(contents.contains("\nprefix_rule(pattern=[\"echo\"]"));

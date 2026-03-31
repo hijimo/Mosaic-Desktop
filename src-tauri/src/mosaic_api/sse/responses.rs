@@ -225,8 +225,7 @@ fn process_responses_event(
         }
         "response.failed" => {
             if let Some(resp_val) = event.response {
-                let mut response_error =
-                    ApiError::Stream("response.failed event received".into());
+                let mut response_error = ApiError::Stream("response.failed event received".into());
                 if let Some(error) = resp_val.get("error") {
                     if let Ok(error) = serde_json::from_value::<Error>(error.clone()) {
                         if is_context_window_error(&error) {

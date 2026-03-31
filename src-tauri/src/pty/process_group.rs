@@ -9,7 +9,9 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     if unsafe { libc::getppid() } != parent_pid {
-        unsafe { libc::raise(libc::SIGTERM); }
+        unsafe {
+            libc::raise(libc::SIGTERM);
+        }
     }
     Ok(())
 }

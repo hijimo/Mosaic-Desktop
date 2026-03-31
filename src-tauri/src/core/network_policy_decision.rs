@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-use crate::execpolicy::{Decision as ExecPolicyDecision, NetworkRuleProtocol as ExecPolicyNetworkRuleProtocol};
+use crate::execpolicy::{
+    Decision as ExecPolicyDecision, NetworkRuleProtocol as ExecPolicyNetworkRuleProtocol,
+};
 use crate::protocol::{
     NetworkApprovalContext, NetworkApprovalProtocol, NetworkPolicyAmendment,
     NetworkPolicyRuleAction,
@@ -68,8 +70,7 @@ pub(crate) struct ExecPolicyNetworkRuleAmendment {
 
 impl NetworkPolicyDecisionPayload {
     pub(crate) fn is_ask_from_decider(&self) -> bool {
-        self.decision == NetworkPolicyDecision::Ask
-            && self.source == NetworkDecisionSource::Decider
+        self.decision == NetworkPolicyDecision::Ask && self.source == NetworkDecisionSource::Decider
     }
 }
 
@@ -185,9 +186,18 @@ mod tests {
     fn network_approval_context_maps_protocols() {
         for (proto, expected) in [
             (NetworkApprovalProtocol::Http, NetworkApprovalProtocol::Http),
-            (NetworkApprovalProtocol::Https, NetworkApprovalProtocol::Https),
-            (NetworkApprovalProtocol::Socks5Tcp, NetworkApprovalProtocol::Socks5Tcp),
-            (NetworkApprovalProtocol::Socks5Udp, NetworkApprovalProtocol::Socks5Udp),
+            (
+                NetworkApprovalProtocol::Https,
+                NetworkApprovalProtocol::Https,
+            ),
+            (
+                NetworkApprovalProtocol::Socks5Tcp,
+                NetworkApprovalProtocol::Socks5Tcp,
+            ),
+            (
+                NetworkApprovalProtocol::Socks5Udp,
+                NetworkApprovalProtocol::Socks5Udp,
+            ),
         ] {
             let payload = NetworkPolicyDecisionPayload {
                 decision: NetworkPolicyDecision::Ask,

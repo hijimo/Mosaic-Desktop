@@ -3,7 +3,7 @@
 //! Reads the auth token from stdin, formats it as `Bearer <key>`, and locks
 //! the memory with mlock(2) to prevent swapping to disk.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use zeroize::Zeroize;
 
 const BUFFER_SIZE: usize = 1024;

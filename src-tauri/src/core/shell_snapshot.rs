@@ -32,7 +32,9 @@ impl ShellSnapshot {
     pub async fn capture(cwd: &Path, shell: &Shell) -> Result<Self, String> {
         let script = match shell.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => "env -0",
-            ShellType::PowerShell => "Get-ChildItem Env: | ForEach-Object { \"$($_.Name)=$($_.Value)\" }",
+            ShellType::PowerShell => {
+                "Get-ChildItem Env: | ForEach-Object { \"$($_.Name)=$($_.Value)\" }"
+            }
             ShellType::Cmd => "set",
         };
 

@@ -42,13 +42,8 @@ mod tests {
     #[tokio::test]
     async fn call_to_unknown_server_returns_error() {
         let mgr = McpConnectionManager::new();
-        let result = handle_mcp_tool_call(
-            &mgr,
-            "nonexistent",
-            "tool",
-            serde_json::Value::Null,
-        )
-        .await;
+        let result =
+            handle_mcp_tool_call(&mgr, "nonexistent", "tool", serde_json::Value::Null).await;
         assert!(result.output.is_err());
     }
 }

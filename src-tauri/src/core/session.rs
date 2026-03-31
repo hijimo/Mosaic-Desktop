@@ -181,9 +181,171 @@ pub struct Session {
     cwd: PathBuf,
     /// Turn counter for generating turn IDs.
     turn_counter: tokio::sync::Mutex<u64>,
+    /// Runtime config requirements that can constrain turn-level tool exposure.
+    config_requirements: tokio::sync::RwLock<crate::config::ConfigRequirements>,
 }
 
 impl Session {
+    fn resolve_constrained_web_search_mode_for_turn(
+        web_search_mode: &crate::config::Constrained<crate::protocol::types::WebSearchMode>,
+        sandbox_policy: &SandboxPolicy,
+    ) -> crate::protocol::types::WebSearchMode {
+        let preferred = web_search_mode.value();
+
+        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+            && preferred != crate::protocol::types::WebSearchMode::Disabled
+        {
+            for mode in [
+                crate::protocol::types::WebSearchMode::Live,
+                crate::protocol::types::WebSearchMode::Cached,
+                crate::protocol::types::WebSearchMode::Disabled,
+            ] {
+                if web_search_mode.can_set(&mode).is_ok() {
+                    return mode;
+                }
+            }
+        } else {
+            if web_search_mode.can_set(&preferred).is_ok() {
+                return preferred;
+            }
+
+            for mode in [
+                crate::protocol::types::WebSearchMode::Cached,
+                crate::protocol::types::WebSearchMode::Live,
+                crate::protocol::types::WebSearchMode::Disabled,
+            ] {
+                if web_search_mode.can_set(&mode).is_ok() {
+                    return mode;
+                }
+            }
+        }
+
+        crate::protocol::types::WebSearchMode::Disabled
+    }
+
+    fn web_search_mode_from_tool_specs(
+        specs: &[serde_json::Value],
+    ) -> Option<crate::protocol::types::WebSearchMode> {
+        specs.iter().find_map(|spec| {
+            if spec.get("type") != Some(&serde_json::Value::String("web_search".to_string())) {
+                return None;
+            }
+
+            match spec
+                .get("external_web_access")
+                .and_then(|value| value.as_bool())
+            {
+                Some(true) => Some(crate::protocol::types::WebSearchMode::Live),
+                Some(false) | None => Some(crate::protocol::types::WebSearchMode::Cached),
+            }
+        })
+    }
+
+    fn apply_web_search_mode_to_tool_specs(
+        specs: &mut Vec<serde_json::Value>,
+        mode: Option<crate::protocol::types::WebSearchMode>,
+    ) {
+        specs.retain(|spec| {
+            spec.get("type") != Some(&serde_json::Value::String("web_search".to_string()))
+        });
+
+        match mode {
+            Some(crate::protocol::types::WebSearchMode::Cached) => specs.push(serde_json::json!({
+                "type": "web_search",
+                "external_web_access": false,
+            })),
+            Some(crate::protocol::types::WebSearchMode::Live) => specs.push(serde_json::json!({
+                "type": "web_search",
+                "external_web_access": true,
+            })),
+            Some(crate::protocol::types::WebSearchMode::Disabled) | None => {}
+        }
+    }
+
+    fn resolve_web_search_mode_for_turn(
+        preferred: Option<crate::protocol::types::WebSearchMode>,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Option<crate::protocol::types::WebSearchMode> {
+        preferred.and_then(|preferred| {
+            let constrained = crate::config::Constrained::allow_any(preferred);
+            match Self::resolve_constrained_web_search_mode_for_turn(&constrained, sandbox_policy) {
+                crate::protocol::types::WebSearchMode::Disabled => None,
+                mode => Some(mode),
+            }
+        })
+    }
+
+    fn resolve_web_search_mode_for_turn_with_constraints(
+        preferred: Option<crate::protocol::types::WebSearchMode>,
+        constraints: &crate::config::Constrained<crate::protocol::types::WebSearchMode>,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Option<crate::protocol::types::WebSearchMode> {
+        let preferred = preferred?;
+
+        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+            && preferred != crate::protocol::types::WebSearchMode::Disabled
+        {
+            for mode in [
+                crate::protocol::types::WebSearchMode::Live,
+                crate::protocol::types::WebSearchMode::Cached,
+                crate::protocol::types::WebSearchMode::Disabled,
+            ] {
+                if constraints.can_set(&mode).is_ok() {
+                    return match mode {
+                        crate::protocol::types::WebSearchMode::Disabled => None,
+                        other => Some(other),
+                    };
+                }
+            }
+        } else {
+            if constraints.can_set(&preferred).is_ok() {
+                return match preferred {
+                    crate::protocol::types::WebSearchMode::Disabled => None,
+                    other => Some(other),
+                };
+            }
+
+            for mode in [
+                crate::protocol::types::WebSearchMode::Cached,
+                crate::protocol::types::WebSearchMode::Live,
+                crate::protocol::types::WebSearchMode::Disabled,
+            ] {
+                if constraints.can_set(&mode).is_ok() {
+                    return match mode {
+                        crate::protocol::types::WebSearchMode::Disabled => None,
+                        other => Some(other),
+                    };
+                }
+            }
+        }
+
+        None
+    }
+
+    fn tools_config_from_resolved_config(config: &ConfigToml) -> crate::core::tools::ToolsConfig {
+        let web_search_mode = if let Some(mode) = config.web_search {
+            match mode {
+                crate::protocol::types::WebSearchMode::Disabled => None,
+                other => Some(other),
+            }
+        } else {
+            match config
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.enable_web_search)
+            {
+                Some(true) => Some(crate::protocol::types::WebSearchMode::Live),
+                Some(false) | None => None,
+            }
+        };
+
+        crate::core::tools::ToolsConfig {
+            collab_tools: true,
+            web_search_mode,
+            ..Default::default()
+        }
+    }
+
     pub fn new(
         cwd: PathBuf,
         config: ConfigLayerStack,
@@ -198,16 +360,14 @@ impl Session {
         tx_event: async_channel::Sender<Event>,
         agent_control: Option<std::sync::Arc<crate::core::agent::control::AgentControl>>,
     ) -> Self {
-        let mut registry = crate::core::tools::ToolRegistry::new();
-        registry.register(Box::new(crate::core::tools::handlers::ShellHandler));
-        registry.register(Box::new(crate::core::tools::handlers::ApplyPatchHandler));
-        registry.register(Box::new(crate::core::tools::handlers::ListDirHandler));
-        registry.register(Box::new(crate::core::tools::handlers::ReadFileHandler));
-        registry.register(Box::new(crate::core::tools::handlers::GrepFilesHandler));
+        let resolved_config = config.merge();
+        let mut router = ToolRouter::from_config(
+            Self::tools_config_from_resolved_config(&resolved_config),
+            agent_control.is_some(),
+        );
 
-        // Register multi-agent handler when AgentControl is available
         if let Some(ctrl) = agent_control {
-            registry.register(Box::new(
+            router.registry_mut().register(Box::new(
                 crate::core::tools::handlers::multi_agents::MultiAgentHandler::new(ctrl, 0),
             ));
         }
@@ -217,15 +377,15 @@ impl Session {
             state: tokio::sync::Mutex::new(SessionInternalState::new()),
             config,
             active_profile: None,
-            tool_router: tokio::sync::Mutex::new(ToolRouter::new(
-                registry,
-                McpConnectionManager::new(),
-            )),
+            tool_router: tokio::sync::Mutex::new(router),
             mcp_manager: McpConnectionManager::new(),
             hooks: tokio::sync::Mutex::new(HookRegistry::new()),
             tx_event,
             cwd,
             turn_counter: tokio::sync::Mutex::new(0),
+            config_requirements: tokio::sync::RwLock::new(
+                crate::config::ConfigRequirements::default(),
+            ),
         }
     }
 
@@ -463,7 +623,11 @@ impl Session {
     // ── Resume/fork state ────────────────────────────────────────
 
     pub async fn set_reference_context_item(&self, item: Option<TurnContextItem>) {
-        self.state.lock().await.history.set_reference_context_item(item);
+        self.state
+            .lock()
+            .await
+            .history
+            .set_reference_context_item(item);
     }
 
     pub async fn set_token_info(&self, info: Option<TokenUsageInfo>) {
@@ -522,6 +686,38 @@ impl Session {
         self.tool_router.lock().await
     }
 
+    pub async fn set_config_requirements(&self, requirements: crate::config::ConfigRequirements) {
+        *self.config_requirements.write().await = requirements;
+    }
+
+    pub async fn config_requirements(&self) -> crate::config::ConfigRequirements {
+        self.config_requirements.read().await.clone()
+    }
+
+    pub async fn collect_tool_specs_for_current_turn(&self) -> Vec<serde_json::Value> {
+        let turn_context = self.turn_context().await;
+        let config_requirements = self.config_requirements().await;
+        let mut specs = {
+            let router = self.tool_router().await;
+            router.collect_tool_specs()
+        };
+
+        let preferred = Self::web_search_mode_from_tool_specs(&specs);
+        let resolved = turn_context
+            .as_ref()
+            .map(|ctx| {
+                Self::resolve_web_search_mode_for_turn_with_constraints(
+                    preferred,
+                    &config_requirements.web_search_mode,
+                    &ctx.sandbox_policy,
+                )
+            })
+            .unwrap_or(preferred);
+
+        Self::apply_web_search_mode_to_tool_specs(&mut specs, resolved);
+        specs
+    }
+
     pub async fn hooks(&self) -> tokio::sync::MutexGuard<'_, HookRegistry> {
         self.hooks.lock().await
     }
@@ -567,6 +763,9 @@ impl Session {
 mod tests {
     use super::*;
     use crate::config::ConfigLayerStack;
+    use crate::config::{Constrained, ConstraintError, RequirementSource};
+    use crate::core::tools::ToolKind;
+    use std::sync::Arc;
 
     fn make_session() -> (Session, async_channel::Receiver<Event>) {
         let (tx, rx) = async_channel::unbounded();
@@ -579,6 +778,402 @@ mod tests {
         let (s1, _) = make_session();
         let (s2, _) = make_session();
         assert_ne!(s1.id(), s2.id());
+    }
+
+    #[tokio::test]
+    async fn session_default_router_contains_stable_tools_only() {
+        let (session, _rx) = make_session();
+        let router = session.tool_router.lock().await;
+        let names: Vec<String> = router
+            .configured_specs()
+            .iter()
+            .map(|spec| spec.spec.name().to_string())
+            .collect();
+
+        assert_eq!(names.len(), 5);
+        assert!(names.contains(&"shell".to_string()));
+        assert!(names.contains(&"apply_patch".to_string()));
+        assert!(names.contains(&"list_dir".to_string()));
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"grep_files".to_string()));
+        assert!(!names.contains(&"spawn_agent".to_string()));
+    }
+
+    #[tokio::test]
+    async fn session_config_can_enable_cached_web_search_spec() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+
+        let router = session.tool_router.lock().await;
+        let specs = router.collect_tool_specs();
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == false }));
+    }
+
+    #[tokio::test]
+    async fn session_explicit_disabled_web_search_mode_overrides_tools_toggle() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Disabled),
+                tools: Some(crate::config::toml_types::ToolsToml {
+                    enable_web_search: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+
+        let router = session.tool_router.lock().await;
+        let names: Vec<String> = router
+            .configured_specs()
+            .iter()
+            .map(|spec| spec.spec.name().to_string())
+            .collect();
+
+        assert!(!names.contains(&"web_search".to_string()));
+    }
+
+    #[tokio::test]
+    async fn session_tools_config_can_enable_live_web_search_via_tools_toggle() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                tools: Some(crate::config::toml_types::ToolsToml {
+                    enable_web_search: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+
+        let router = session.tool_router.lock().await;
+        let specs = router.collect_tool_specs();
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == true }));
+    }
+
+    #[tokio::test]
+    async fn session_explicit_web_search_mode_takes_precedence_over_tools_toggle() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+                tools: Some(crate::config::toml_types::ToolsToml {
+                    enable_web_search: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+
+        let router = session.tool_router.lock().await;
+        let specs = router.collect_tool_specs();
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == false }));
+        assert!(!specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == true }));
+    }
+
+    #[tokio::test]
+    async fn session_tools_toggle_false_does_not_override_explicit_web_search_mode() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Live),
+                tools: Some(crate::config::toml_types::ToolsToml {
+                    enable_web_search: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+
+        let router = session.tool_router.lock().await;
+        let specs = router.collect_tool_specs();
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == true }));
+    }
+
+    #[test]
+    fn resolve_web_search_mode_for_turn_prefers_live_for_danger_full_access() {
+        let mode = Session::resolve_web_search_mode_for_turn(
+            Some(crate::protocol::types::WebSearchMode::Cached),
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, Some(crate::protocol::types::WebSearchMode::Live));
+    }
+
+    #[test]
+    fn resolve_web_search_mode_for_turn_preserves_absent_mode() {
+        let mode =
+            Session::resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
+
+        assert_eq!(mode, None);
+    }
+
+    #[test]
+    fn resolve_constrained_web_search_mode_for_turn_uses_preference_for_read_only() {
+        let web_search_mode = Constrained::allow_any(crate::protocol::types::WebSearchMode::Cached);
+        let mode = Session::resolve_constrained_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::new_read_only_policy(),
+        );
+
+        assert_eq!(mode, crate::protocol::types::WebSearchMode::Cached);
+    }
+
+    #[test]
+    fn resolve_constrained_web_search_mode_for_turn_respects_disabled_for_danger_full_access() {
+        let web_search_mode =
+            Constrained::allow_any(crate::protocol::types::WebSearchMode::Disabled);
+        let mode = Session::resolve_constrained_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, crate::protocol::types::WebSearchMode::Disabled);
+    }
+
+    #[test]
+    fn resolve_constrained_web_search_mode_for_turn_falls_back_when_live_is_disallowed() {
+        let allowed = [
+            crate::protocol::types::WebSearchMode::Disabled,
+            crate::protocol::types::WebSearchMode::Cached,
+        ];
+        let web_search_mode = Constrained::new(
+            crate::protocol::types::WebSearchMode::Cached,
+            move |candidate| {
+                if allowed.contains(candidate) {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::InvalidValue {
+                        field_name: "web_search_mode",
+                        candidate: format!("{candidate:?}"),
+                        allowed: format!("{allowed:?}"),
+                        requirement_source: RequirementSource::Unknown,
+                    })
+                }
+            },
+        )
+        .unwrap();
+        let mode = Session::resolve_constrained_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, crate::protocol::types::WebSearchMode::Cached);
+    }
+
+    #[test]
+    fn resolve_web_search_mode_for_turn_with_constraints_can_remove_web_search() {
+        let allowed = [crate::protocol::types::WebSearchMode::Disabled];
+        let constraints = Constrained::new(
+            crate::protocol::types::WebSearchMode::Disabled,
+            move |candidate| {
+                if allowed.contains(candidate) {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::InvalidValue {
+                        field_name: "web_search_mode",
+                        candidate: format!("{candidate:?}"),
+                        allowed: format!("{allowed:?}"),
+                        requirement_source: RequirementSource::Unknown,
+                    })
+                }
+            },
+        )
+        .unwrap();
+
+        let mode = Session::resolve_web_search_mode_for_turn_with_constraints(
+            Some(crate::protocol::types::WebSearchMode::Cached),
+            &constraints,
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, None);
+    }
+
+    #[tokio::test]
+    async fn session_collect_tool_specs_for_current_turn_promotes_cached_web_search_to_live() {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+        session.start_turn().await.unwrap();
+        session
+            .apply_turn_context_overrides(&TurnContextOverrides {
+                model: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                approval_policy: None,
+                cwd: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await
+            .unwrap();
+
+        let specs = session.collect_tool_specs_for_current_turn().await;
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == true }));
+        assert!(!specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == false }));
+    }
+
+    #[tokio::test]
+    async fn session_collect_tool_specs_for_current_turn_respects_injected_web_search_constraints()
+    {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+        session
+            .set_config_requirements(
+                crate::config::ConfigRequirements::try_from(
+                    crate::config::ConfigRequirementsToml {
+                        allowed_web_search_modes: Some(vec![
+                            crate::config::WebSearchModeRequirement::Cached,
+                        ]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .await;
+        session.start_turn().await.unwrap();
+        session
+            .apply_turn_context_overrides(&TurnContextOverrides {
+                model: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                approval_policy: None,
+                cwd: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await
+            .unwrap();
+
+        let specs = session.collect_tool_specs_for_current_turn().await;
+        assert!(specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == false }));
+        assert!(!specs
+            .iter()
+            .any(|spec| { spec["type"] == "web_search" && spec["external_web_access"] == true }));
+    }
+
+    #[tokio::test]
+    async fn session_collect_tool_specs_for_current_turn_can_drop_web_search_when_constraints_disable_it(
+    ) {
+        let (tx, _rx) = async_channel::unbounded();
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(
+            crate::config::ConfigLayer::User,
+            ConfigToml {
+                web_search: Some(crate::protocol::types::WebSearchMode::Cached),
+                ..Default::default()
+            },
+        );
+        let session = Session::new(PathBuf::from("/tmp/test"), stack, tx);
+        session
+            .set_config_requirements(
+                crate::config::ConfigRequirements::try_from(
+                    crate::config::ConfigRequirementsToml {
+                        allowed_web_search_modes: Some(vec![]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .await;
+        session.start_turn().await.unwrap();
+        session
+            .apply_turn_context_overrides(&TurnContextOverrides {
+                model: None,
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                approval_policy: None,
+                cwd: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await
+            .unwrap();
+
+        let specs = session.collect_tool_specs_for_current_turn().await;
+        assert!(!specs.iter().any(|spec| spec["type"] == "web_search"));
+    }
+
+    #[tokio::test]
+    async fn session_with_agent_control_adds_collab_specs() {
+        let (tx, _rx) = async_channel::unbounded();
+        let agent_control = Arc::new(crate::core::agent::control::AgentControl::new(
+            4,
+            PathBuf::from("/tmp/test"),
+            SandboxPolicy::new_read_only_policy(),
+            tx.clone(),
+        ));
+        let session = Session::new_with_agent_control(
+            PathBuf::from("/tmp/test"),
+            ConfigLayerStack::new(),
+            tx,
+            Some(agent_control),
+        );
+        let router = session.tool_router.lock().await;
+        let names: Vec<String> = router
+            .configured_specs()
+            .iter()
+            .map(|spec| spec.spec.name().to_string())
+            .collect();
+
+        assert!(names.contains(&"spawn_agent".to_string()));
+        assert!(names.contains(&"send_input".to_string()));
+        assert!(names.contains(&"resume_agent".to_string()));
+        assert!(names.contains(&"wait".to_string()));
+        assert!(names.contains(&"close_agent".to_string()));
+        assert!(router
+            .registry()
+            .find(&ToolKind::Builtin("spawn_agent".to_string()))
+            .is_some());
     }
 
     #[tokio::test]
@@ -701,22 +1296,19 @@ mod tests {
         session.add_to_history(items).await;
 
         session
-            .add_to_history(vec![ResponseInputItem::text_message("user", "how are you".to_string())])
+            .add_to_history(vec![ResponseInputItem::text_message(
+                "user",
+                "how are you".to_string(),
+            )])
             .await;
 
         let history = session.history().await;
         assert_eq!(history.len(), 3);
 
         // Verify order
-        assert!(
-            history[0].message_text().as_deref() == Some("hello")
-        );
-        assert!(
-            history[1].message_text().as_deref() == Some("hi")
-        );
-        assert!(
-            history[2].message_text().as_deref() == Some("how are you")
-        );
+        assert!(history[0].message_text().as_deref() == Some("hello"));
+        assert!(history[1].message_text().as_deref() == Some("hi"));
+        assert!(history[2].message_text().as_deref() == Some("how are you"));
     }
 
     #[tokio::test]
@@ -732,22 +1324,19 @@ mod tests {
 
         let history = session.history().await;
         assert_eq!(history.len(), 3);
-        assert!(
-            history[0].message_text().as_deref() == Some("msg-0")
-        );
-        assert!(
-            history[1].message_text().as_deref() == Some("msg-1")
-        );
-        assert!(
-            history[2].message_text().as_deref() == Some("msg-2")
-        );
+        assert!(history[0].message_text().as_deref() == Some("msg-0"));
+        assert!(history[1].message_text().as_deref() == Some("msg-1"));
+        assert!(history[2].message_text().as_deref() == Some("msg-2"));
     }
 
     #[tokio::test]
     async fn rollback_all_entries() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
+            .add_to_history(vec![ResponseInputItem::text_message(
+                "user",
+                "test".to_string(),
+            )])
             .await;
 
         session.rollback(1).await.unwrap();
@@ -758,7 +1347,10 @@ mod tests {
     async fn rollback_exceeding_length_errors() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
+            .add_to_history(vec![ResponseInputItem::text_message(
+                "user",
+                "test".to_string(),
+            )])
             .await;
 
         let err = session.rollback(5).await.unwrap_err();
@@ -769,7 +1361,10 @@ mod tests {
     async fn rollback_zero_is_noop() {
         let (session, _rx) = make_session();
         session
-            .add_to_history(vec![ResponseInputItem::text_message("user", "test".to_string())])
+            .add_to_history(vec![ResponseInputItem::text_message(
+                "user",
+                "test".to_string(),
+            )])
             .await;
 
         session.rollback(0).await.unwrap();

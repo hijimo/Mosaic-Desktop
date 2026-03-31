@@ -32,7 +32,10 @@ impl ToolRuntime for ApplyPatchRuntime {
         cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            ToolError::Codex(CodexError::new(ErrorCode::ToolExecutionFailed, format!("{e}")))
+            ToolError::Codex(CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("{e}"),
+            ))
         })?;
 
         if let Some(mut stdin) = child.stdin.take() {
@@ -41,7 +44,10 @@ impl ToolRuntime for ApplyPatchRuntime {
         }
 
         let output = child.wait_with_output().await.map_err(|e| {
-            ToolError::Codex(CodexError::new(ErrorCode::ToolExecutionFailed, format!("{e}")))
+            ToolError::Codex(CodexError::new(
+                ErrorCode::ToolExecutionFailed,
+                format!("{e}"),
+            ))
         })?;
 
         Ok(serde_json::json!({

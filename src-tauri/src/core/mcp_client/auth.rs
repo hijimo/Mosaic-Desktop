@@ -29,9 +29,7 @@ pub struct McpAuthStatusEntry {
 ///
 /// For Stdio transports, OAuth is unsupported. For StreamableHttp, we check
 /// whether a bearer token env var is configured (authenticated) or not.
-pub async fn compute_auth_statuses<'a, I>(
-    servers: I,
-) -> HashMap<String, McpAuthStatusEntry>
+pub async fn compute_auth_statuses<'a, I>(servers: I) -> HashMap<String, McpAuthStatusEntry>
 where
     I: IntoIterator<Item = (&'a String, &'a McpServerConfig)>,
 {

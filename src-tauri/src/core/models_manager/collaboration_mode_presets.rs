@@ -110,10 +110,7 @@ mod tests {
             default_preset(CollaborationModesConfig::default()).name,
             ModeKind::Default.display_name()
         );
-        assert_eq!(
-            plan_preset().reasoning_effort,
-            Some(Some(Effort::Medium))
-        );
+        assert_eq!(plan_preset().reasoning_effort, Some(Some(Effort::Medium)));
     }
 
     #[test]
@@ -147,10 +144,8 @@ mod tests {
             .expect("default instructions should be set");
 
         assert!(!default_instructions.contains("prefer using the `request_user_input` tool"));
-        assert!(
-            default_instructions
-                .contains("ask the user directly with a concise plain-text question")
-        );
+        assert!(default_instructions
+            .contains("ask the user directly with a concise plain-text question"));
     }
 
     #[test]
@@ -165,7 +160,11 @@ mod tests {
     fn plan_preset_has_medium_effort() {
         let preset = plan_preset();
         assert_eq!(preset.reasoning_effort, Some(Some(Effort::Medium)));
-        assert!(preset.developer_instructions.unwrap().unwrap().contains("Plan Mode"));
+        assert!(preset
+            .developer_instructions
+            .unwrap()
+            .unwrap()
+            .contains("Plan Mode"));
     }
 
     #[test]

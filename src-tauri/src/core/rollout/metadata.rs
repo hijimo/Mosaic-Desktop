@@ -45,7 +45,10 @@ pub fn metadata_from_session_meta(
         cli_version: Some(meta_line.meta.cli_version.clone()),
         git_branch: meta_line.git.as_ref().and_then(|g| g.branch.clone()),
         git_sha: meta_line.git.as_ref().and_then(|g| g.commit_hash.clone()),
-        git_origin_url: meta_line.git.as_ref().and_then(|g| g.repository_url.clone()),
+        git_origin_url: meta_line
+            .git
+            .as_ref()
+            .and_then(|g| g.repository_url.clone()),
         agent_nickname: meta_line.meta.agent_nickname.clone(),
         agent_role: meta_line.meta.agent_role.clone(),
         first_user_message: None,
@@ -54,10 +57,7 @@ pub fn metadata_from_session_meta(
 }
 
 /// Build metadata from rollout items, falling back to filename parsing.
-pub fn metadata_from_items(
-    items: &[RolloutItem],
-    rollout_path: &Path,
-) -> Option<RolloutMetadata> {
+pub fn metadata_from_items(items: &[RolloutItem], rollout_path: &Path) -> Option<RolloutMetadata> {
     // Try session meta first.
     if let Some(meta_line) = items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(m) => Some(m),
@@ -94,9 +94,7 @@ pub fn metadata_from_items(
 }
 
 /// Extract full metadata from a rollout file, applying all items.
-pub async fn extract_metadata_from_rollout(
-    rollout_path: &Path,
-) -> anyhow::Result<RolloutMetadata> {
+pub async fn extract_metadata_from_rollout(rollout_path: &Path) -> anyhow::Result<RolloutMetadata> {
     let (items, _thread_id, _parse_errors) =
         RolloutRecorder::load_rollout_items(rollout_path).await?;
     if items.is_empty() {
@@ -105,12 +103,8 @@ pub async fn extract_metadata_from_rollout(
             rollout_path.display()
         ));
     }
-    let mut metadata = metadata_from_items(&items, rollout_path).ok_or_else(|| {
-        anyhow::anyhow!(
-            "rollout missing metadata: {}",
-            rollout_path.display()
-        )
-    })?;
+    let mut metadata = metadata_from_items(&items, rollout_path)
+        .ok_or_else(|| anyhow::anyhow!("rollout missing metadata: {}", rollout_path.display()))?;
 
     // Scan for first user message and latest memory_mode.
     for item in &items {

@@ -166,12 +166,18 @@ fn format_history_for_summary(items: &[ResponseInputItem]) -> String {
         .iter()
         .map(|item| match item {
             ResponseInputItem::Message { role, content } => {
-                let text = content.iter().filter_map(|c| match c {
-                    ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
-                    _ => None,
-                }).collect::<Vec<_>>().join("");
+                let text = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
                 format!("[{role}]: {text}")
-            },
+            }
             ResponseInputItem::FunctionCall {
                 name, arguments, ..
             } => {
@@ -288,8 +294,13 @@ mod tests {
         assert_eq!(result.history.len(), 3);
         assert!(
             if let ResponseInputItem::Message { role, .. } = &result.history[0] {
-                role == "system" && result.history[0].message_text().map_or(false, |t| t.contains("summary"))
-            } else { false }
+                role == "system"
+                    && result.history[0]
+                        .message_text()
+                        .map_or(false, |t| t.contains("summary"))
+            } else {
+                false
+            }
         );
     }
 

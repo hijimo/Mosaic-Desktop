@@ -107,12 +107,8 @@ mod tests {
         let history: Vec<_> = (0..10).map(|i| msg(&format!("msg-{i}"))).collect();
         let result = apply_truncation(&history, &TruncationPolicy::KeepRecent { max_items: 3 });
         assert_eq!(result.len(), 3);
-        assert!(
-            result[0].message_text().as_deref() == Some("msg-7")
-        );
-        assert!(
-            result[2].message_text().as_deref() == Some("msg-9")
-        );
+        assert!(result[0].message_text().as_deref() == Some("msg-7"));
+        assert!(result[2].message_text().as_deref() == Some("msg-9"));
     }
 
     #[test]

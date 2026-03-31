@@ -4,7 +4,7 @@ use aliyun_oss_rust_sdk::oss::OSS;
 use aliyun_oss_rust_sdk::request::RequestBuilder;
 use aliyun_oss_rust_sdk::url::UrlApi;
 use anyhow::{Context, Result};
-use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
+use reqwest::header::{HeaderValue, CONTENT_DISPOSITION, CONTENT_TYPE};
 use tracing::info;
 
 use super::config::OssConfig;
@@ -99,7 +99,10 @@ fn build_request(content_type: Option<&str>) -> RequestBuilder {
 }
 
 fn content_disposition_for(content_type: Option<&str>) -> &'static str {
-    let Some(content_type) = content_type.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(content_type) = content_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return "attachment";
     };
 
@@ -202,7 +205,10 @@ mod tests {
 
     #[test]
     fn other_content_defaults_to_attachment() {
-        assert_eq!(content_disposition_for(Some("application/pdf")), "attachment");
+        assert_eq!(
+            content_disposition_for(Some("application/pdf")),
+            "attachment"
+        );
         assert_eq!(content_disposition_for(None), "attachment");
     }
 }

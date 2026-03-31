@@ -5,8 +5,8 @@ use crate::core::agent::AgentControl;
 use crate::core::memories::memory_root;
 use crate::core::memories::prompts::build_consolidation_prompt;
 use crate::core::memories::storage::{rebuild_raw_memories_file, sync_rollout_summaries};
-use crate::protocol::ThreadId;
 use crate::protocol::types::{SandboxPolicy, UserInput};
+use crate::protocol::ThreadId;
 use crate::state::memories_db::Phase2JobClaimOutcome;
 use crate::state::StateDb;
 use std::path::Path;
@@ -184,11 +184,7 @@ pub(super) async fn run(
                 .map(|m| m.source_updated_at.timestamp())
                 .max()
                 .unwrap_or(0);
-            let _ = db.mark_global_phase2_job_succeeded(
-                &ownership_token,
-                watermark,
-                &raw_memories,
-            );
+            let _ = db.mark_global_phase2_job_succeeded(&ownership_token, watermark, &raw_memories);
             info!("memory phase-2 consolidation succeeded");
         }
         Err(e) => {

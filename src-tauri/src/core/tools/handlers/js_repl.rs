@@ -12,9 +12,13 @@ pub const JS_REPL_PRAGMA_PREFIX: &str = "//pragma:";
 
 /// Join stdout and stderr into a single output string.
 fn join_outputs(stdout: &str, stderr: &str) -> String {
-    if stdout.is_empty() { stderr.to_string() }
-    else if stderr.is_empty() { stdout.to_string() }
-    else { format!("{stdout}\n{stderr}") }
+    if stdout.is_empty() {
+        stderr.to_string()
+    } else if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    }
 }
 
 /// Build a structured exec output for js_repl results.
@@ -91,19 +95,36 @@ impl ToolHandler for JsReplHandler {
         // Feature flag check (matches source: session.features().enabled(Feature::JsRepl))
         // TODO: wire to actual feature flag system
 
-        let params: JsReplArgs = serde_json::from_value(args.clone()).map_err(|_| {
-            // Also support freeform string input (Custom payload)
-            CodexError::new(ErrorCode::InvalidInput, "js_repl expects {code} or freeform string")
-        }).or_else(|_| {
-            // Try freeform string
-            args.as_str().map(|s| JsReplArgs { code: s.to_string(), timeout_ms: None })
-                .ok_or_else(|| CodexError::new(ErrorCode::InvalidInput, "js_repl expects {code} or freeform string"))
-        })?;
+        let params: JsReplArgs = serde_json::from_value(args.clone())
+            .map_err(|_| {
+                // Also support freeform string input (Custom payload)
+                CodexError::new(
+                    ErrorCode::InvalidInput,
+                    "js_repl expects {code} or freeform string",
+                )
+            })
+            .or_else(|_| {
+                // Try freeform string
+                args.as_str()
+                    .map(|s| JsReplArgs {
+                        code: s.to_string(),
+                        timeout_ms: None,
+                    })
+                    .ok_or_else(|| {
+                        CodexError::new(
+                            ErrorCode::InvalidInput,
+                            "js_repl expects {code} or freeform string",
+                        )
+                    })
+            })?;
 
         let (pragmas, clean_code) = parse_pragmas(&params.code);
 
         if clean_code.trim().is_empty() {
-            return Err(CodexError::new(ErrorCode::InvalidInput, "js_repl code must not be empty"));
+            return Err(CodexError::new(
+                ErrorCode::InvalidInput,
+                "js_repl code must not be empty",
+            ));
         }
 
         // Full implementation:

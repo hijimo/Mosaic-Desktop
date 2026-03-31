@@ -63,12 +63,7 @@ pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<St
     }
     // Take the first "word" sequence before any heredoc/pipe/etc.
     let first_line = trimmed.lines().next()?;
-    let clean = first_line
-        .split("<<")
-        .next()?
-        .split('|')
-        .next()?
-        .trim();
+    let clean = first_line.split("<<").next()?.split('|').next()?.trim();
     if clean.is_empty() {
         return None;
     }

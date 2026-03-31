@@ -11,7 +11,7 @@ use std::time::Duration;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{sleep_until, Instant};
 use tracing::warn;
 
 /// Events emitted by the file watcher.

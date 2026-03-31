@@ -773,11 +773,21 @@ impl ResponseInputItem {
     pub fn message_text(&self) -> Option<String> {
         match self {
             Self::Message { content, .. } if !content.is_empty() => {
-                let text: String = content.iter().filter_map(|c| match c {
-                    ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
-                    _ => None,
-                }).collect::<Vec<_>>().join("");
-                if text.is_empty() { None } else { Some(text) }
+                let text: String = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             }
             _ => None,
         }
@@ -792,33 +802,48 @@ impl ResponseInputItem {
     }
 }
 
-impl From<ResponseItem> for ResponseInputItem {
-    fn from(item: ResponseItem) -> Self {
-        match item {
-            ResponseItem::Message { role, content, .. } => {
-                Self::Message { role, content }
-            }
+impl ResponseItem {
+    pub fn to_input_item(&self) -> Option<ResponseInputItem> {
+        match self {
+            ResponseItem::Message { role, content, .. } => Some(ResponseInputItem::Message {
+                role: role.clone(),
+                content: content.clone(),
+            }),
             ResponseItem::FunctionCall {
                 call_id,
                 name,
                 arguments,
                 ..
-            } => Self::FunctionCall {
-                call_id,
-                name,
-                arguments,
-            },
+            } => Some(ResponseInputItem::FunctionCall {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            }),
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
+                Some(ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: output.clone(),
+                })
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
+                Some(ResponseInputItem::CustomToolCallOutput {
+                    call_id: call_id.clone(),
+                    output: output.clone(),
+                })
             }
-            _ => Self::Message {
-                role: "system".to_string(),
-                content: vec![ContentItem::InputText { text: "[unhandled item]".to_string() }],
-            },
+            _ => None,
         }
+    }
+}
+
+impl From<ResponseItem> for ResponseInputItem {
+    fn from(item: ResponseItem) -> Self {
+        item.to_input_item().unwrap_or_else(|| Self::Message {
+            role: "system".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "[unhandled item]".to_string(),
+            }],
+        })
     }
 }
 
@@ -1224,14 +1249,18 @@ pub enum AgentStatus {
 pub enum ReviewTarget {
     UncommittedChanges,
     #[serde(rename_all = "camelCase")]
-    BaseBranch { branch: String },
+    BaseBranch {
+        branch: String,
+    },
     #[serde(rename_all = "camelCase")]
     Commit {
         sha: String,
         title: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
-    Custom { instructions: String },
+    Custom {
+        instructions: String,
+    },
 }
 
 /// Review request payload.

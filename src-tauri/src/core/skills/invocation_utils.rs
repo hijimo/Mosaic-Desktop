@@ -16,7 +16,10 @@ use super::model::{SkillLoadOutcome, SkillMetadata};
 /// - `by_doc_path`: maps a skill's `SKILL.md` path to its metadata
 pub fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
-) -> (HashMap<PathBuf, SkillMetadata>, HashMap<PathBuf, SkillMetadata>) {
+) -> (
+    HashMap<PathBuf, SkillMetadata>,
+    HashMap<PathBuf, SkillMetadata>,
+) {
     let mut by_scripts_dir = HashMap::new();
     let mut by_doc_path = HashMap::new();
     for skill in skills {
@@ -51,9 +54,7 @@ pub fn detect_implicit_skill_invocation(
 }
 
 fn tokenize_command(command: &str) -> Vec<String> {
-    shlex::split(command).unwrap_or_else(|| {
-        command.split_whitespace().map(String::from).collect()
-    })
+    shlex::split(command).unwrap_or_else(|| command.split_whitespace().map(String::from).collect())
 }
 
 fn script_run_token(tokens: &[String]) -> Option<&str> {
@@ -71,8 +72,12 @@ fn script_run_token(tokens: &[String]) -> Option<&str> {
 
     // Find the first non-flag argument after the runner.
     for token in tokens.iter().skip(1) {
-        if token == "--" { continue; }
-        if token.starts_with('-') { continue; }
+        if token == "--" {
+            continue;
+        }
+        if token.starts_with('-') {
+            continue;
+        }
         let lower = token.to_ascii_lowercase();
         if SCRIPT_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
             return Some(token.as_str());
@@ -113,7 +118,9 @@ fn detect_skill_doc_read(
         return None;
     }
     for token in tokens.iter().skip(1) {
-        if token.starts_with('-') { continue; }
+        if token.starts_with('-') {
+            continue;
+        }
         let path = Path::new(token);
         let candidate_path = if path.is_absolute() {
             normalize_path(path)
@@ -129,7 +136,9 @@ fn detect_skill_doc_read(
 
 fn command_reads_file(tokens: &[String]) -> bool {
     const READERS: &[&str] = &["cat", "sed", "head", "tail", "less", "more", "bat", "awk"];
-    let Some(program) = tokens.first() else { return false };
+    let Some(program) = tokens.first() else {
+        return false;
+    };
     let program = command_basename(program).to_ascii_lowercase();
     READERS.contains(&program.as_str())
 }
@@ -221,10 +230,7 @@ mod tests {
             implicit_skills_by_doc_path: Arc::new(HashMap::new()),
             ..Default::default()
         };
-        let tokens: Vec<String> = vec![
-            "python3".into(),
-            "/tmp/skill-test/scripts/fetch.py".into(),
-        ];
+        let tokens: Vec<String> = vec!["python3".into(), "/tmp/skill-test/scripts/fetch.py".into()];
         let found = detect_skill_script_run(&outcome, &tokens, Path::new("/tmp/other"));
         assert_eq!(found.map(|s| s.name), Some("test-skill".to_string()));
     }

@@ -1,8 +1,8 @@
-use crossbeam_channel::{Receiver, Sender, after, never, select, unbounded};
-use ignore::WalkBuilder;
+use crossbeam_channel::{after, never, select, unbounded, Receiver, Sender};
 use ignore::overrides::OverrideBuilder;
-use nucleo::{Config, Injector, Matcher, Nucleo, Utf32String};
+use ignore::WalkBuilder;
 use nucleo::pattern::{CaseMatching, Normalization};
+use nucleo::{Config, Injector, Matcher, Nucleo, Utf32String};
 use serde::Serialize;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
@@ -438,7 +438,11 @@ mod tests {
     fn create_temp_tree(count: usize) -> TempDir {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..count {
-            fs::write(dir.path().join(format!("file-{i:04}.txt")), format!("contents {i}")).unwrap();
+            fs::write(
+                dir.path().join(format!("file-{i:04}.txt")),
+                format!("contents {i}"),
+            )
+            .unwrap();
         }
         dir
     }
@@ -454,7 +458,10 @@ mod tests {
         )
         .expect("run ok");
         assert!(!results.matches.is_empty());
-        assert!(results.matches.iter().any(|m| m.path.to_string_lossy().contains("file-0000.txt")));
+        assert!(results
+            .matches
+            .iter()
+            .any(|m| m.path.to_string_lossy().contains("file-0000.txt")));
     }
 
     #[test]
@@ -466,7 +473,13 @@ mod tests {
     fn cancel_exits_run() {
         let dir = create_temp_tree(200);
         let cancel = Arc::new(AtomicBool::new(true));
-        let results = run("file-", vec![dir.path().to_path_buf()], FileSearchOptions::default(), Some(cancel)).expect("run ok");
+        let results = run(
+            "file-",
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions::default(),
+            Some(cancel),
+        )
+        .expect("run ok");
         assert_eq!(results.matches, Vec::new());
     }
 }

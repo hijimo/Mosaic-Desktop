@@ -170,7 +170,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             content,
             ..
         } => {
-            use crate::protocol::types::{ReasoningSummaryItem, ReasoningContentItem};
+            use crate::protocol::types::{ReasoningContentItem, ReasoningSummaryItem};
             let summary_text = summary
                 .iter()
                 .map(|s| match s {
@@ -221,7 +221,9 @@ mod tests {
         let item = ResponseItem::Message {
             id: Some("u1".into()),
             role: "user".into(),
-            content: vec![ContentItem::InputText { text: "hello".into() }],
+            content: vec![ContentItem::InputText {
+                text: "hello".into(),
+            }],
             end_turn: None,
             phase: None,
         };
@@ -244,8 +246,12 @@ mod tests {
             id: None,
             role: "user".into(),
             content: vec![
-                ContentItem::InputText { text: "look at this".into() },
-                ContentItem::InputImage { image_url: "https://img.png".into() },
+                ContentItem::InputText {
+                    text: "look at this".into(),
+                },
+                ContentItem::InputImage {
+                    image_url: "https://img.png".into(),
+                },
             ],
             end_turn: None,
             phase: None,
@@ -283,10 +289,18 @@ mod tests {
             id: None,
             role: "user".into(),
             content: vec![
-                ContentItem::InputText { text: "<image>".into() },
-                ContentItem::InputImage { image_url: "data:image/png;base64,abc".into() },
-                ContentItem::InputText { text: "</image>".into() },
-                ContentItem::InputText { text: "describe this".into() },
+                ContentItem::InputText {
+                    text: "<image>".into(),
+                },
+                ContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".into(),
+                },
+                ContentItem::InputText {
+                    text: "</image>".into(),
+                },
+                ContentItem::InputText {
+                    text: "describe this".into(),
+                },
             ],
             end_turn: None,
             phase: None,

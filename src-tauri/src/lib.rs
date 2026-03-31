@@ -32,7 +32,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use commands::AppState;
-use config::ConfigLayerStack;
+use config::{ConfigLayerStack, ConfigRequirements, ConfigService};
 use core::state_db::StateDb;
 
 fn load_runtime_env() {
@@ -73,8 +73,7 @@ pub fn run() {
             let mut skip = false;
             let mut cleaned = Vec::new();
             for line in content.lines() {
-                if line.starts_with("[shell_environment_policy")
-                    || line.starts_with("[mcp_servers")
+                if line.starts_with("[shell_environment_policy") || line.starts_with("[mcp_servers")
                 {
                     skip = true;
                     continue;
@@ -97,17 +96,30 @@ pub fn run() {
         }
     }
 
+    let config_requirements = if let Some(home) = std::env::var_os("HOME") {
+        let codex_home = std::path::PathBuf::from(home).join(".codex");
+        match ConfigService::new(codex_home).load_requirements(None) {
+            Ok(requirements) => requirements,
+            Err(error) => {
+                eprintln!("failed to load ~/.codex/requirements.toml: {error}");
+                ConfigRequirements::default()
+            }
+        }
+    } else {
+        ConfigRequirements::default()
+    };
+
     let mosaic_home = dirs::home_dir()
         .map(|h| h.join(".mosaic"))
         .unwrap_or_else(|| std::path::PathBuf::from(".mosaic"));
-    let db = StateDb::open(&mosaic_home.join("state.db"))
-        .expect("failed to open state database");
+    let db = StateDb::open(&mosaic_home.join("state.db")).expect("failed to open state database");
 
     let app_state = AppState {
         threads: Arc::new(Mutex::new(HashMap::new())),
         thread_meta: Arc::new(Mutex::new(HashMap::new())),
         recorders: Arc::new(Mutex::new(HashMap::new())),
         config: Arc::new(Mutex::new(config)),
+        config_requirements: Arc::new(Mutex::new(config_requirements)),
         db,
     };
 

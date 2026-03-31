@@ -337,7 +337,10 @@ mod tests {
     }
 
     fn arb_function_call_output_payload() -> impl Strategy<Value = FunctionCallOutputPayload> {
-        arb_content_or_items().prop_map(|body| FunctionCallOutputPayload { body, success: None })
+        arb_content_or_items().prop_map(|body| FunctionCallOutputPayload {
+            body,
+            success: None,
+        })
     }
 
     fn arb_response_input_item() -> impl Strategy<Value = ResponseInputItem> {
@@ -548,10 +551,10 @@ mod tests {
                     phase: None,
                 })
             }),
-            (arb_safe_string(), arb_safe_string()).prop_map(|(id, text)| {
-                TurnItem::Plan(PlanItem { id, text })
-            }),
-            arb_safe_string().prop_map(|id| TurnItem::ContextCompaction(ContextCompactionItem { id })),
+            (arb_safe_string(), arb_safe_string())
+                .prop_map(|(id, text)| { TurnItem::Plan(PlanItem { id, text }) }),
+            arb_safe_string()
+                .prop_map(|id| TurnItem::ContextCompaction(ContextCompactionItem { id })),
         ]
     }
 
@@ -699,7 +702,10 @@ mod tests {
             (arb_safe_string(), arb_dynamic_tool_response())
                 .prop_map(|(id, response)| Op::DynamicToolResponse { id, response }),
             // AddToHistory
-            arb_safe_string().prop_map(|text| Op::AddToHistory { text, role: "user".to_string() }),
+            arb_safe_string().prop_map(|text| Op::AddToHistory {
+                text,
+                role: "user".to_string()
+            }),
             Just(Op::ListMcpTools),
             arb_mcp_server_refresh_config().prop_map(|config| Op::RefreshMcpServers { config }),
             Just(Op::ReloadUserConfig),
@@ -816,11 +822,17 @@ mod tests {
                 |(turn_id, reason)| { EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) }
             ),
             // TokenCount
-            prop::option::of(arb_token_usage_info())
-                .prop_map(|info| EventMsg::TokenCount(TokenCountEvent { info, rate_limits: None })),
+            prop::option::of(arb_token_usage_info()).prop_map(|info| EventMsg::TokenCount(
+                TokenCountEvent {
+                    info,
+                    rate_limits: None
+                }
+            )),
             // AgentMessage
-            arb_safe_string()
-                .prop_map(|message| EventMsg::AgentMessage(AgentMessageEvent { message, phase: None })),
+            arb_safe_string().prop_map(|message| EventMsg::AgentMessage(AgentMessageEvent {
+                message,
+                phase: None
+            })),
             // AgentMessageDelta
             arb_safe_string()
                 .prop_map(|delta| EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })),
@@ -1068,18 +1080,17 @@ mod tests {
                 }
             ),
             // RawResponseItem
-            arb_safe_string()
-                .prop_map(|text| {
-                    EventMsg::RawResponseItem(RawResponseItemEvent {
-                        item: ResponseItem::Message {
-                            id: None,
-                            role: "assistant".to_string(),
-                            content: vec![ContentItem::OutputText { text }],
-                            end_turn: None,
-                            phase: None,
-                        },
-                    })
-                }),
+            arb_safe_string().prop_map(|text| {
+                EventMsg::RawResponseItem(RawResponseItemEvent {
+                    item: ResponseItem::Message {
+                        id: None,
+                        role: "assistant".to_string(),
+                        content: vec![ContentItem::OutputText { text }],
+                        end_turn: None,
+                        phase: None,
+                    },
+                })
+            }),
             // ExecApprovalRequest
             (
                 arb_safe_string(),

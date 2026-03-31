@@ -118,9 +118,7 @@ impl SkillLoadOutcome {
     }
 
     pub fn skills_with_enabled(&self) -> impl Iterator<Item = (&SkillMetadata, bool)> {
-        self.skills
-            .iter()
-            .map(|s| (s, self.is_skill_enabled(s)))
+        self.skills.iter().map(|s| (s, self.is_skill_enabled(s)))
     }
 }
 
@@ -128,7 +126,10 @@ impl SkillLoadOutcome {
 /// (Moved to invocation_utils.rs — this is kept as a re-export for backward compat.)
 pub fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
-) -> (HashMap<PathBuf, SkillMetadata>, HashMap<PathBuf, SkillMetadata>) {
+) -> (
+    HashMap<PathBuf, SkillMetadata>,
+    HashMap<PathBuf, SkillMetadata>,
+) {
     super::invocation_utils::build_implicit_skill_path_indexes(skills)
 }
 
@@ -179,7 +180,8 @@ mod tests {
     #[test]
     fn build_indexes() {
         let skill = make_skill("a", "/tmp/a/SKILL.md");
-        let (by_scripts, by_doc) = crate::core::skills::invocation_utils::build_implicit_skill_path_indexes(vec![skill]);
+        let (by_scripts, by_doc) =
+            crate::core::skills::invocation_utils::build_implicit_skill_path_indexes(vec![skill]);
         assert!(by_doc.contains_key(&PathBuf::from("/tmp/a/SKILL.md")));
         assert!(by_scripts.contains_key(&PathBuf::from("/tmp/a/scripts")));
     }
