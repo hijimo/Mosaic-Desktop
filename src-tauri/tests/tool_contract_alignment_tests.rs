@@ -1,15 +1,21 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::PathBuf;
 
+fn mosaic_default_tool_names() -> BTreeSet<String> {
+    tauri_app_lib::core::tools::spec::build_specs(
+        &tauri_app_lib::core::tools::spec::ToolsConfig::default(),
+        false,
+    )
+    .configured_specs
+    .into_iter()
+    .map(|configured| configured.spec.name().to_string())
+    .collect()
+}
+
 #[test]
-fn tool_contract_names_match_codex_main_default_surface() {
-    let config = tauri_app_lib::core::tools::spec::ToolsConfig::default();
-    let assembled = tauri_app_lib::core::tools::spec::build_specs(&config, false);
-    let mut actual: Vec<String> = assembled
-        .configured_specs
-        .iter()
-        .map(|spec| spec.spec.name().to_string())
-        .collect();
+fn tool_contract_names_match_frozen_current_default_surface() {
+    let mut actual = mosaic_default_tool_names().into_iter().collect::<Vec<_>>();
     actual.sort();
 
     let expected = vec![
@@ -34,17 +40,49 @@ fn codex_main_spec_path() -> PathBuf {
     codex_main_tools_root().join("spec.rs")
 }
 
-#[test]
-fn codex_main_reference_checkout_exists() {
-    assert!(codex_main_spec_path().is_file());
+fn codex_main_spec_source() -> String {
+    fs::read_to_string(codex_main_spec_path()).expect("failed to read codex-main tools/spec.rs")
+}
+
+fn codex_main_spec_declares_tool(source: &str, tool_name: &str) -> bool {
+    source.contains(&format!("name: \"{tool_name}\".to_string()"))
 }
 
 #[test]
-fn mosaic_is_missing_contract_groups_we_intend_to_add() {
-    let expected_groups = [
+fn codex_main_reference_spec_mentions_alignment_target_tools() {
+    let source = codex_main_spec_source();
+
+    for tool_name in [
+        "shell",
+        "shell_command",
+        "exec_command",
+        "write_stdin",
+        "apply_patch",
+        "list_dir",
+        "read_file",
+        "grep_files",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait",
+        "close_agent",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ] {
+        assert!(
+            codex_main_spec_declares_tool(&source, tool_name) || source.contains(tool_name),
+            "codex-main reference spec does not mention tool {tool_name}"
+        );
+    }
+}
+
+#[test]
+fn mosaic_default_surface_omits_future_contract_expansion_tools() {
+    let missing_groups = [
         (
-            "shell",
-            vec!["shell", "shell_command", "exec_command", "write_stdin"],
+            "shell_expansion",
+            vec!["shell_command", "exec_command", "write_stdin"],
         ),
         (
             "collab",
@@ -66,18 +104,14 @@ fn mosaic_is_missing_contract_groups_we_intend_to_add() {
         ),
     ];
 
-    let names = tauri_app_lib::core::tools::spec::build_specs(
-        &tauri_app_lib::core::tools::spec::ToolsConfig::default(),
-        false,
-    )
-    .configured_specs
-    .into_iter()
-    .map(|configured| configured.spec.name().to_string())
-    .collect::<BTreeSet<_>>();
+    let names = mosaic_default_tool_names();
 
-    for (_group, group_names) in expected_groups {
+    for (group, group_names) in missing_groups {
         for tool_name in group_names {
-            assert!(names.contains(tool_name), "missing tool: {tool_name}");
+            assert!(
+                !names.contains(tool_name),
+                "tool {tool_name} from {group} unexpectedly present in current default surface"
+            );
         }
     }
 }
