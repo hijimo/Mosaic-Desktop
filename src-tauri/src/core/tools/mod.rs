@@ -343,6 +343,166 @@ impl Default for ToolRegistry {
     }
 }
 
+// ===========================================================================
+// Codex-aligned registry types (tools/registry.rs equivalent)
+//
+// These types match Codex's ToolHandler/ToolRegistry signatures exactly.
+// The legacy ToolHandler trait above is preserved for backward compatibility
+// with existing handlers. New handlers should implement `registry::ToolHandler`.
+// ===========================================================================
+
+pub mod registry {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    use super::context::{ToolInvocation, ToolOutput, ToolPayload};
+    use super::FunctionCallError;
+    use crate::protocol::types::ResponseInputItem;
+
+    /// Tool kind for registry dispatch — matches Codex `registry::ToolKind`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum ToolKind {
+        Function,
+        Mcp,
+    }
+
+    /// Tool handler trait — matches Codex `registry::ToolHandler` exactly.
+    #[async_trait]
+    pub trait ToolHandler: Send + Sync {
+        fn kind(&self) -> ToolKind;
+
+        fn matches_kind(&self, payload: &ToolPayload) -> bool {
+            matches!(
+                (self.kind(), payload),
+                (ToolKind::Function, ToolPayload::Function { .. })
+                    | (ToolKind::Function, ToolPayload::Custom { .. })
+                    | (ToolKind::Function, ToolPayload::LocalShell { .. })
+                    | (ToolKind::Mcp, ToolPayload::Mcp { .. })
+            )
+        }
+
+        /// Returns `true` if the invocation might mutate the user's environment.
+        async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+            false
+        }
+
+        /// Execute the tool and return output for the model.
+        async fn handle(
+            &self,
+            invocation: ToolInvocation,
+        ) -> Result<ToolOutput, FunctionCallError>;
+    }
+
+    /// Tool registry — matches Codex `registry::ToolRegistry`.
+    /// Dispatches by tool name, returns `ResponseInputItem`.
+    pub struct ToolRegistry {
+        handlers: HashMap<String, Arc<dyn ToolHandler>>,
+    }
+
+    impl ToolRegistry {
+        pub fn new(handlers: HashMap<String, Arc<dyn ToolHandler>>) -> Self {
+            Self { handlers }
+        }
+
+        pub fn handler(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+            self.handlers.get(name).map(Arc::clone)
+        }
+
+        pub async fn dispatch(
+            &self,
+            invocation: ToolInvocation,
+        ) -> Result<ResponseInputItem, FunctionCallError> {
+            let tool_name = invocation.tool_name.clone();
+            let call_id = invocation.call_id.clone();
+            let payload = invocation.payload.clone();
+
+            let handler = match self.handler(&tool_name) {
+                Some(h) => h,
+                None => {
+                    let message = match &payload {
+                        ToolPayload::Custom { .. } => {
+                            format!("unsupported custom tool call: {tool_name}")
+                        }
+                        _ => format!("unsupported call: {tool_name}"),
+                    };
+                    return Err(FunctionCallError::RespondToModel(message));
+                }
+            };
+
+            if !handler.matches_kind(&payload) {
+                return Err(FunctionCallError::Fatal(format!(
+                    "tool {tool_name} invoked with incompatible payload"
+                )));
+            }
+
+            let output = handler.handle(invocation).await?;
+            Ok(output.into_response(&call_id, &payload))
+        }
+    }
+
+    /// Configured tool spec — matches Codex `registry::ConfiguredToolSpec`.
+    #[derive(Debug, Clone)]
+    pub struct ConfiguredToolSpec {
+        pub spec: crate::core::tools::spec::ToolSpec,
+        pub supports_parallel_tool_calls: bool,
+    }
+
+    impl ConfiguredToolSpec {
+        pub fn new(
+            spec: crate::core::tools::spec::ToolSpec,
+            supports_parallel_tool_calls: bool,
+        ) -> Self {
+            Self {
+                spec,
+                supports_parallel_tool_calls,
+            }
+        }
+    }
+
+    /// Builder for constructing a ToolRegistry — matches Codex `ToolRegistryBuilder`.
+    pub struct ToolRegistryBuilder {
+        handlers: HashMap<String, Arc<dyn ToolHandler>>,
+        specs: Vec<ConfiguredToolSpec>,
+    }
+
+    impl ToolRegistryBuilder {
+        pub fn new() -> Self {
+            Self {
+                handlers: HashMap::new(),
+                specs: Vec::new(),
+            }
+        }
+
+        pub fn push_spec(&mut self, spec: crate::core::tools::spec::ToolSpec) {
+            self.push_spec_with_parallel_support(spec, false);
+        }
+
+        pub fn push_spec_with_parallel_support(
+            &mut self,
+            spec: crate::core::tools::spec::ToolSpec,
+            supports_parallel_tool_calls: bool,
+        ) {
+            self.specs
+                .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+        }
+
+        pub fn register_handler(
+            &mut self,
+            name: impl Into<String>,
+            handler: Arc<dyn ToolHandler>,
+        ) {
+            self.handlers.insert(name.into(), handler);
+        }
+
+        pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
+            let registry = ToolRegistry::new(self.handlers);
+            (self.specs, registry)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +595,59 @@ mod tests {
             .any(|spec| spec.spec.name() == "shell"));
         assert!(configured.supports_parallel_tool_calls);
         let _ = builder;
+    }
+
+    // ---- Codex-aligned registry tests ----
+
+    #[test]
+    fn registry_handler_lookup() {
+        let handlers = std::collections::HashMap::new();
+        let reg = registry::ToolRegistry::new(handlers);
+        assert!(reg.handler("nonexistent").is_none());
+    }
+
+    #[test]
+    fn registry_builder_builds_specs_and_registry() {
+        let mut builder = registry::ToolRegistryBuilder::new();
+        builder.push_spec(crate::core::tools::spec::ToolSpec::Function {
+            name: "test_tool".into(),
+            description: "desc".into(),
+            strict: false,
+            parameters: crate::core::tools::spec::JsonSchema::Object {
+                properties: std::collections::BTreeMap::new(),
+                required: None,
+                additional_properties: None,
+            },
+        });
+        let (specs, _registry) = builder.build();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].spec.name(), "test_tool");
+        assert!(!specs[0].supports_parallel_tool_calls);
+    }
+
+    #[test]
+    fn registry_configured_tool_spec_parallel_flag() {
+        let spec = registry::ConfiguredToolSpec::new(
+            crate::core::tools::spec::ToolSpec::Function {
+                name: "parallel_tool".into(),
+                description: "".into(),
+                strict: false,
+                parameters: crate::core::tools::spec::JsonSchema::Object {
+                    properties: std::collections::BTreeMap::new(),
+                    required: None,
+                    additional_properties: None,
+                },
+            },
+            true,
+        );
+        assert!(spec.supports_parallel_tool_calls);
+    }
+
+    #[test]
+    fn registry_tool_kind_variants() {
+        let f = registry::ToolKind::Function;
+        let m = registry::ToolKind::Mcp;
+        assert_ne!(f, m);
+        assert_eq!(f, registry::ToolKind::Function);
     }
 }
