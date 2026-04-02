@@ -238,6 +238,31 @@ impl StateDb {
         Ok(())
     }
 
+    /// List distinct cwd values from threads, most recently used first (within last 6 months).
+    /// Note: relies on `created_at` being stored in ISO 8601 / RFC 3339 format for correct comparison.
+    pub async fn list_distinct_cwds(&self, limit: usize) -> Vec<String> {
+        let conn = self.conn.lock().await;
+        let mut stmt = match conn.prepare(
+            "SELECT cwd, MAX(created_at) as latest FROM threads \
+             WHERE created_at >= datetime('now', '-6 months') \
+             GROUP BY cwd ORDER BY latest DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("list_distinct_cwds prepare failed: {e}");
+                return Vec::new();
+            }
+        };
+        let rows = match stmt.query_map(params![limit as i64], |row| row.get::<_, String>(0)) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("list_distinct_cwds query failed: {e}");
+                return Vec::new();
+            }
+        };
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
     /// Path to the database file.
     pub fn path(&self) -> &Path {
         &self.path

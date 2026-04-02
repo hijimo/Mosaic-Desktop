@@ -35,6 +35,18 @@ export async function getCwd(): Promise<string> {
   return invoke<string>('get_cwd');
 }
 
+export async function getHomeDir(): Promise<string> {
+  return invoke<string>('get_home_dir');
+}
+
+export async function listCwds(): Promise<string[]> {
+  return invoke<string[]>('list_cwds');
+}
+
+export async function pickFolder(): Promise<string | null> {
+  return invoke<string | null>('pick_folder');
+}
+
 export async function getConfig(): Promise<unknown> {
   return invoke<unknown>('get_config');
 }

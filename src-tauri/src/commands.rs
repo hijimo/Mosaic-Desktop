@@ -899,6 +899,28 @@ pub fn get_cwd() -> Result<String, String> {
         .map_err(|e| format!("failed to get cwd: {e}"))
 }
 
+/// Get the user's home directory.
+#[tauri::command]
+pub fn get_home_dir() -> Result<String, String> {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| "failed to resolve home directory".to_string())
+}
+
+/// List distinct working directories from thread history.
+#[tauri::command]
+pub async fn list_cwds(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.db.list_distinct_cwds(50).await)
+}
+
+/// Open a native folder picker and return the selected path.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app.dialog().file().blocking_pick_folder();
+    Ok(picked.map(|p| p.to_string()))
+}
+
 #[tauri::command]
 pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageResponse, String> {
     crate::share::share_message(payload).await.map_err(|e| {

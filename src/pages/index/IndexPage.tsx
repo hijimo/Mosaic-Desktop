@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
-import { Box, Typography, IconButton } from '@mui/material';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Box, Typography, IconButton, Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import {
   Activity,
   Bell,
@@ -18,6 +18,7 @@ import {
   ChevronDown,
   FolderOpen,
   Plus,
+  Check,
 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { useThreadStore } from '@/stores/threadStore';
@@ -25,6 +26,7 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { MessageList } from '@/components/chat/MessageList';
+import { getHomeDir, listCwds, pickFolder } from '@/services/api';
 import type { UserInput } from '@/types';
 
 interface SkillCard {
@@ -63,6 +65,35 @@ export function IndexPage(): React.ReactElement {
   const { createThread, resumeThread } = useThread();
   const submitOp = useSubmitOp();
 
+  // ── Workspace selector state ──
+  const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
+  const [cwdList, setCwdList] = useState<string[]>([]);
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+  useEffect(() => {
+    (async () => {
+      const [cwds, home] = await Promise.all([listCwds(), getHomeDir()]);
+      const set = new Set(cwds);
+      const list = [...cwds];
+      if (!set.has(home)) list.push(home);
+      setSelectedCwd(home);
+      setCwdList(list);
+    })().catch(console.error);
+  }, []);
+
+  const folderName = (path: string): string => {
+    const parts = path.replace(/[/\\]+$/, '').split(/[/\\]/);
+    return parts[parts.length - 1] || path;
+  };
+
+  const handlePickFolder = useCallback(async () => {
+    const picked = await pickFolder();
+    if (picked) {
+      setSelectedCwd(picked);
+      setCwdList((prev) => (prev.includes(picked) ? prev : [picked, ...prev]));
+    }
+  }, []);
+
   const currentThreadId = routeThreadId ?? activeThreadId;
   const threadMessages = currentThreadId ? messages.get(currentThreadId) ?? [] : [];
   const hasMessages = threadMessages.length > 0 || streamingTurn?.isStreaming;
@@ -74,7 +105,7 @@ export function IndexPage(): React.ReactElement {
 
       let tid = currentThreadId;
       if (!tid) {
-        tid = await createThread();
+        tid = await createThread(selectedCwd ?? undefined);
       } else {
         // Ensure the thread engine is running (resume if needed after app restart).
         await resumeThread(tid);
@@ -97,7 +128,7 @@ export function IndexPage(): React.ReactElement {
         sandbox_policy: { type: 'danger-full-access' },
       });
     },
-    [inputText, currentThreadId, createThread, resumeThread, submitOp],
+    [inputText, currentThreadId, selectedCwd, createThread, resumeThread, submitOp],
   );
 
   const handleKeyDown = useCallback(
@@ -250,6 +281,7 @@ export function IndexPage(): React.ReactElement {
           </Typography>
           <Box sx={{ bgcolor: '#eceef0', borderRadius: 3, p: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box
+              onClick={(e: React.MouseEvent<HTMLDivElement>) => setAnchorEl(e.currentTarget)}
               sx={{
                 bgcolor: '#fff', borderRadius: 3, px: 2.5, py: 1,
                 display: 'flex', alignItems: 'center', gap: 1,
@@ -257,10 +289,35 @@ export function IndexPage(): React.ReactElement {
               }}
             >
               <FolderOpen size={14} color="#191c1e" />
-              <Typography sx={{ fontSize: 14, fontWeight: 600, color: '#191c1e' }}>Q4 Marketing Strategy</Typography>
+              <Typography sx={{ fontSize: 14, fontWeight: 600, color: '#191c1e' }}>
+                {selectedCwd ? folderName(selectedCwd) : '...'}
+              </Typography>
               <ChevronDown size={10} color="#191c1e" />
             </Box>
-            <IconButton size="small" sx={{ p: 1 }}>
+            <Menu
+              anchorEl={anchorEl}
+              open={Boolean(anchorEl)}
+              onClose={() => setAnchorEl(null)}
+              slotProps={{ paper: { sx: { maxHeight: 300, minWidth: 220 } } }}
+            >
+              {cwdList.map((cwd) => (
+                <MenuItem
+                  key={cwd}
+                  selected={cwd === selectedCwd}
+                  onClick={() => { setSelectedCwd(cwd); setAnchorEl(null); }}
+                >
+                  <ListItemIcon sx={{ minWidth: 28 }}>
+                    {cwd === selectedCwd ? <Check size={14} /> : <FolderOpen size={14} />}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={folderName(cwd)}
+                    secondary={cwd}
+                    slotProps={{ primary: { sx: { fontSize: 14, fontWeight: 600 } }, secondary: { sx: { fontSize: 11, opacity: 0.6 } } }}
+                  />
+                </MenuItem>
+              ))}
+            </Menu>
+            <IconButton size="small" sx={{ p: 1 }} onClick={handlePickFolder}>
               <Plus size={14} color="#64748b" />
             </IconButton>
           </Box>

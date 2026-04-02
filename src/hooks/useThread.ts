@@ -8,7 +8,7 @@ import type { ThreadMeta } from '@/types';
  * Thread lifecycle management: create, archive, and resume threads.
  */
 export function useThread(): {
-  createThread: () => Promise<string>;
+  createThread: (overrideCwd?: string) => Promise<string>;
   archiveThread: (id: string) => Promise<void>;
   resumeThread: (id: string) => Promise<string>;
 } {
@@ -17,8 +17,8 @@ export function useThread(): {
   const removeThread = useThreadStore((s) => s.removeThread);
   const setMessages = useMessageStore((s) => s.setMessages);
 
-  const createThread = useCallback(async () => {
-    const cwd = await getCwd();
+  const createThread = useCallback(async (overrideCwd?: string) => {
+    const cwd = overrideCwd ?? await getCwd();
     const threadId = await threadStart(cwd);
     const meta: ThreadMeta = {
       thread_id: threadId,

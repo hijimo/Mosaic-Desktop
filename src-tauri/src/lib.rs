@@ -126,6 +126,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_vnidrop_share::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::submit_op,
@@ -140,6 +141,9 @@ pub fn run() {
             commands::get_config,
             commands::update_config,
             commands::get_cwd,
+            commands::get_home_dir,
+            commands::list_cwds,
+            commands::pick_folder,
             commands::share_message,
         ])
         .run(tauri::generate_context!())
