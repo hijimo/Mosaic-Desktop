@@ -13,11 +13,225 @@ pub mod spec;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::time::Duration;
 
+use crate::core::truncation::{formatted_truncate_text, TruncationPolicy};
 use crate::protocol::error::{CodexError, ErrorCode};
+use crate::protocol::types::ResponseInputItem;
+pub use context::ToolInvocation;
+pub use router::ToolRouter;
 pub use spec::{
     build_specs, AssembledToolRuntime, ConfiguredToolSpec, ToolRegistryBuilder, ToolsConfig,
 };
+
+// ---------------------------------------------------------------------------
+// FunctionCallError — matches Codex function_tool.rs exactly
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq)]
+pub enum FunctionCallError {
+    #[allow(dead_code)]
+    RespondToModel(String),
+    #[allow(dead_code)]
+    MissingLocalShellCallId,
+    #[allow(dead_code)]
+    Fatal(String),
+}
+
+impl fmt::Display for FunctionCallError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RespondToModel(msg) => write!(f, "{msg}"),
+            Self::MissingLocalShellCallId => {
+                write!(f, "LocalShellCall without call_id or id")
+            }
+            Self::Fatal(msg) => write!(f, "Fatal error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for FunctionCallError {}
+
+// ---------------------------------------------------------------------------
+// StreamOutput + ExecToolCallOutput — matches Codex exec.rs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct StreamOutput<T: Clone> {
+    pub text: T,
+    pub truncated_after_lines: Option<u32>,
+}
+
+impl<T: Clone> StreamOutput<T> {
+    pub fn new(text: T) -> Self {
+        Self {
+            text,
+            truncated_after_lines: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecToolCallOutput {
+    pub exit_code: i32,
+    pub stdout: StreamOutput<String>,
+    pub stderr: StreamOutput<String>,
+    pub aggregated_output: StreamOutput<String>,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
+impl Default for ExecToolCallOutput {
+    fn default() -> Self {
+        Self {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry preview constants — matches Codex tools/mod.rs
+// ---------------------------------------------------------------------------
+
+pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024;
+pub(crate) const TELEMETRY_PREVIEW_MAX_LINES: usize = 64;
+pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
+    "[... telemetry preview truncated ...]";
+
+// ---------------------------------------------------------------------------
+// Exec output formatting — matches Codex tools/mod.rs signatures exactly
+// ---------------------------------------------------------------------------
+
+/// Format the combined exec output for sending back to the model.
+/// Includes exit code and duration metadata; truncates large bodies safely.
+pub fn format_exec_output_for_model_structured(
+    exec_output: &ExecToolCallOutput,
+    truncation_policy: TruncationPolicy,
+) -> String {
+    #[derive(Serialize)]
+    struct ExecMetadata {
+        exit_code: i32,
+        duration_seconds: f32,
+    }
+
+    #[derive(Serialize)]
+    struct ExecOutput<'a> {
+        output: &'a str,
+        metadata: ExecMetadata,
+    }
+
+    let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
+    let formatted_output = format_exec_output_str(exec_output, truncation_policy);
+
+    let payload = ExecOutput {
+        output: &formatted_output,
+        metadata: ExecMetadata {
+            exit_code: exec_output.exit_code,
+            duration_seconds,
+        },
+    };
+
+    serde_json::to_string(&payload).expect("serialize ExecOutput")
+}
+
+pub fn format_exec_output_for_model_freeform(
+    exec_output: &ExecToolCallOutput,
+    truncation_policy: TruncationPolicy,
+) -> String {
+    let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
+    let content = build_content_with_timeout(exec_output);
+    let total_lines = content.lines().count();
+    let formatted_output = truncate_text(&content, truncation_policy.clone());
+
+    let mut sections = Vec::new();
+    sections.push(format!("Exit code: {}", exec_output.exit_code));
+    sections.push(format!("Wall time: {duration_seconds} seconds"));
+    if total_lines != formatted_output.lines().count() {
+        sections.push(format!("Total output lines: {total_lines}"));
+    }
+    sections.push("Output:".to_string());
+    sections.push(formatted_output);
+    sections.join("\n")
+}
+
+pub fn format_exec_output_str(
+    exec_output: &ExecToolCallOutput,
+    truncation_policy: TruncationPolicy,
+) -> String {
+    let content = build_content_with_timeout(exec_output);
+    formatted_truncate_text(&content, truncation_policy)
+}
+
+fn build_content_with_timeout(exec_output: &ExecToolCallOutput) -> String {
+    if exec_output.timed_out {
+        format!(
+            "command timed out after {} milliseconds\n{}",
+            exec_output.duration.as_millis(),
+            exec_output.aggregated_output.text
+        )
+    } else {
+        exec_output.aggregated_output.text.clone()
+    }
+}
+
+fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+    formatted_truncate_text(content, policy)
+}
+
+/// Truncate content for telemetry preview (max bytes + max lines).
+/// Matches Codex `telemetry_preview` in tools/context.rs.
+pub(crate) fn telemetry_preview(content: &str) -> String {
+    let byte_limit = content.len().min(TELEMETRY_PREVIEW_MAX_BYTES);
+    let truncated_slice = &content[..find_char_boundary(content, byte_limit)];
+    let truncated_by_bytes = truncated_slice.len() < content.len();
+
+    let mut preview = String::new();
+    let mut lines_iter = truncated_slice.lines();
+    for idx in 0..TELEMETRY_PREVIEW_MAX_LINES {
+        match lines_iter.next() {
+            Some(line) => {
+                if idx > 0 {
+                    preview.push('\n');
+                }
+                preview.push_str(line);
+            }
+            None => break,
+        }
+    }
+    let truncated_by_lines = lines_iter.next().is_some();
+
+    if !truncated_by_bytes && !truncated_by_lines {
+        return content.to_string();
+    }
+
+    if preview.len() < truncated_slice.len()
+        && truncated_slice
+            .as_bytes()
+            .get(preview.len())
+            .is_some_and(|byte| *byte == b'\n')
+    {
+        preview.push('\n');
+    }
+
+    if !preview.is_empty() && !preview.ends_with('\n') {
+        preview.push('\n');
+    }
+    preview.push_str(TELEMETRY_PREVIEW_TRUNCATION_NOTICE);
+    preview
+}
+
+fn find_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
 
 /// Identifies the kind of tool — used for registry lookup and dispatch.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
