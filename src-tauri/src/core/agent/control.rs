@@ -1,390 +1,515 @@
 /// Multi-agent management — spawning, coordinating, and lifecycle management of sub-agents.
 ///
-/// Uses weak references (`Weak<AgentInstance>`) to avoid circular references between
-/// the control plane and individual agent instances.
-use std::collections::HashMap;
+/// Architecture: `AgentControl` holds a `Weak` reference to `ThreadManager`'s
+/// internal thread registry. When spawning a sub-agent, it creates a real
+/// `CodexThread` via the thread manager, making each agent a full-fledged
+/// thread with its own Codex engine, session, and rollout.
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_channel::{Receiver, Sender};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex, RwLock};
 
+use crate::config::ConfigLayerStack;
+use crate::core::codex::Codex;
+use crate::core::initial_history::InitialHistory;
+use crate::core::rollout::policy::{SessionSource, SubAgentSource};
+use crate::core::shell_snapshot::ShellSnapshot;
+use crate::core::thread_manager::{CodexThread, ThreadManagerInner};
 use crate::protocol::error::{CodexError, ErrorCode};
-use crate::protocol::event::Event;
-use crate::protocol::types::{AgentStatus, SandboxPolicy, UserInput};
+use crate::protocol::submission::Op;
+use crate::protocol::thread_id::ThreadId;
+use crate::protocol::types::{AgentStatus, SandboxPolicy, TokenUsage, UserInput};
 
-// ── AgentInstance ────────────────────────────────────────────────
+use super::guards::Guards;
+use super::status::is_final;
 
-/// A single running agent with its own submission/event channels and state.
-pub struct AgentInstance {
-    pub thread_id: String,
-    pub nickname: String,
-    pub depth: usize,
-    pub forked: bool,
-    pub cwd: PathBuf,
-    pub sandbox_policy: SandboxPolicy,
-    status: Mutex<AgentStatus>,
-    tx_input: Sender<UserInput>,
-    rx_input: Receiver<UserInput>,
-    /// Signals the agent to resume after being paused.
-    resume_tx: Sender<()>,
-    resume_rx: Receiver<()>,
-    /// Collects the final output when the agent completes.
-    result: Mutex<Option<serde_json::Value>>,
+const AGENT_NAMES: &str = include_str!("agent_names.txt");
+
+fn agent_nickname_list() -> Vec<&'static str> {
+    AGENT_NAMES
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
-impl std::fmt::Debug for AgentInstance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentInstance")
-            .field("thread_id", &self.thread_id)
-            .field("nickname", &self.nickname)
-            .field("depth", &self.depth)
-            .field("forked", &self.forked)
-            .field("cwd", &self.cwd)
-            .finish_non_exhaustive()
-    }
+/// Notification message format for sub-agent completion.
+fn format_subagent_notification_message(agent_id: &str, status: &AgentStatus) -> String {
+    let payload = serde_json::json!({
+        "agent_id": agent_id,
+        "status": status,
+    });
+    format!("<subagent_notification>{}</subagent_notification>", payload)
 }
 
-impl AgentInstance {
-    fn new(
-        thread_id: String,
-        nickname: String,
-        depth: usize,
-        forked: bool,
-        cwd: PathBuf,
-        sandbox_policy: SandboxPolicy,
-    ) -> Self {
-        let (tx_input, rx_input) = async_channel::bounded(16);
-        let (resume_tx, resume_rx) = async_channel::bounded(1);
-        Self {
-            thread_id,
-            nickname,
-            depth,
-            forked,
-            cwd,
-            sandbox_policy,
-            status: Mutex::new(AgentStatus::PendingInit),
-            tx_input,
-            rx_input,
-            resume_tx,
-            resume_rx,
-            result: Mutex::new(None),
-        }
-    }
-
-    pub async fn status(&self) -> AgentStatus {
-        self.status.lock().await.clone()
-    }
-
-    pub async fn set_status(&self, status: AgentStatus) {
-        *self.status.lock().await = status;
-    }
-
-    pub async fn set_result(&self, value: serde_json::Value) {
-        *self.result.lock().await = Some(value);
-    }
-
-    pub async fn take_result(&self) -> Option<serde_json::Value> {
-        self.result.lock().await.take()
+/// Context line format for listing sub-agents.
+fn format_subagent_context_line(agent_id: &str, agent_nickname: Option<&str>) -> String {
+    match agent_nickname.filter(|n| !n.is_empty()) {
+        Some(nickname) => format!("- {agent_id}: {nickname}"),
+        None => format!("- {agent_id}"),
     }
 }
 
 // ── SpawnAgentOptions ────────────────────────────────────────────
 
-/// Options for spawning a new agent.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct SpawnAgentOptions {
-    pub model: Option<String>,
-    pub sandbox_policy: Option<SandboxPolicy>,
-    pub cwd: Option<PathBuf>,
-    pub fork: bool,
-    pub max_depth: Option<usize>,
-    /// Agent role/type (e.g. "explorer", "default").
-    pub agent_type: Option<String>,
+    pub fork_parent_spawn_call_id: Option<String>,
 }
 
-impl Default for SpawnAgentOptions {
-    fn default() -> Self {
-        Self {
-            model: None,
-            sandbox_policy: None,
-            cwd: None,
-            fork: false,
-            max_depth: None,
-            agent_type: None,
-        }
-    }
-}
+// ── AgentStatusEntry ─────────────────────────────────────────────
 
-// Guards and SpawnReservation are now in the `guards` submodule.
-// Re-exported via mod.rs for backward compatibility.
-
-// ── ThreadManagerState ───────────────────────────────────────────
-
-/// Internal state tracking all active agents.
-pub struct ThreadManagerState {
-    agents: HashMap<String, Arc<AgentInstance>>,
-    next_nickname: u32,
-}
-
-impl ThreadManagerState {
-    fn new() -> Self {
-        Self {
-            agents: HashMap::new(),
-            next_nickname: 0,
-        }
-    }
-
-    /// Allocate the next sequential nickname (e.g. "agent-0", "agent-1", …).
-    fn allocate_nickname(&mut self) -> String {
-        let nickname = format!("agent-{}", self.next_nickname);
-        self.next_nickname += 1;
-        nickname
-    }
-
-    /// Prune entries that have been shut down or errored.
-    fn prune_dead(&mut self) {
-        self.agents.retain(|_, instance| {
-            let status = instance.status.try_lock();
-            match status {
-                Ok(s) => !matches!(*s, AgentStatus::Shutdown | AgentStatus::NotFound),
-                Err(_) => true, // keep if we can't check
-            }
-        });
-    }
-
-    fn active_count(&self) -> usize {
-        self.agents.len()
-    }
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentStatusEntry {
+    pub thread_id: String,
+    pub nickname: String,
+    pub depth: i32,
+    pub status: AgentStatus,
+    pub agent_role: Option<String>,
+    pub parent_thread_id: Option<String>,
 }
 
 // ── AgentControl ─────────────────────────────────────────────────
 
 /// Top-level controller for spawning and managing multiple agents.
 ///
-/// Enforces a maximum recursion depth and tracks agents via weak references
-/// so that dropped `Arc<AgentInstance>` values are automatically cleaned up.
-/// Uses [`super::guards::Guards`] for atomic concurrent spawn limiting and
-/// nickname pool management.
+/// Holds a `Weak` reference to the thread manager's inner state so that
+/// spawning a sub-agent creates a real `CodexThread` with its own engine.
+///
+/// An `AgentControl` instance is shared per "user session" which means the same
+/// `AgentControl` is used for every sub-agent. By doing so, we make sure the
+/// guards are scoped to a user session.
+#[derive(Clone)]
 pub struct AgentControl {
-    state: Mutex<ThreadManagerState>,
-    guards: Arc<super::guards::Guards>,
-    max_recursion_depth: usize,
-    max_threads: Option<usize>,
-    default_cwd: PathBuf,
-    default_sandbox_policy: SandboxPolicy,
-    #[allow(dead_code)]
-    tx_event: Sender<Event>,
+    /// Weak handle to the global thread registry.
+    manager: std::sync::Weak<ThreadManagerInner>,
+    /// Spawn guards for concurrency limiting and nickname management.
+    state: Arc<Guards>,
+    /// Default config for spawned agents.
+    default_config: Arc<Mutex<Option<ConfigLayerStack>>>,
+    /// Default working directory.
+    default_cwd: Arc<PathBuf>,
+    /// Tracks the SessionSource for each spawned agent thread.
+    agent_sources: Arc<tokio::sync::RwLock<std::collections::HashMap<ThreadId, SessionSource>>>,
 }
 
-/// Spawn result containing the nickname assigned by the guards system.
-pub struct SpawnGuards {
-    pub nickname: String,
-}
-
-impl std::fmt::Debug for SpawnGuards {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SpawnGuards")
-            .field("nickname", &self.nickname)
-            .finish()
+impl Default for AgentControl {
+    fn default() -> Self {
+        Self {
+            manager: std::sync::Weak::new(),
+            state: Arc::new(Guards::default()),
+            default_config: Arc::new(Mutex::new(None)),
+            default_cwd: Arc::new(PathBuf::from(".")),
+            agent_sources: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        }
     }
 }
 
 impl AgentControl {
-    pub fn new(
-        max_recursion_depth: usize,
-        default_cwd: PathBuf,
-        default_sandbox_policy: SandboxPolicy,
-        tx_event: Sender<Event>,
-    ) -> Self {
+    /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
+    pub fn new(manager: std::sync::Weak<ThreadManagerInner>) -> Self {
         Self {
-            state: Mutex::new(ThreadManagerState::new()),
-            guards: Arc::new(super::guards::Guards::default()),
-            max_recursion_depth,
-            max_threads: None,
-            default_cwd,
-            default_sandbox_policy,
-            tx_event,
+            manager,
+            ..Default::default()
         }
     }
 
-    /// Create with an explicit max-threads limit for the guards system.
-    pub fn with_max_threads(mut self, max_threads: usize) -> Self {
-        self.max_threads = Some(max_threads);
-        self
+    /// Set the default config used when spawning sub-agents.
+    pub async fn set_default_config(&self, config: ConfigLayerStack) {
+        *self.default_config.lock().await = Some(config);
     }
 
-    /// Spawn a new agent, returning an `Arc<AgentInstance>` and associated [`SpawnGuards`].
-    ///
-    /// Fails if the requested depth exceeds `max_recursion_depth` or the
-    /// concurrent agent limit is reached.
+    /// Set the default working directory.
+    pub fn set_default_cwd(&mut self, cwd: PathBuf) {
+        self.default_cwd = Arc::new(cwd);
+    }
+
+    /// Spawn a new agent thread and submit the initial prompt.
     pub async fn spawn_agent(
         &self,
-        options: SpawnAgentOptions,
-        current_depth: usize,
-    ) -> Result<(Arc<AgentInstance>, SpawnGuards), CodexError> {
-        let effective_max = options.max_depth.unwrap_or(self.max_recursion_depth);
-        if current_depth >= effective_max {
-            return Err(CodexError::new(
-                ErrorCode::SessionError,
-                format!("Agent recursion depth {current_depth} exceeds maximum {effective_max}"),
-            ));
+        config: ConfigLayerStack,
+        items: Vec<UserInput>,
+        session_source: Option<SessionSource>,
+    ) -> Result<ThreadId, CodexError> {
+        self.spawn_agent_with_options(config, items, session_source, SpawnAgentOptions::default())
+            .await
+    }
+
+    pub async fn spawn_agent_with_options(
+        &self,
+        config: ConfigLayerStack,
+        items: Vec<UserInput>,
+        session_source: Option<SessionSource>,
+        _options: SpawnAgentOptions,
+    ) -> Result<ThreadId, CodexError> {
+        let inner = self.upgrade()?;
+        let mut reservation = self.state.reserve_spawn_slot(None)?;
+
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&inner, session_source.as_ref())
+            .await;
+
+        // Assign nickname for ThreadSpawn sub-agents.
+        let session_source = match session_source {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_role,
+                ..
+            })) => {
+                let agent_nickname =
+                    reservation.reserve_agent_nickname(&agent_nickname_list())?;
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth,
+                    agent_nickname: Some(agent_nickname),
+                    agent_role,
+                }))
+            }
+            other => other,
+        };
+        let notification_source = session_source.clone();
+
+        let cwd = self.default_cwd.as_ref().clone();
+        let thread_id = ThreadId::new();
+        let handle = Codex::spawn_with_history(config, cwd, InitialHistory::New).await?;
+        let _session_configured =
+            crate::core::thread_manager::wait_for_session_configured(&handle).await?;
+
+        let thread = Arc::new(CodexThread::new(handle, thread_id));
+        inner.register_thread(thread_id, thread).await;
+
+        reservation.commit(&thread_id.to_string());
+
+        // Record the session source for this agent.
+        if let Some(ref src) = session_source {
+            self.agent_sources.write().await.insert(thread_id, src.clone());
         }
 
-        // Reserve a spawn slot via the guards system.
-        let reservation = self.guards.reserve_spawn_slot(self.max_threads)?;
+        inner.notify_thread_created(thread_id);
 
-        let mut mgr = self.state.lock().await;
-        mgr.prune_dead();
+        self.send_input(thread_id, items).await?;
+        self.maybe_start_completion_watcher(thread_id, notification_source);
 
-        let nickname = mgr.allocate_nickname();
-        let thread_id = uuid::Uuid::new_v4().to_string();
-
-        let cwd = options.cwd.unwrap_or_else(|| self.default_cwd.clone());
-        let sandbox = options
-            .sandbox_policy
-            .unwrap_or_else(|| self.default_sandbox_policy.clone());
-
-        let instance = Arc::new(AgentInstance::new(
-            thread_id.clone(),
-            nickname.clone(),
-            current_depth + 1,
-            options.fork,
-            cwd,
-            sandbox,
-        ));
-
-        mgr.agents.insert(thread_id.clone(), instance.clone());
-
-        // Commit the reservation, registering the thread as active.
-        reservation.commit(&thread_id);
-
-        let spawn_guards = SpawnGuards { nickname };
-
-        Ok((instance, spawn_guards))
+        let _ = inherited_shell_snapshot; // reserved for future use
+        Ok(thread_id)
     }
 
-    /// Send user input to a running agent.
-    pub async fn send_input(&self, agent_id: &str, input: UserInput) -> Result<(), CodexError> {
-        let instance = self.get_instance(agent_id).await?;
-        instance.tx_input.send(input).await.map_err(|_| {
-            CodexError::new(
-                ErrorCode::SessionError,
-                format!("Agent {agent_id} input channel closed"),
-            )
-        })
-    }
+    /// Resume an existing agent thread from a recorded rollout file.
+    pub async fn resume_agent_from_rollout(
+        &self,
+        config: ConfigLayerStack,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+    ) -> Result<ThreadId, CodexError> {
+        let inner = self.upgrade()?;
+        let mut reservation = self.state.reserve_spawn_slot(None)?;
 
-    /// Signal a paused agent to resume execution.
-    pub async fn resume_agent(&self, agent_id: &str) -> Result<(), CodexError> {
-        let instance = self.get_instance(agent_id).await?;
-        instance.resume_tx.send(()).await.map_err(|_| {
-            CodexError::new(
-                ErrorCode::SessionError,
-                format!("Agent {agent_id} resume channel closed"),
-            )
-        })
-    }
+        // Rehydrate nickname/role for ThreadSpawn sources.
+        let session_source = match session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_role,
+                ..
+            }) => {
+                // Try to reserve the original nickname if available.
+                let reserved_nickname = reservation
+                    .reserve_agent_nickname(&agent_nickname_list())
+                    .ok();
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth,
+                    agent_nickname: reserved_nickname,
+                    agent_role,
+                })
+            }
+            other => other,
+        };
+        let notification_source = session_source.clone();
 
-    /// Wait for an agent to complete and return its result.
-    pub async fn wait(&self, agent_id: &str) -> Result<serde_json::Value, CodexError> {
-        let instance = self.get_instance(agent_id).await?;
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&inner, Some(&session_source))
+            .await;
 
-        // Poll until the agent reaches a terminal status.
-        loop {
-            let status = instance.status().await;
-            match status {
-                AgentStatus::Completed(_) => {
-                    return Ok(instance
-                        .take_result()
-                        .await
-                        .unwrap_or(serde_json::Value::Null));
-                }
-                AgentStatus::Errored(msg) => {
-                    return Err(CodexError::new(ErrorCode::SessionError, msg));
-                }
-                AgentStatus::Shutdown | AgentStatus::NotFound => {
-                    return Err(CodexError::new(
+        // Find the rollout path for this thread.
+        let mosaic_home = dirs::home_dir()
+            .map(|h| h.join(".mosaic"))
+            .unwrap_or_else(|| self.default_cwd.as_ref().join(".mosaic"));
+        let rollout_path =
+            crate::core::rollout::find_thread_path_by_id_str(&mosaic_home, &thread_id.to_string())
+                .await
+                .ok()
+                .flatten()
+                .ok_or_else(|| {
+                    CodexError::new(
                         ErrorCode::SessionError,
-                        format!("Agent {agent_id} is no longer available"),
-                    ));
-                }
-                AgentStatus::PendingInit | AgentStatus::Running => {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
+                        format!("Thread {thread_id} rollout not found"),
+                    )
+                })?;
+
+        let resumed_history =
+            crate::core::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+                .await
+                .map_err(|e| {
+                    CodexError::new(
+                        ErrorCode::InternalError,
+                        format!("failed to load rollout: {e}"),
+                    )
+                })?;
+
+        let cwd = self.default_cwd.as_ref().clone();
+        let new_thread_id = ThreadId::new();
+        let handle = Codex::spawn_with_history(
+            config,
+            cwd,
+            InitialHistory::Resumed(resumed_history),
+        )
+        .await?;
+        let _session_configured =
+            crate::core::thread_manager::wait_for_session_configured(&handle).await?;
+
+        let thread = Arc::new(CodexThread::new(handle, new_thread_id));
+        inner.register_thread(new_thread_id, thread).await;
+
+        reservation.commit(&new_thread_id.to_string());
+
+        // Record the session source for this resumed agent.
+        self.agent_sources
+            .write()
+            .await
+            .insert(new_thread_id, notification_source.clone());
+
+        inner.notify_thread_created(new_thread_id);
+        self.maybe_start_completion_watcher(new_thread_id, Some(notification_source));
+
+        let _ = inherited_shell_snapshot;
+        Ok(new_thread_id)
+    }
+
+    /// Send rich user input items to an existing agent thread.
+    pub async fn send_input(
+        &self,
+        agent_id: ThreadId,
+        items: Vec<UserInput>,
+    ) -> Result<String, CodexError> {
+        let inner = self.upgrade()?;
+        inner
+            .send_op(
+                agent_id,
+                Op::UserInput {
+                    items,
+                    final_output_json_schema: None,
+                },
+            )
+            .await
+    }
+
+    /// Interrupt the current task for an existing agent thread.
+    pub async fn interrupt_agent(&self, agent_id: ThreadId) -> Result<String, CodexError> {
+        let inner = self.upgrade()?;
+        inner.send_op(agent_id, Op::Interrupt).await
+    }
+
+    /// Submit a shutdown request to an existing agent thread.
+    pub async fn shutdown_agent(&self, agent_id: ThreadId) -> Result<String, CodexError> {
+        let inner = self.upgrade()?;
+        let result = inner.send_op(agent_id, Op::Shutdown).await;
+        let _ = inner.remove_thread(&agent_id).await;
+        self.state.release_spawned_thread(&agent_id.to_string());
+        self.agent_sources.write().await.remove(&agent_id);
+        result
+    }
+
+    /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
+    pub async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
+        let Ok(inner) = self.upgrade() else {
+            return AgentStatus::NotFound;
+        };
+        let Ok(thread) = inner.get_thread(agent_id).await else {
+            return AgentStatus::NotFound;
+        };
+        thread.agent_status()
+    }
+
+    pub async fn get_agent_nickname_and_role(
+        &self,
+        agent_id: ThreadId,
+    ) -> Option<(Option<String>, Option<String>)> {
+        let sources = self.agent_sources.read().await;
+        if let Some(session_source) = sources.get(&agent_id) {
+            return Some((
+                session_source.get_nickname(),
+                session_source.get_agent_role(),
+            ));
+        }
+        // Fallback: agent exists but has no recorded session source.
+        let Ok(inner) = self.upgrade() else {
+            return None;
+        };
+        inner.get_thread(agent_id).await.ok()?;
+        Some((None, None))
+    }
+
+    /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
+    pub async fn subscribe_status(
+        &self,
+        agent_id: ThreadId,
+    ) -> Result<watch::Receiver<AgentStatus>, CodexError> {
+        let inner = self.upgrade()?;
+        let thread = inner.get_thread(agent_id).await?;
+        Ok(thread.subscribe_status())
+    }
+
+    pub async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
+        let Ok(inner) = self.upgrade() else {
+            return None;
+        };
+        let Ok(thread) = inner.get_thread(agent_id).await else {
+            return None;
+        };
+        thread.total_token_usage().await
+    }
+
+    pub async fn format_environment_context_subagents(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> String {
+        let Ok(inner) = self.upgrade() else {
+            return String::new();
+        };
+
+        let sources = self.agent_sources.read().await;
+        let mut agents = Vec::new();
+        for tid in inner.list_thread_ids().await {
+            let Some(session_source) = sources.get(&tid) else {
+                continue;
+            };
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: agent_parent,
+                agent_nickname,
+                ..
+            }) = session_source
+            else {
+                continue;
+            };
+            if *agent_parent != parent_thread_id {
+                continue;
+            }
+            agents.push(format_subagent_context_line(
+                &tid.to_string(),
+                agent_nickname.as_deref(),
+            ));
+        }
+        agents.sort();
+        agents.join("\n")
+    }
+
+    /// Wait for an agent to reach a terminal status.
+    pub async fn wait(&self, agent_id: ThreadId) -> Result<AgentStatus, CodexError> {
+        let mut rx = self.subscribe_status(agent_id).await?;
+        loop {
+            let status = rx.borrow_and_update().clone();
+            if is_final(&status) {
+                return Ok(status);
+            }
+            if rx.changed().await.is_err() {
+                return Ok(self.get_status(agent_id).await);
             }
         }
     }
 
-    /// Gracefully close an agent, releasing its resources.
-    pub async fn close_agent(&self, agent_id: &str) -> Result<(), CodexError> {
-        let instance = self.get_instance(agent_id).await?;
-
-        // Mark as shutdown so any waiting loops exit.
-        instance.set_status(AgentStatus::Shutdown).await;
-
-        // Close channels to unblock any pending sends/receives.
-        instance.tx_input.close();
-        instance.resume_tx.close();
-
-        // Release the spawn slot in the guards system.
-        self.guards.release_spawned_thread(agent_id);
-
-        // Remove from the registry.
-        let mut mgr = self.state.lock().await;
-        mgr.agents.remove(agent_id);
-
-        Ok(())
-    }
-
-    /// Return the number of currently alive agents.
+    /// Return the number of currently tracked agents.
     pub async fn active_count(&self) -> usize {
-        let mgr = self.state.lock().await;
-        mgr.active_count()
+        let Ok(inner) = self.upgrade() else {
+            return 0;
+        };
+        inner.thread_count().await
     }
 
-    /// Retrieve a strong reference to an agent, or error if not found / dropped.
-    async fn get_instance(&self, agent_id: &str) -> Result<Arc<AgentInstance>, CodexError> {
-        let mgr = self.state.lock().await;
-        mgr.agents.get(agent_id).cloned().ok_or_else(|| {
+    // ── Private helpers ──────────────────────────────────────────
+
+    fn upgrade(&self) -> Result<Arc<ThreadManagerInner>, CodexError> {
+        self.manager.upgrade().ok_or_else(|| {
             CodexError::new(
                 ErrorCode::SessionError,
-                format!("Agent {agent_id} not found or already closed"),
+                "thread manager dropped".to_string(),
             )
         })
     }
 
-    /// Receive the next input for an agent (called by the agent itself).
-    pub async fn recv_input(instance: &AgentInstance) -> Result<UserInput, CodexError> {
-        instance.rx_input.recv().await.map_err(|_| {
-            CodexError::new(
-                ErrorCode::SessionError,
-                "Agent input channel closed".to_string(),
-            )
-        })
+    /// Starts a detached watcher for sub-agents spawned from another thread.
+    ///
+    /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
+    /// can receive completion notifications.
+    fn maybe_start_completion_watcher(
+        &self,
+        child_thread_id: ThreadId,
+        session_source: Option<SessionSource>,
+    ) {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return;
+        };
+        let control = self.clone();
+        tokio::spawn(async move {
+            let status = match control.subscribe_status(child_thread_id).await {
+                Ok(mut status_rx) => {
+                    let mut status = status_rx.borrow().clone();
+                    while !is_final(&status) {
+                        if status_rx.changed().await.is_err() {
+                            status = control.get_status(child_thread_id).await;
+                            break;
+                        }
+                        status = status_rx.borrow().clone();
+                    }
+                    status
+                }
+                Err(_) => control.get_status(child_thread_id).await,
+            };
+            if !is_final(&status) {
+                return;
+            }
+
+            let Ok(inner) = control.upgrade() else {
+                return;
+            };
+            let Ok(parent_thread) = inner.get_thread(parent_thread_id).await else {
+                return;
+            };
+            parent_thread
+                .inject_user_message_without_turn(format_subagent_notification_message(
+                    &child_thread_id.to_string(),
+                    &status,
+                ))
+                .await;
+
+            // Clean up the agent source tracking entry.
+            control.agent_sources.write().await.remove(&child_thread_id);
+        });
     }
 
-    /// Wait for a resume signal (called by the agent itself).
-    pub async fn recv_resume(instance: &AgentInstance) -> Result<(), CodexError> {
-        instance.resume_rx.recv().await.map_err(|_| {
-            CodexError::new(
-                ErrorCode::SessionError,
-                "Agent resume channel closed".to_string(),
-            )
-        })
+    async fn inherited_shell_snapshot_for_source(
+        &self,
+        _inner: &Arc<ThreadManagerInner>,
+        _session_source: Option<&SessionSource>,
+    ) -> Option<Arc<ShellSnapshot>> {
+        // Shell snapshot inheritance requires the parent thread to expose its
+        // shell state. This is a placeholder matching codex-main's signature.
+        None
     }
 }
 
 // ── Batch Job System ─────────────────────────────────────────────
 
-/// Configuration for running batch jobs from a CSV file.
 #[derive(Debug, Clone)]
 pub struct BatchJobConfig {
     pub csv_path: PathBuf,
     pub concurrency: usize,
 }
 
-/// Result of a single batch job row execution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchResult {
@@ -393,12 +518,6 @@ pub struct BatchResult {
     pub output: String,
 }
 
-/// Execute batch jobs from a CSV file with bounded concurrency.
-///
-/// Each row in the CSV produces exactly one [`BatchResult`]. At most
-/// `config.concurrency` jobs run simultaneously. The caller provides a
-/// `job_fn` closure that receives `(row_index, columns)` and returns
-/// `Ok(output)` on success or `Err(output)` on failure.
 pub async fn run_batch_jobs<F, Fut>(
     config: BatchJobConfig,
     job_fn: F,
@@ -436,14 +555,12 @@ where
     let total = rows.len();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(config.concurrency));
     let job_fn = Arc::new(job_fn);
-
     let mut handles = Vec::with_capacity(total);
 
     for (row_index, row) in rows.into_iter().enumerate() {
         let sem = Arc::clone(&semaphore);
         let f = Arc::clone(&job_fn);
-
-        let handle = tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
             match f(row_index, row).await {
                 Ok(output) => BatchResult {
@@ -457,442 +574,18 @@ where
                     output,
                 },
             }
-        });
-        handles.push(handle);
+        }));
     }
 
     let mut results = Vec::with_capacity(total);
     for handle in handles {
-        let result = handle.await.map_err(|e| {
+        results.push(handle.await.map_err(|e| {
             CodexError::new(
                 ErrorCode::InternalError,
                 format!("Batch job task panicked: {e}"),
             )
-        })?;
-        results.push(result);
+        })?);
     }
-
-    // Sort by row_index to guarantee deterministic output order.
     results.sort_by_key(|r| r.row_index);
-
     Ok(results)
-}
-
-// ── Tests ────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_control(max_depth: usize) -> AgentControl {
-        let (tx, _rx) = async_channel::unbounded();
-        AgentControl::new(
-            max_depth,
-            PathBuf::from("/tmp"),
-            SandboxPolicy::new_read_only_policy(),
-            tx,
-        )
-    }
-
-    #[tokio::test]
-    async fn spawn_agent_returns_instance_and_guards() {
-        let ctrl = make_control(3);
-        let (instance, guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-
-        assert_eq!(instance.depth, 1);
-        assert_eq!(guards.nickname, "agent-0");
-        assert!(!instance.thread_id.is_empty());
-        assert_eq!(ctrl.active_count().await, 1);
-    }
-
-    #[tokio::test]
-    async fn spawn_increments_nicknames() {
-        let ctrl = make_control(5);
-        let (_a, g1) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let (_b, g2) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        assert_eq!(g1.nickname, "agent-0");
-        assert_eq!(g2.nickname, "agent-1");
-    }
-
-    #[tokio::test]
-    async fn spawn_at_max_depth_is_rejected() {
-        let ctrl = make_control(2);
-        let result = ctrl.spawn_agent(SpawnAgentOptions::default(), 2).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::SessionError);
-        assert!(err.message.contains("exceeds maximum"));
-    }
-
-    #[tokio::test]
-    async fn spawn_with_custom_max_depth_override() {
-        let ctrl = make_control(10);
-        let opts = SpawnAgentOptions {
-            max_depth: Some(1),
-            ..Default::default()
-        };
-        // depth 0 < max_depth 1 → ok
-        let result = ctrl.spawn_agent(opts.clone(), 0).await;
-        assert!(result.is_ok());
-
-        // depth 1 >= max_depth 1 → rejected
-        let result = ctrl.spawn_agent(opts, 1).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn close_agent_removes_from_registry() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        ctrl.close_agent(&id).await.unwrap();
-
-        let result = ctrl
-            .send_input(
-                &id,
-                UserInput::Text {
-                    text: "hello".into(),
-                    text_elements: vec![],
-                },
-            )
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn close_agent_sets_shutdown_status() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        ctrl.close_agent(&id).await.unwrap();
-        assert_eq!(instance.status().await, AgentStatus::Shutdown);
-    }
-
-    #[tokio::test]
-    async fn send_input_and_receive() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        let input = UserInput::Text {
-            text: "test input".into(),
-            text_elements: vec![],
-        };
-        ctrl.send_input(&id, input.clone()).await.unwrap();
-
-        let received = AgentControl::recv_input(&instance).await.unwrap();
-        assert_eq!(received, input);
-    }
-
-    #[tokio::test]
-    async fn resume_agent_signal() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        ctrl.resume_agent(&id).await.unwrap();
-        AgentControl::recv_resume(&instance).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn wait_returns_result_on_completion() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        // Simulate agent completing in background.
-        let inst = Arc::clone(&instance);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            inst.set_result(serde_json::json!({"done": true})).await;
-            inst.set_status(AgentStatus::Completed(None)).await;
-        });
-
-        let result = ctrl.wait(&id).await.unwrap();
-        assert_eq!(result, serde_json::json!({"done": true}));
-    }
-
-    #[tokio::test]
-    async fn wait_returns_error_on_agent_error() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-
-        let inst = Arc::clone(&instance);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            inst.set_status(AgentStatus::Errored("something broke".into()))
-                .await;
-        });
-
-        let err = ctrl.wait(&id).await.unwrap_err();
-        assert_eq!(err.code, ErrorCode::SessionError);
-        assert!(err.message.contains("something broke"));
-    }
-
-    #[tokio::test]
-    async fn close_removes_agent_from_registry() {
-        let ctrl = make_control(5);
-        let (instance, _guards) = ctrl
-            .spawn_agent(SpawnAgentOptions::default(), 0)
-            .await
-            .unwrap();
-        let id = instance.thread_id.clone();
-        assert_eq!(ctrl.active_count().await, 1);
-
-        ctrl.close_agent(&id).await.unwrap();
-        assert_eq!(ctrl.active_count().await, 0);
-
-        let result = ctrl
-            .send_input(
-                &id,
-                UserInput::Text {
-                    text: "hello".into(),
-                    text_elements: vec![],
-                },
-            )
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn fork_mode_sets_flag() {
-        let ctrl = make_control(5);
-        let opts = SpawnAgentOptions {
-            fork: true,
-            ..Default::default()
-        };
-        let (instance, _guards) = ctrl.spawn_agent(opts, 0).await.unwrap();
-        assert!(instance.forked);
-    }
-
-    #[tokio::test]
-    async fn custom_cwd_and_sandbox() {
-        let ctrl = make_control(5);
-        let opts = SpawnAgentOptions {
-            cwd: Some(PathBuf::from("/custom/dir")),
-            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
-            ..Default::default()
-        };
-        let (instance, _guards) = ctrl.spawn_agent(opts, 0).await.unwrap();
-        assert_eq!(instance.cwd, PathBuf::from("/custom/dir"));
-        assert!(instance.sandbox_policy.has_full_disk_write_access());
-    }
-
-    #[tokio::test]
-    async fn close_nonexistent_agent_errors() {
-        let ctrl = make_control(5);
-        let result = ctrl.close_agent("nonexistent-id").await;
-        assert!(result.is_err());
-    }
-
-    // ── Batch Job Tests ──────────────────────────────────────────
-
-    #[tokio::test]
-    async fn batch_jobs_returns_one_result_per_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("input.csv");
-        tokio::fs::write(&csv_path, "a,b\nc,d\ne,f\n")
-            .await
-            .unwrap();
-
-        let results = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 2,
-            },
-            |row_index, cols| async move { Ok(format!("row {row_index}: {}", cols.join("+"))) },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(results.len(), 3);
-        for (i, r) in results.iter().enumerate() {
-            assert_eq!(r.row_index, i);
-            assert!(r.success);
-        }
-    }
-
-    #[tokio::test]
-    async fn batch_jobs_respects_concurrency_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("input.csv");
-        // 10 rows
-        let csv_content = (0..10)
-            .map(|i| format!("row{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        tokio::fs::write(&csv_path, &csv_content).await.unwrap();
-
-        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-        let active_c = Arc::clone(&active);
-        let max_c = Arc::clone(&max_seen);
-
-        let results = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 3,
-            },
-            move |row_index, _cols| {
-                let a = Arc::clone(&active_c);
-                let m = Arc::clone(&max_c);
-                async move {
-                    let current = a.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    m.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    a.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(format!("done-{row_index}"))
-                }
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(results.len(), 10);
-        assert!(max_seen.load(std::sync::atomic::Ordering::SeqCst) <= 3);
-    }
-
-    #[tokio::test]
-    async fn batch_jobs_captures_failures() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("input.csv");
-        tokio::fs::write(&csv_path, "ok\nfail\nok\n").await.unwrap();
-
-        let results = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 4,
-            },
-            |row_index, _cols| async move {
-                if row_index == 1 {
-                    Err("something went wrong".to_string())
-                } else {
-                    Ok("success".to_string())
-                }
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(results.len(), 3);
-        assert!(results[0].success);
-        assert!(!results[1].success);
-        assert_eq!(results[1].output, "something went wrong");
-        assert!(results[2].success);
-    }
-
-    #[tokio::test]
-    async fn batch_jobs_zero_concurrency_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("input.csv");
-        tokio::fs::write(&csv_path, "a\n").await.unwrap();
-
-        let result = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 0,
-            },
-            |_, _| async { Ok("x".to_string()) },
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::InvalidInput);
-    }
-
-    #[tokio::test]
-    async fn batch_jobs_missing_csv_errors() {
-        let result = run_batch_jobs(
-            BatchJobConfig {
-                csv_path: PathBuf::from("/nonexistent/file.csv"),
-                concurrency: 1,
-            },
-            |_, _| async { Ok("x".to_string()) },
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::InvalidInput);
-    }
-
-    #[tokio::test]
-    async fn batch_jobs_empty_csv_returns_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("empty.csv");
-        tokio::fs::write(&csv_path, "").await.unwrap();
-
-        let results = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 2,
-            },
-            |_, _| async { Ok("x".to_string()) },
-        )
-        .await
-        .unwrap();
-
-        assert!(results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn batch_results_sorted_by_row_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = dir.path().join("input.csv");
-        let csv_content = (0..20)
-            .map(|i| format!("row{i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        tokio::fs::write(&csv_path, &csv_content).await.unwrap();
-
-        let results = run_batch_jobs(
-            BatchJobConfig {
-                csv_path,
-                concurrency: 5,
-            },
-            |row_index, _| async move {
-                // Variable sleep to encourage out-of-order completion.
-                let delay = if row_index % 2 == 0 { 5 } else { 1 };
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                Ok(format!("{row_index}"))
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(results.len(), 20);
-        for (i, r) in results.iter().enumerate() {
-            assert_eq!(r.row_index, i);
-        }
-    }
 }

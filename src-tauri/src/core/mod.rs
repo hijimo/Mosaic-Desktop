@@ -45,10 +45,10 @@ pub mod unified_exec;
 // Re-export primary types for convenient access.
 pub use agent::{
     agent_status_from_event, exceeds_thread_spawn_depth_limit, is_final, next_thread_spawn_depth,
-    AgentRoleConfig, SpawnGuards, SpawnReservation, DEFAULT_ROLE_NAME,
+    session_depth, AgentRoleConfig, SpawnReservation, DEFAULT_ROLE_NAME,
 };
 pub use agent::{
-    run_batch_jobs, AgentControl, AgentInstance, BatchJobConfig, BatchResult, Guards,
+    run_batch_jobs, AgentControl, BatchJobConfig, BatchResult, Guards,
     SpawnAgentOptions,
 };
 pub use analytics_client::{AnalyticsEventsClient, TrackEventsContext};
@@ -128,7 +128,7 @@ pub use state::{ActiveTurn, RunningTask, SessionServices, SessionState, TurnStat
 pub use state_db::StateDb;
 pub use tasks::{SessionTask, TaskContext, TaskKind};
 pub use text_encoding::bytes_to_string_smart;
-pub use thread_manager::{CodexThread, NewThread, ThreadManager};
+pub use thread_manager::{CodexThread, NewThread, ThreadManager, ThreadManagerInner};
 pub use tools::router::ToolRouter;
 pub use tools::{ToolHandler, ToolInfo, ToolKind, ToolRegistry};
 pub use truncation::TruncationPolicy;

@@ -65,6 +65,82 @@ pub enum SessionSource {
     Cli,
     Exec,
     Api,
+    Mcp,
+    SubAgent(SubAgentSource),
+    /// Catch-all for unknown/future variants during deserialization.
+    /// IMPORTANT: Must remain the last variant for `#[serde(other)]` to work.
+    #[serde(other)]
+    Unknown,
+}
+
+/// How a sub-agent session was created.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentSource {
+    Review,
+    Compact,
+    ThreadSpawn {
+        parent_thread_id: crate::protocol::thread_id::ThreadId,
+        depth: i32,
+        #[serde(default)]
+        agent_nickname: Option<String>,
+        #[serde(default, alias = "agent_type")]
+        agent_role: Option<String>,
+    },
+    MemoryConsolidation,
+    Other(String),
+}
+
+impl std::fmt::Display for SessionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionSource::Desktop => f.write_str("desktop"),
+            SessionSource::Cli => f.write_str("cli"),
+            SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Api => f.write_str("api"),
+            SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::SubAgent(sub) => write!(f, "subagent_{sub}"),
+            SessionSource::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+impl std::fmt::Display for SubAgentSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubAgentSource::Review => f.write_str("review"),
+            SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::ThreadSpawn { .. } => f.write_str("thread_spawn"),
+            SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
+            SubAgentSource::Other(s) => write!(f, "other({s})"),
+        }
+    }
+}
+
+impl SessionSource {
+    pub fn get_nickname(&self) -> Option<String> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
+                agent_nickname.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some("Morpheus".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_agent_role(&self) -> Option<String> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
+                agent_role.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some("memory builder".to_string())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Git repository information captured at session start.

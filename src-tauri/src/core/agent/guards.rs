@@ -27,12 +27,24 @@ struct ActiveAgents {
     nickname_reset_count: usize,
 }
 
-/// Depth helpers for nested thread spawns.
-pub fn next_thread_spawn_depth(current_depth: usize) -> usize {
-    current_depth.saturating_add(1)
+/// Extract the spawn depth from a `SessionSource`.
+pub fn session_depth(session_source: &crate::core::rollout::policy::SessionSource) -> i32 {
+    use crate::core::rollout::policy::{SessionSource, SubAgentSource};
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => *depth,
+        SessionSource::SubAgent(_) => 0,
+        _ => 0,
+    }
 }
 
-pub fn exceeds_thread_spawn_depth_limit(depth: usize, max_depth: usize) -> bool {
+/// Depth helpers for nested thread spawns.
+pub fn next_thread_spawn_depth(
+    session_source: &crate::core::rollout::policy::SessionSource,
+) -> i32 {
+    session_depth(session_source).saturating_add(1)
+}
+
+pub fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bool {
     depth > max_depth
 }
 
@@ -347,10 +359,27 @@ mod tests {
 
     #[test]
     fn depth_helpers() {
-        assert_eq!(next_thread_spawn_depth(0), 1);
-        assert_eq!(next_thread_spawn_depth(5), 6);
-        assert!(exceeds_thread_spawn_depth_limit(3, 2));
-        assert!(!exceeds_thread_spawn_depth_limit(2, 2));
-        assert!(!exceeds_thread_spawn_depth_limit(1, 2));
+        use crate::core::rollout::policy::{SessionSource, SubAgentSource};
+        use crate::protocol::thread_id::ThreadId;
+
+        // session_depth defaults to 0 for root sources
+        assert_eq!(session_depth(&SessionSource::Cli), 0);
+
+        // thread spawn depth increments
+        let src = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        let child_depth = next_thread_spawn_depth(&src);
+        assert_eq!(child_depth, 2);
+        assert!(exceeds_thread_spawn_depth_limit(child_depth, 1));
+        assert!(!exceeds_thread_spawn_depth_limit(1, 1));
+
+        // non-thread-spawn subagents default to depth 0
+        let review_src = SessionSource::SubAgent(SubAgentSource::Review);
+        assert_eq!(session_depth(&review_src), 0);
+        assert_eq!(next_thread_spawn_depth(&review_src), 1);
     }
 }

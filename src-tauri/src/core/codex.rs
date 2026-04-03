@@ -20,12 +20,25 @@ use super::skills::manager::SkillsManager;
 use super::skills::model::{SkillMetadata, SkillScope};
 use super::tools::handlers::dynamic::DynamicToolHandler;
 
-/// Handle returned by `Codex::spawn`, giving the caller access to the SQ/EQ channels.
+/// Handle returned by `Codex::spawn`, giving the caller access to the SQ/EQ channels
+/// and shared state references for direct queries.
 pub struct CodexHandle {
     /// Send submissions into the core engine.
     pub tx_sub: Sender<Submission>,
     /// Receive events from the core engine.
     pub rx_event: Receiver<Event>,
+    /// Shared reference to the active session (populated after SessionConfigured).
+    pub session: Arc<Mutex<Option<Session>>>,
+    /// Agent status watch channel.
+    pub agent_status: tokio::sync::watch::Receiver<crate::protocol::types::AgentStatus>,
+    /// Working directory.
+    pub cwd: PathBuf,
+    /// Configuration stack.
+    pub config: ConfigLayerStack,
+    /// Enabled features set.
+    pub features: Arc<super::features::Features>,
+    /// State database handle.
+    pub state_db: Option<crate::core::state_db::StateDb>,
 }
 
 /// Core engine that processes the SQ/EQ loop.
@@ -36,6 +49,8 @@ pub struct Codex {
     eq_tx: Sender<Event>,
     /// Active session.
     session: Arc<Mutex<Option<Session>>>,
+    /// Agent status watch sender.
+    agent_status_tx: tokio::sync::watch::Sender<crate::protocol::types::AgentStatus>,
     /// Configuration stack (kept for session creation).
     config: ConfigLayerStack,
     /// Runtime config requirements propagated into new sessions.
@@ -50,6 +65,8 @@ pub struct Codex {
     dynamic_tool_handler: Arc<DynamicToolHandler>,
     /// Agent control for multi-agent collaboration.
     agent_control: Arc<crate::core::agent::control::AgentControl>,
+    /// Enabled features.
+    features: Arc<super::features::Features>,
 }
 
 use super::initial_history::InitialHistory;
@@ -126,22 +143,14 @@ impl Codex {
             .unwrap_or_else(|| cwd.join(".codex"));
         let skills_manager = SkillsManager::new(codex_home);
         let dynamic_tool_handler = DynamicToolHandler::new(eq_tx.clone());
-        let agent_control = Arc::new(crate::core::agent::control::AgentControl::new(
-            3, // max recursion depth
-            cwd.clone(),
-            crate::protocol::types::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![cwd.clone()],
-                read_only_access: Default::default(),
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-            eq_tx.clone(),
-        ));
+        let agent_control = Arc::new(crate::core::agent::control::AgentControl::default());
+        let (agent_status_tx, _) =
+            tokio::sync::watch::channel(crate::protocol::types::AgentStatus::PendingInit);
         Self {
             sq_rx,
             eq_tx,
             session: Arc::new(Mutex::new(None)),
+            agent_status_tx,
             config,
             config_requirements,
             cwd,
@@ -149,6 +158,7 @@ impl Codex {
             skills_manager: Arc::new(skills_manager),
             dynamic_tool_handler: Arc::new(dynamic_tool_handler),
             agent_control,
+            features: Arc::new(super::features::Features::default()),
         }
     }
 
@@ -201,7 +211,12 @@ impl Codex {
         let (sq_tx, sq_rx) = async_channel::unbounded();
         let (eq_tx, eq_rx) = async_channel::unbounded();
 
-        let codex = Self::new_with_requirements(sq_rx, eq_tx, config, config_requirements, cwd);
+        let codex = Self::new_with_requirements(sq_rx, eq_tx, config.clone(), config_requirements, cwd.clone());
+
+        // Extract shared references before moving codex into the background task.
+        let session_ref = Arc::clone(&codex.session);
+        let agent_status_rx = codex.agent_status_tx.subscribe();
+        let features_ref = Arc::clone(&codex.features);
 
         tokio::spawn(async move {
             if let Err(e) = codex.run_with_history(initial_history).await {
@@ -217,6 +232,12 @@ impl Codex {
         Ok(CodexHandle {
             tx_sub: sq_tx,
             rx_event: eq_rx,
+            session: session_ref,
+            agent_status: agent_status_rx,
+            cwd,
+            config,
+            features: features_ref,
+            state_db: None,
         })
     }
 
@@ -1803,6 +1824,10 @@ impl Codex {
     }
 
     async fn emit(&self, msg: EventMsg) {
+        // Update agent status watch channel based on event type.
+        if let Some(status) = crate::core::agent::status::agent_status_from_event(&msg) {
+            let _ = self.agent_status_tx.send(status);
+        }
         let event = Event {
             id: uuid::Uuid::new_v4().to_string(),
             msg,

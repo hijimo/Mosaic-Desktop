@@ -58,17 +58,40 @@ pub async fn load_role_config_toml(
     let contents = if is_built_in {
         built_in_config_file_contents(config_file)
             .map(str::to_owned)
-            .ok_or_else(|| "agent type is currently not available".to_string())?
+            .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
     } else {
         tokio::fs::read_to_string(config_file)
             .await
-            .map_err(|_| "agent type is currently not available".to_string())?
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
     };
 
     let toml_value: toml::Value = toml::from_str(&contents)
-        .map_err(|_| "agent type is currently not available".to_string())?;
+        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
 
     Ok(Some(toml_value))
+}
+
+const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
+
+/// Apply a named role's configuration to a `ConfigLayerStack`, merging the role's
+/// TOML config as a high-precedence session layer.
+///
+/// This is the Mosaic equivalent of codex-main's `apply_role_to_config(Config, Option<&str>)`.
+pub async fn apply_role_to_config(
+    config: &mut crate::config::ConfigLayerStack,
+    role_name: Option<&str>,
+    user_roles: &BTreeMap<String, AgentRoleConfig>,
+) -> Result<(), String> {
+    let role_toml = load_role_config_toml(role_name, user_roles).await?;
+    if let Some(toml_value) = role_toml {
+        // Convert toml::Value → ConfigToml via JSON roundtrip.
+        let json = serde_json::to_value(&toml_value)
+            .map_err(|e| format!("failed to serialize role config: {e}"))?;
+        let role_config: crate::config::toml_types::ConfigToml = serde_json::from_value(json)
+            .map_err(|e| format!("failed to deserialize role config: {e}"))?;
+        config.add_layer(crate::config::layer_stack::ConfigLayer::Session, role_config);
+    }
+    Ok(())
 }
 
 /// Build the spawn-agent tool description text from built-in and user-defined roles.
@@ -160,6 +183,26 @@ Rules:
                     config_file: None,
                 },
             ),
+            (
+                "awaiter".to_string(),
+                AgentRoleConfig {
+                    description: Some(
+                        r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
+This includes, but not only:
+* testing
+* monitoring of a long running process
+* explicit ask to wait for something
+
+Rules:
+- When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
+- Be patient with the `awaiter`.
+- Do not use an awaiter for every compilation/test if it won't take time. Only use for long running commands.
+- Close the awaiter when you're done with it."#
+                            .to_string(),
+                    ),
+                    config_file: Some(PathBuf::from("awaiter.toml")),
+                },
+            ),
         ])
     });
     &CONFIGS
@@ -168,6 +211,7 @@ Rules:
 fn built_in_config_file_contents(path: &std::path::Path) -> Option<&'static str> {
     match path.to_str()? {
         "explorer.toml" => Some(include_str!("builtins/explorer.toml")),
+        "awaiter.toml" => Some(include_str!("builtins/awaiter.toml")),
         _ => None,
     }
 }

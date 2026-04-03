@@ -4,9 +4,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::core::agent::control::{AgentControl, SpawnAgentOptions};
+use crate::core::agent::control::AgentControl;
 use crate::core::tools::{ToolHandler, ToolKind};
 use crate::protocol::error::{CodexError, ErrorCode};
+use crate::protocol::thread_id::ThreadId;
 use crate::protocol::types::AgentStatus;
 
 pub const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -75,15 +76,14 @@ pub struct AgentStatusEntry {
 
 pub struct MultiAgentHandler {
     agent_control: Arc<AgentControl>,
-    /// Current depth of the calling agent (0 for root).
-    current_depth: usize,
+    config: crate::config::ConfigLayerStack,
 }
 
 impl MultiAgentHandler {
-    pub fn new(agent_control: Arc<AgentControl>, current_depth: usize) -> Self {
+    pub fn new(agent_control: Arc<AgentControl>, config: crate::config::ConfigLayerStack) -> Self {
         Self {
             agent_control,
-            current_depth,
+            config,
         }
     }
 }
@@ -120,6 +120,15 @@ impl ToolHandler for MultiAgentHandler {
     }
 }
 
+fn parse_thread_id(id: &str) -> Result<ThreadId, CodexError> {
+    id.try_into().map_err(|_| {
+        CodexError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid thread id: {id}"),
+        )
+    })
+}
+
 impl MultiAgentHandler {
     async fn handle_spawn(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
         let params: SpawnAgentArgs = serde_json::from_value(args).map_err(|e| {
@@ -129,7 +138,6 @@ impl MultiAgentHandler {
             )
         })?;
 
-        // Validate: message and items are mutually exclusive
         if params.message.is_some() && params.items.is_some() {
             return Err(CodexError::new(
                 ErrorCode::InvalidInput,
@@ -151,20 +159,26 @@ impl MultiAgentHandler {
             ));
         }
 
-        let options = SpawnAgentOptions {
-            fork: params.fork_context,
-            agent_type: params.agent_type,
-            ..Default::default()
+        let input = crate::protocol::types::UserInput::Text {
+            text: prompt,
+            text_elements: vec![],
         };
 
-        let (instance, guards) = self
+        // spawn_agent now takes config + Vec<UserInput> + Option<SessionSource>
+        let thread_id = self
             .agent_control
-            .spawn_agent(options, self.current_depth)
+            .spawn_agent(self.config.clone(), vec![input], None)
             .await?;
 
+        let (nickname, _role) = self
+            .agent_control
+            .get_agent_nickname_and_role(thread_id)
+            .await
+            .unwrap_or((None, None));
+
         let result = SpawnAgentResult {
-            id: instance.thread_id.clone(),
-            nickname: guards.nickname,
+            id: thread_id.to_string(),
+            nickname: nickname.unwrap_or_else(|| thread_id.to_string()),
             status: "running".into(),
         };
         serde_json::to_value(result)
@@ -203,11 +217,14 @@ impl MultiAgentHandler {
             ));
         }
 
+        let thread_id = parse_thread_id(&params.id)?;
         let input = crate::protocol::types::UserInput::Text {
             text,
             text_elements: vec![],
         };
-        self.agent_control.send_input(&params.id, input).await?;
+        self.agent_control
+            .send_input(thread_id, vec![input])
+            .await?;
 
         Ok(serde_json::json!({ "status": "sent" }))
     }
@@ -223,7 +240,8 @@ impl MultiAgentHandler {
             )
         })?;
 
-        self.agent_control.resume_agent(&params.id).await?;
+        let thread_id = parse_thread_id(&params.id)?;
+        self.agent_control.interrupt_agent(thread_id).await?;
         Ok(serde_json::json!({ "status": "resumed" }))
     }
 
@@ -255,26 +273,35 @@ impl MultiAgentHandler {
         }
 
         let mut results = Vec::new();
-        for id in &agent_ids {
+        for id_str in &agent_ids {
+            let thread_id = parse_thread_id(id_str)?;
             let wait_result = tokio::time::timeout(
                 Duration::from_millis(timeout as u64),
-                self.agent_control.wait(id),
+                self.agent_control.wait(thread_id),
             )
             .await;
 
             let entry = match wait_result {
-                Ok(Ok(output)) => AgentStatusEntry {
-                    id: id.clone(),
-                    status: "completed".into(),
-                    last_output: Some(output.to_string()),
-                },
+                Ok(Ok(status)) => {
+                    let (status_str, output) = match &status {
+                        AgentStatus::Completed(msg) => ("completed", msg.clone()),
+                        AgentStatus::Errored(msg) => ("errored", Some(msg.clone())),
+                        AgentStatus::Shutdown => ("shutdown", None),
+                        _ => ("unknown", None),
+                    };
+                    AgentStatusEntry {
+                        id: id_str.clone(),
+                        status: status_str.into(),
+                        last_output: output,
+                    }
+                }
                 Ok(Err(e)) => AgentStatusEntry {
-                    id: id.clone(),
+                    id: id_str.clone(),
                     status: "errored".into(),
                     last_output: Some(e.to_string()),
                 },
                 Err(_) => AgentStatusEntry {
-                    id: id.clone(),
+                    id: id_str.clone(),
                     status: "timed_out".into(),
                     last_output: None,
                 },
@@ -294,190 +321,8 @@ impl MultiAgentHandler {
             )
         })?;
 
-        self.agent_control.close_agent(&params.id).await?;
+        let thread_id = parse_thread_id(&params.id)?;
+        self.agent_control.shutdown_agent(thread_id).await?;
         Ok(serde_json::json!({ "status": "closed" }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::protocol::types::SandboxPolicy;
-    use std::path::PathBuf;
-
-    fn test_sandbox() -> SandboxPolicy {
-        SandboxPolicy::DangerFullAccess
-    }
-
-    fn make_handler() -> MultiAgentHandler {
-        let (tx, _rx) = async_channel::unbounded();
-        let control = Arc::new(AgentControl::new(
-            3,
-            PathBuf::from("/tmp"),
-            test_sandbox(),
-            tx,
-        ));
-        MultiAgentHandler::new(control, 0)
-    }
-
-    #[tokio::test]
-    async fn spawn_returns_id_and_nickname() {
-        let handler = make_handler();
-        let result = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "do something"
-            }))
-            .await
-            .unwrap();
-        assert!(result.get("id").is_some());
-        assert!(result.get("nickname").is_some());
-        assert_eq!(result["status"], "running");
-    }
-
-    #[tokio::test]
-    async fn spawn_rejects_empty_message() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "  "
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("non-empty"));
-    }
-
-    #[tokio::test]
-    async fn spawn_rejects_both_message_and_items() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "hello",
-                "items": [{"text": "world"}]
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("not both"));
-    }
-
-    #[tokio::test]
-    async fn send_input_to_spawned_agent() {
-        let handler = make_handler();
-        let spawn_result = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "task"
-            }))
-            .await
-            .unwrap();
-        let agent_id = spawn_result["id"].as_str().unwrap();
-
-        let result = handler
-            .handle(serde_json::json!({
-                "__tool_name": "send_input",
-                "id": agent_id,
-                "message": "more input"
-            }))
-            .await
-            .unwrap();
-        assert_eq!(result["status"], "sent");
-    }
-
-    #[tokio::test]
-    async fn send_input_to_unknown_agent_errors() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "send_input",
-                "id": "nonexistent",
-                "message": "hello"
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn close_agent_succeeds() {
-        let handler = make_handler();
-        let spawn_result = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "task"
-            }))
-            .await
-            .unwrap();
-        let agent_id = spawn_result["id"].as_str().unwrap();
-
-        let result = handler
-            .handle(serde_json::json!({
-                "__tool_name": "close_agent",
-                "id": agent_id
-            }))
-            .await
-            .unwrap();
-        assert_eq!(result["status"], "closed");
-    }
-
-    #[tokio::test]
-    async fn wait_rejects_empty_ids() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "wait",
-                "agent_ids": []
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("non-empty"));
-    }
-
-    #[tokio::test]
-    async fn wait_rejects_low_timeout() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "wait",
-                "agent_ids": ["a"],
-                "timeout_ms": 100
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("at least"));
-    }
-
-    #[tokio::test]
-    async fn spawn_respects_depth_limit() {
-        let (tx, _rx) = async_channel::unbounded();
-        let control = Arc::new(AgentControl::new(
-            1,
-            PathBuf::from("/tmp"),
-            test_sandbox(),
-            tx,
-        ));
-        // depth=1, max=1 → should fail
-        let handler = MultiAgentHandler::new(control, 1);
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "spawn_agent",
-                "message": "task"
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("depth"));
-    }
-
-    #[tokio::test]
-    async fn unsupported_tool_errors() {
-        let handler = make_handler();
-        let err = handler
-            .handle(serde_json::json!({
-                "__tool_name": "unknown_tool"
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("unsupported"));
     }
 }

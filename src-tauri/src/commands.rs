@@ -1094,7 +1094,8 @@ mod tests {
         let root =
             find_project_root_for_markers(&nested, &[".git".to_string()]).expect("project root");
 
-        assert_eq!(root, Some(project));
+        let expected = dunce::canonicalize(&project).unwrap_or_else(|_| project.clone());
+        assert_eq!(root, Some(expected));
     }
 
     #[test]

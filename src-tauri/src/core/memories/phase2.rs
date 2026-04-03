@@ -115,22 +115,26 @@ pub(super) async fn run(
         return;
     };
 
-    let spawn_opts = crate::core::agent::SpawnAgentOptions {
-        model: Some(
-            config
-                .consolidation_model
-                .clone()
-                .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-        ),
-        sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
-        cwd: Some(root.clone()),
-        fork: true,
-        max_depth: None,
-        agent_type: None,
-    };
+    let spawn_input = vec![UserInput::Text {
+        text: prompt,
+        text_elements: vec![],
+    }];
 
-    let (instance, _guards) = match agent_ctl.spawn_agent(spawn_opts, 0).await {
-        Ok(r) => r,
+    // Use MemoryConsolidation session source.
+    let session_source = Some(
+        crate::core::rollout::policy::SessionSource::SubAgent(
+            crate::core::rollout::policy::SubAgentSource::MemoryConsolidation,
+        ),
+    );
+
+    // Need a config — use a default one.
+    let config = crate::config::ConfigLayerStack::new();
+
+    let thread_id = match agent_ctl
+        .spawn_agent(config, spawn_input, session_source)
+        .await
+    {
+        Ok(id) => id,
         Err(e) => {
             warn!("failed to spawn consolidation agent: {e}");
             let db = db.lock().await;
@@ -143,38 +147,15 @@ pub(super) async fn run(
         }
     };
 
-    let agent_id = instance.thread_id.clone();
-
-    // Send the consolidation prompt as user input
-    if let Err(e) = agent_ctl
-        .send_input(
-            &agent_id,
-            UserInput::Text {
-                text: prompt,
-                text_elements: vec![],
-            },
-        )
-        .await
-    {
-        warn!("failed to send input to consolidation agent: {e}");
-        let db = db.lock().await;
-        let _ = db.mark_global_phase2_job_failed(
-            &ownership_token,
-            "failed_send_input",
-            JOB_RETRY_DELAY_SECONDS,
-        );
-        return;
-    }
-
     info!(
         "memory phase-2: spawned consolidation agent {} with {} memories",
-        agent_id,
+        thread_id,
         raw_memories.len()
     );
 
     // 6. Wait for agent completion
-    let result = agent_ctl.wait(&agent_id).await;
-    let _ = agent_ctl.close_agent(&agent_id).await;
+    let result = agent_ctl.wait(thread_id).await;
+    let _ = agent_ctl.shutdown_agent(thread_id).await;
 
     let db = db.lock().await;
     match result {

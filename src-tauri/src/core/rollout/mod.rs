@@ -17,8 +17,11 @@ pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 
 pub use list::find_archived_thread_path_by_id_str;
+pub use list::find_latest_thread_path;
 pub use list::find_thread_path_by_id_str;
+pub use list::list_archived_threads;
 pub use list::rollout_date_parts;
+pub use policy::{SessionSource, SubAgentSource};
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use session_index::append_thread_name;

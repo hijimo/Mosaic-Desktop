@@ -368,7 +368,10 @@ impl Session {
 
         if let Some(ctrl) = agent_control {
             router.registry_mut().register(Box::new(
-                crate::core::tools::handlers::multi_agents::MultiAgentHandler::new(ctrl, 0),
+                crate::core::tools::handlers::multi_agents::MultiAgentHandler::new(
+                    ctrl,
+                    config.clone(),
+                ),
             ));
         }
 
@@ -632,6 +635,10 @@ impl Session {
 
     pub async fn set_token_info(&self, info: Option<TokenUsageInfo>) {
         self.state.lock().await.history.set_token_info(info);
+    }
+
+    pub async fn token_info(&self) -> Option<TokenUsageInfo> {
+        self.state.lock().await.history.token_info().cloned()
     }
 
     pub async fn set_previous_turn_settings(&self, settings: Option<PreviousTurnSettings>) {
@@ -1146,12 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn session_with_agent_control_adds_collab_specs() {
         let (tx, _rx) = async_channel::unbounded();
-        let agent_control = Arc::new(crate::core::agent::control::AgentControl::new(
-            4,
-            PathBuf::from("/tmp/test"),
-            SandboxPolicy::new_read_only_policy(),
-            tx.clone(),
-        ));
+        let agent_control = Arc::new(crate::core::agent::control::AgentControl::default());
         let session = Session::new_with_agent_control(
             PathBuf::from("/tmp/test"),
             ConfigLayerStack::new(),
