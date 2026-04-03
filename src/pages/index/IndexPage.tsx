@@ -26,8 +26,6 @@ import { getHomeDir, listCwds, pickFolder } from '@/services/api';
 import type { AttachedFile } from '@/stores/fileUploadStore';
 import type { UserInput } from '@/types';
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
-
 interface SkillCard {
   icon: React.ReactNode;
   title: string;
@@ -115,17 +113,7 @@ export function IndexPage(): React.ReactElement {
         items.push({ type: 'text', text: msg, text_elements: [] });
       }
       for (const f of files) {
-        if (IMAGE_EXTS.has(f.ext)) {
-          items.push({ type: 'local_image', path: f.path });
-        } else {
-          // 非图片文件：作为文本提示附加，让 AI 通过工具读取文件内容
-          const prefix = msg ? '' : '请处理以下文件：';
-          items.push({
-            type: 'text',
-            text: `${prefix}\n[attached file: ${f.name}](${f.path})`,
-            text_elements: [],
-          });
-        }
+        items.push({ type: 'attached_file', name: f.name, path: f.path });
       }
 
       await submitOp(tid, {

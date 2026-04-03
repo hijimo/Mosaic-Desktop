@@ -227,13 +227,14 @@ export function Message({
                   </Typography>
                 );
               }
-              if (c.type === 'local_image') {
-                const name = c.path.split(/[\\/]/).pop() ?? c.path;
+              if (c.type === 'attached_file' || c.type === 'local_image') {
+                const filePath = c.type === 'attached_file' ? c.path : c.path;
+                const name = c.type === 'attached_file' ? c.name : (filePath.split(/[\\/]/).pop() ?? filePath);
                 const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
                 return (
                   <FileChip
                     key={i}
-                    file={{ id: `${item.id}-${i}`, name, path: c.path, ext }}
+                    file={{ id: `${item.id}-${i}`, name, ext }}
                   />
                 );
               }

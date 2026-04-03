@@ -78,6 +78,7 @@ export type UserInput =
   | { type: "text"; text: string; text_elements: TextElement[] }
   | { type: "image"; image_url: string }
   | { type: "local_image"; path: string }
+  | { type: "attached_file"; name: string; path: string }
   | { type: "skill"; name: string; path: string }
   | { type: "mention"; name: string; path: string };
 

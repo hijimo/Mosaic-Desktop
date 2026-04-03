@@ -243,6 +243,11 @@ pub async fn submit_op(
                             image_url: format!("file://{}", path.display()),
                         }
                     }
+                    crate::protocol::types::UserInput::AttachedFile { name, path } => {
+                        crate::protocol::types::ContentItem::InputText {
+                            text: format!("[attached_file:{}]({})", name, path.display()),
+                        }
+                    }
                     crate::protocol::types::UserInput::Skill { name, path } => {
                         crate::protocol::types::ContentItem::InputText {
                             text: format!(

@@ -962,6 +962,42 @@ impl Codex {
                         image_url: image_url.clone(),
                     });
                 }
+                crate::protocol::types::UserInput::AttachedFile { name, path } => {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let is_image = matches!(
+                        ext.as_str(),
+                        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp"
+                    );
+                    if is_image {
+                        match crate::image_util::load_image_as_data_url(path).await {
+                            Ok(data_url) => {
+                                content_items.push(
+                                    crate::protocol::types::ContentItem::InputImage {
+                                        image_url: data_url,
+                                    },
+                                );
+                            }
+                            Err(e) => {
+                                content_items.push(
+                                    crate::protocol::types::ContentItem::InputText {
+                                        text: format!("[image error: {e}]"),
+                                    },
+                                );
+                            }
+                        }
+                    } else {
+                        content_items.push(crate::protocol::types::ContentItem::InputText {
+                            text: format!(
+                                "[attached file: {name}]({})",
+                                path.display()
+                            ),
+                        });
+                    }
+                }
                 crate::protocol::types::UserInput::Mention { name, path } => {
                     content_items.push(crate::protocol::types::ContentItem::InputText {
                         text: format!("@{name} ({path})"),

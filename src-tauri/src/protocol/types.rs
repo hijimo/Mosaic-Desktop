@@ -561,6 +561,11 @@ pub enum UserInput {
     LocalImage {
         path: PathBuf,
     },
+    /// Any local file attached by the user (images, PDFs, etc.)
+    AttachedFile {
+        name: String,
+        path: PathBuf,
+    },
     /// Skill selected by the user.
     Skill {
         name: String,

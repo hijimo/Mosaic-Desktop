@@ -1,40 +1,54 @@
 import { Box, IconButton, Typography } from '@mui/material';
-import { X, FileText, FileSpreadsheet, Image, FileArchive, File, Presentation } from 'lucide-react';
+import { X } from 'lucide-react';
 import type { AttachedFile } from '@/stores/fileUploadStore';
 
-const EXT_ICON_MAP: Record<string, React.ElementType> = {
-  pdf: FileText,
-  doc: FileText,
-  docx: FileText,
-  txt: FileText,
-  xls: FileSpreadsheet,
-  xlsx: FileSpreadsheet,
-  csv: FileSpreadsheet,
-  png: Image,
-  jpg: Image,
-  jpeg: Image,
-  gif: Image,
-  webp: Image,
-  svg: Image,
-  ppt: Presentation,
-  pptx: Presentation,
-  zip: FileArchive,
-  rar: FileArchive,
-  '7z': FileArchive,
-  gz: FileArchive,
+import pdfIcon from '@/assets/file-icons/pdf.svg';
+import excelIcon from '@/assets/file-icons/excel.svg';
+import wordIcon from '@/assets/file-icons/word.svg';
+import pptIcon from '@/assets/file-icons/ppt.svg';
+import txtIcon from '@/assets/file-icons/txt.svg';
+import imageIcon from '@/assets/file-icons/image.svg';
+import archiveIcon from '@/assets/file-icons/archive.svg';
+import unknownIcon from '@/assets/file-icons/unknown.svg';
+
+const EXT_ICON_MAP: Record<string, string> = {
+  pdf: pdfIcon,
+  xls: excelIcon,
+  xlsx: excelIcon,
+  csv: excelIcon,
+  doc: wordIcon,
+  docx: wordIcon,
+  ppt: pptIcon,
+  pptx: pptIcon,
+  txt: txtIcon,
+  md: txtIcon,
+  json: txtIcon,
+  log: txtIcon,
+  png: imageIcon,
+  jpg: imageIcon,
+  jpeg: imageIcon,
+  gif: imageIcon,
+  webp: imageIcon,
+  svg: imageIcon,
+  bmp: imageIcon,
+  zip: archiveIcon,
+  rar: archiveIcon,
+  '7z': archiveIcon,
+  gz: archiveIcon,
+  tar: archiveIcon,
 };
 
-function getIcon(ext: string): React.ElementType {
-  return EXT_ICON_MAP[ext] ?? File;
+function getIcon(ext: string): string {
+  return EXT_ICON_MAP[ext] ?? unknownIcon;
 }
 
 interface FileChipProps {
-  file: AttachedFile;
+  file: Pick<AttachedFile, 'id' | 'name' | 'ext'>;
   onRemove?: (id: string) => void;
 }
 
 export function FileChip({ file, onRemove }: FileChipProps): React.ReactElement {
-  const Icon = getIcon(file.ext);
+  const icon = getIcon(file.ext);
 
   return (
     <Box
@@ -50,7 +64,12 @@ export function FileChip({ file, onRemove }: FileChipProps): React.ReactElement 
         maxWidth: 200,
       }}
     >
-      <Icon size={14} color="#41484e" style={{ flexShrink: 0 }} />
+      <Box
+        component="img"
+        src={icon}
+        alt=""
+        sx={{ width: 15, height: 15, flexShrink: 0 }}
+      />
       <Typography
         noWrap
         title={file.name}

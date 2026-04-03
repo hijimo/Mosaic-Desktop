@@ -109,6 +109,17 @@ impl ThreadHistoryBuilder {
                         .iter()
                         .filter_map(|c| match c {
                             ContentItem::InputText { text } => {
+                                // Detect serialized attached_file: [attached_file:name](path)
+                                if let Some(rest) = text.strip_prefix("[attached_file:") {
+                                    if let Some(paren) = rest.find("](") {
+                                        let name = &rest[..paren];
+                                        let path = &rest[paren + 2..rest.len() - 1];
+                                        return Some(crate::protocol::types::UserInput::AttachedFile {
+                                            name: name.to_string(),
+                                            path: std::path::PathBuf::from(path),
+                                        });
+                                    }
+                                }
                                 Some(crate::protocol::types::UserInput::Text {
                                     text: text.clone(),
                                     text_elements: vec![],
