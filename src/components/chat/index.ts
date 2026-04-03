@@ -1,6 +1,7 @@
 export { Message } from './Message';
 export { MessageList } from './MessageList';
 export { InputArea } from './InputArea';
+export { FileChip } from './FileChip';
 
 // Indicators
 export { TaskStartedIndicator } from './indicators/TaskStartedIndicator';

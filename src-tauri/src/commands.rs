@@ -921,6 +921,19 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     Ok(picked.map(|p| p.to_string()))
 }
 
+/// Open a native file picker and return the selected file paths.
+#[tauri::command]
+pub async fn pick_files(app: AppHandle, filters: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file();
+    if let Some(exts) = filters {
+        let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+        builder = builder.add_filter("Files", &ext_refs);
+    }
+    let picked = builder.blocking_pick_files();
+    Ok(picked.unwrap_or_default().into_iter().map(|p| p.to_string()).collect())
+}
+
 #[tauri::command]
 pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageResponse, String> {
     crate::share::share_message(payload).await.map_err(|e| {

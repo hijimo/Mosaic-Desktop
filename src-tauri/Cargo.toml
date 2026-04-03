@@ -72,6 +72,7 @@ chardetng = "0.1"
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 which = "7"
 base64 = "0.22.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 bytes = "1"
 http = "1"
 url = "2"

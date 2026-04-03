@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Box, Typography, IconButton, Menu, MenuItem, ListItemIcon, ListItemText } from '@mui/material';
 import {
   Activity,
@@ -7,11 +7,6 @@ import {
   BarChart3,
   Globe,
   PenLine,
-  Paperclip,
-  FileText,
-  Mic,
-  Image,
-  SendHorizonal,
   Zap,
   FileSearch,
   Languages,
@@ -26,8 +21,12 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { MessageList } from '@/components/chat/MessageList';
+import { InputArea } from '@/components/chat/InputArea';
 import { getHomeDir, listCwds, pickFolder } from '@/services/api';
+import type { AttachedFile } from '@/stores/fileUploadStore';
 import type { UserInput } from '@/types';
+
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
 
 interface SkillCard {
   icon: React.ReactNode;
@@ -57,7 +56,6 @@ function handleApprovalDecision(callId: string, decision: 'approve' | 'deny'): v
 export function IndexPage(): React.ReactElement {
   const { threadId: routeThreadId } = useParams<{ threadId?: string }>();
   const [inputText, setInputText] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeThreadId = useThreadStore((s) => s.activeThreadId);
   const messages = useMessageStore((s) => s.messagesByThread);
@@ -99,29 +97,40 @@ export function IndexPage(): React.ReactElement {
   const hasMessages = threadMessages.length > 0 || streamingTurn?.isStreaming;
 
   const handleSend = useCallback(
-    async (text?: string) => {
+    async (text?: string, files: AttachedFile[] = []) => {
       const msg = (text ?? inputText).trim();
-      if (!msg) return;
+      if (!msg && files.length === 0) return;
 
       let tid = currentThreadId;
       if (!tid) {
         tid = await createThread(selectedCwd ?? undefined);
       } else {
-        // Ensure the thread engine is running (resume if needed after app restart).
         await resumeThread(tid);
       }
 
       setInputText('');
 
-      const userInput: UserInput = {
-        type: 'text',
-        text: msg,
-        text_elements: [],
-      };
+      const items: UserInput[] = [];
+      if (msg) {
+        items.push({ type: 'text', text: msg, text_elements: [] });
+      }
+      for (const f of files) {
+        if (IMAGE_EXTS.has(f.ext)) {
+          items.push({ type: 'local_image', path: f.path });
+        } else {
+          // 非图片文件：作为文本提示附加，让 AI 通过工具读取文件内容
+          const prefix = msg ? '' : '请处理以下文件：';
+          items.push({
+            type: 'text',
+            text: `${prefix}\n[attached file: ${f.name}](${f.path})`,
+            text_elements: [],
+          });
+        }
+      }
 
       await submitOp(tid, {
         type: 'user_turn',
-        items: [userInput],
+        items,
         cwd: '.',
         model: '',
         approval_policy: 'on-request',
@@ -129,16 +138,6 @@ export function IndexPage(): React.ReactElement {
       });
     },
     [inputText, currentThreadId, selectedCwd, createThread, resumeThread, submitOp],
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend],
   );
 
   // ── Chat view (has messages) ──
@@ -178,56 +177,11 @@ export function IndexPage(): React.ReactElement {
 
         {/* Input */}
         <Box sx={{ px: 4, pb: 3, pt: 1, flexShrink: 0 }}>
-          <Box
-            sx={{
-              bgcolor: '#fff',
-              borderRadius: 4,
-              p: 2,
-              border: '1px solid #e2e8f0',
-              display: 'flex',
-              alignItems: 'flex-end',
-              gap: 1.5,
-            }}
-          >
-            <Box
-              component="textarea"
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="输入消息..."
-              rows={1}
-              sx={{
-                flex: 1,
-                border: 'none',
-                outline: 'none',
-                resize: 'none',
-                fontSize: 14,
-                fontFamily: 'Inter, sans-serif',
-                color: '#191c1e',
-                bgcolor: 'transparent',
-                '&::placeholder': { color: 'rgba(65,72,78,0.4)' },
-              }}
-            />
-            <Box
-              onClick={() => handleSend()}
-              sx={{
-                width: 40,
-                height: 40,
-                borderRadius: 2.5,
-                background: inputText.trim()
-                  ? 'linear-gradient(135deg, #7cb9e8 0%, #8db2ff 100%)'
-                  : '#e2e8f0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: inputText.trim() ? 'pointer' : 'default',
-                flexShrink: 0,
-              }}
-            >
-              <SendHorizonal size={16} color="#fff" />
-            </Box>
-          </Box>
+          <InputArea
+            value={inputText}
+            onChange={setInputText}
+            onSend={(text, files) => handleSend(text, files)}
+          />
         </Box>
       </Box>
     );
@@ -324,55 +278,12 @@ export function IndexPage(): React.ReactElement {
         </Box>
 
         {/* Input Area */}
-        <Box
-          sx={{
-            bgcolor: '#fff', borderRadius: 6, p: 3,
-            border: '1px solid #fff',
-            boxShadow: '0px 25px 50px -12px rgba(124,185,232,0.1)',
-          }}
-        >
-          {/* Textarea */}
-          <Box sx={{ minHeight: 96, px: 1.5, py: 1 }}>
-            <Box
-              component="textarea"
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask anything or use @ and / for tools..."
-              rows={3}
-              sx={{
-                width: '100%', border: 'none', outline: 'none', resize: 'none',
-                fontSize: 18, fontFamily: 'Inter, sans-serif', color: '#191c1e', bgcolor: 'transparent',
-                '&::placeholder': { color: 'rgba(65,72,78,0.4)' },
-              }}
-            />
-          </Box>
-
-          {/* Actions Bar */}
-          <Box sx={{ borderTop: '1px solid rgba(192,199,207,0.1)', pt: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <IconButton size="small" sx={{ p: 1 }}><Paperclip size={20} color="#64748b" /></IconButton>
-              <IconButton size="small" sx={{ p: 1 }}><FileText size={18} color="#64748b" /></IconButton>
-              <Box sx={{ width: 1, height: 24, bgcolor: 'rgba(192,199,207,0.2)', mx: 0.5 }} />
-              <IconButton size="small" sx={{ p: 1 }}><Mic size={18} color="#64748b" /></IconButton>
-              <IconButton size="small" sx={{ p: 1 }}><Image size={18} color="#64748b" /></IconButton>
-            </Box>
-            <Box
-              onClick={() => handleSend()}
-              sx={{
-                width: 48, height: 48, borderRadius: 3,
-                background: inputText.trim()
-                  ? 'linear-gradient(135deg, #7cb9e8 0%, #8db2ff 100%)'
-                  : 'linear-gradient(135deg, #7cb9e8 0%, #8db2ff 100%)',
-                boxShadow: '0px 10px 15px -3px rgba(124,185,232,0.3)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-              }}
-            >
-              <SendHorizonal size={18} color="#fff" />
-            </Box>
-          </Box>
-        </Box>
+        <InputArea
+          value={inputText}
+          onChange={setInputText}
+          onSend={(text, files) => handleSend(text, files)}
+          variant="welcome"
+        />
 
         {/* Suggestions */}
         <Box sx={{ display: 'flex', justifyContent: 'center', gap: 3 }}>

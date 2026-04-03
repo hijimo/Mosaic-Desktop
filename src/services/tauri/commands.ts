@@ -47,6 +47,10 @@ export async function pickFolder(): Promise<string | null> {
   return invoke<string | null>('pick_folder');
 }
 
+export async function pickFiles(filters?: string[]): Promise<string[]> {
+  return invoke<string[]>('pick_files', { filters });
+}
+
 export async function getConfig(): Promise<unknown> {
   return invoke<unknown>('get_config');
 }

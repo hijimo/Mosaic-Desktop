@@ -930,25 +930,71 @@ impl Codex {
         ))
         .await;
 
-        // Store user input in history
+        // Store user input in history — build multi-modal content items
+        let mut content_items: Vec<crate::protocol::types::ContentItem> = Vec::new();
+        for item in &items {
+            match item {
+                crate::protocol::types::UserInput::Text { text, .. } => {
+                    if !text.is_empty() {
+                        content_items.push(crate::protocol::types::ContentItem::InputText {
+                            text: text.clone(),
+                        });
+                    }
+                }
+                crate::protocol::types::UserInput::LocalImage { path } => {
+                    match crate::image_util::load_image_as_data_url(path).await {
+                        Ok(data_url) => {
+                            content_items.push(
+                                crate::protocol::types::ContentItem::InputImage {
+                                    image_url: data_url,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            content_items.push(crate::protocol::types::ContentItem::InputText {
+                                text: format!("[image error: {e}]"),
+                            });
+                        }
+                    }
+                }
+                crate::protocol::types::UserInput::Image { image_url } => {
+                    content_items.push(crate::protocol::types::ContentItem::InputImage {
+                        image_url: image_url.clone(),
+                    });
+                }
+                crate::protocol::types::UserInput::Mention { name, path } => {
+                    content_items.push(crate::protocol::types::ContentItem::InputText {
+                        text: format!("@{name} ({path})"),
+                    });
+                }
+                crate::protocol::types::UserInput::Skill { name, path } => {
+                    content_items.push(crate::protocol::types::ContentItem::InputText {
+                        text: format!(
+                            "<skill>\n<name>{name}</name>\n<path>{}</path>\n</skill>",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+        if !content_items.is_empty() {
+            session
+                .add_to_history(vec![crate::protocol::types::ResponseInputItem::Message {
+                    role: "user".to_string(),
+                    content: content_items,
+                }])
+                .await;
+        }
+
+        // Extract plain text for thread name generation
         let user_text: String = items
             .iter()
             .filter_map(|item| match item {
-                crate::protocol::types::UserInput::Text { text, .. } => Some(text.clone()),
+                crate::protocol::types::UserInput::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if !user_text.is_empty() {
-            session
-                .add_to_history(vec![
-                    crate::protocol::types::ResponseInputItem::text_message(
-                        "user",
-                        user_text.clone(),
-                    ),
-                ])
-                .await;
-        }
 
         // Emit structured user message item events
         {

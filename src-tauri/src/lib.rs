@@ -5,6 +5,7 @@ pub mod core;
 pub mod exec;
 pub mod execpolicy;
 pub mod file_search;
+pub mod image_util;
 pub mod mosaic_api;
 pub mod mosaic_client;
 pub mod netproxy;
@@ -144,6 +145,7 @@ pub fn run() {
             commands::get_home_dir,
             commands::list_cwds,
             commands::pick_folder,
+            commands::pick_files,
             commands::share_message,
         ])
         .run(tauri::generate_context!())

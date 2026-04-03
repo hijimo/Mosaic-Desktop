@@ -16,8 +16,6 @@ struct ViewImageArgs {
 }
 
 /// Check if the model supports image input modality.
-/// In the full implementation, this would check model_info.input_modalities.
-/// For now, we accept a flag or default to true.
 fn model_supports_images() -> bool {
     // TODO: wire to actual model_info.input_modalities check
     true
@@ -34,7 +32,6 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, args: serde_json::Value) -> Result<serde_json::Value, CodexError> {
-        // Model capability check (matches source Codex behavior)
         if !model_supports_images() {
             return Err(CodexError::new(
                 ErrorCode::ToolExecutionFailed,
@@ -65,39 +62,21 @@ impl ToolHandler for ViewImageHandler {
             ));
         }
 
-        let data = tokio::fs::read(&abs_path).await.map_err(|e| {
-            CodexError::new(
-                ErrorCode::ToolExecutionFailed,
-                format!("failed to read image: {e}"),
-            )
-        })?;
+        let data_url = crate::image_util::load_image_as_data_url(&abs_path)
+            .await
+            .map_err(|e| CodexError::new(ErrorCode::ToolExecutionFailed, e))?;
 
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        // Extract size from the original file metadata
+        let size_bytes = metadata.len();
 
-        let mime = if params.path.ends_with(".png") {
-            "image/png"
-        } else if params.path.ends_with(".jpg") || params.path.ends_with(".jpeg") {
-            "image/jpeg"
-        } else if params.path.ends_with(".gif") {
-            "image/gif"
-        } else if params.path.ends_with(".webp") {
-            "image/webp"
-        } else if params.path.ends_with(".svg") {
-            "image/svg+xml"
-        } else {
-            "application/octet-stream"
-        };
-
-        // Return structured content items matching source Codex FunctionCallOutputContentItem
         Ok(serde_json::json!({
             "content": [
                 {
                     "type": "input_image",
-                    "image_url": format!("data:{mime};base64,{b64}"),
+                    "image_url": data_url,
                 }
             ],
-            "size_bytes": data.len(),
+            "size_bytes": size_bytes,
         }))
     }
 }
