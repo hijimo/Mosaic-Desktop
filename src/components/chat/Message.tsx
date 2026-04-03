@@ -18,6 +18,7 @@ import { ApprovalRequestCard } from './agent/ApprovalRequestCard';
 import { CodeDiffBlock } from './agent/CodeDiffBlock';
 import { ClarificationCard } from './agent/ClarificationCard';
 import { MessageActionBar } from './agent/MessageActionBar';
+import { ErrorCard } from './ErrorCard';
 
 interface MessageProps {
   group: TurnGroup;
@@ -40,7 +41,7 @@ export function Message({
   const hasExternalAgentContent = Boolean(
     toolCalls?.length || approvalRequests?.length || clarifications?.length || isStreaming,
   );
-  if (items.length === 0 && !hasExternalAgentContent) return null;
+  if (items.length === 0 && !hasExternalAgentContent && !group.error) return null;
 
   // Separate user messages and agent-side items
   const userItems = items.filter(
@@ -57,7 +58,8 @@ export function Message({
     Boolean(toolCalls?.length) ||
     Boolean(approvalRequests?.length) ||
     Boolean(clarifications?.length) ||
-    shouldRenderStreamingPlaceholder;
+    shouldRenderStreamingPlaceholder ||
+    Boolean(group.error);
 
   const renderAgentItem = (item: Exclude<TurnItem, { type: 'UserMessage' }>): React.ReactNode => {
     switch (item.type) {
@@ -329,6 +331,10 @@ export function Message({
                 messageId={firstAgentMessage.id}
               />
             ) : null}
+
+            {group.error && (
+              <ErrorCard message={group.error.message} />
+            )}
           </Box>
         </Box>
       )}
