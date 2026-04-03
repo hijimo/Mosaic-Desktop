@@ -53,6 +53,43 @@ pub fn detect_implicit_skill_invocation(
     None
 }
 
+/// Async version that detects and optionally emits analytics for implicit skill invocations.
+///
+/// Matches codex-main's `maybe_emit_implicit_skill_invocation(sess, turn_context, command, workdir)`.
+/// The `tracker` callback is invoked when an implicit invocation is detected.
+pub async fn maybe_emit_implicit_skill_invocation(
+    outcome: &SkillLoadOutcome,
+    command: &str,
+    workdir: &Path,
+    seen_skills: &tokio::sync::Mutex<std::collections::HashSet<String>>,
+    tracker: Option<&dyn Fn(&SkillMetadata)>,
+) {
+    let Some(candidate) = detect_implicit_skill_invocation(outcome, command, workdir) else {
+        return;
+    };
+
+    let scope_str = match candidate.scope {
+        super::model::SkillScope::User => "user",
+        super::model::SkillScope::Repo => "repo",
+        super::model::SkillScope::System => "system",
+        super::model::SkillScope::Admin => "admin",
+    };
+    let skill_path = candidate.path_to_skills_md.to_string_lossy();
+    let seen_key = format!("{scope_str}:{skill_path}:{}", candidate.name);
+
+    let inserted = {
+        let mut seen = seen_skills.lock().await;
+        seen.insert(seen_key)
+    };
+    if !inserted {
+        return;
+    }
+
+    if let Some(tracker) = tracker {
+        tracker(&candidate);
+    }
+}
+
 fn tokenize_command(command: &str) -> Vec<String> {
     shlex::split(command).unwrap_or_else(|| command.split_whitespace().map(String::from).collect())
 }

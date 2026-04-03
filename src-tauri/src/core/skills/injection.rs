@@ -28,6 +28,17 @@ pub struct SkillInstructionItem {
 
 /// Build skill injections by reading SKILL.md files for mentioned skills.
 pub async fn build_skill_injections(mentioned_skills: &[SkillMetadata]) -> SkillInjections {
+    build_skill_injections_with_tracking(mentioned_skills, None).await
+}
+
+/// Build skill injections with optional analytics tracking.
+///
+/// Matches codex-main's `build_skill_injections(mentioned, otel, analytics, tracking)`.
+/// The `analytics_tracker` parameter is an optional callback for tracking skill invocations.
+pub async fn build_skill_injections_with_tracking(
+    mentioned_skills: &[SkillMetadata],
+    analytics_tracker: Option<&dyn Fn(&SkillMetadata, &str)>,
+) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
     }
@@ -38,6 +49,9 @@ pub async fn build_skill_injections(mentioned_skills: &[SkillMetadata]) -> Skill
     for skill in mentioned_skills {
         match tokio::fs::read_to_string(&skill.path_to_skills_md).await {
             Ok(contents) => {
+                if let Some(tracker) = analytics_tracker {
+                    tracker(skill, "ok");
+                }
                 result.items.push(SkillInstructionItem {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
@@ -45,6 +59,9 @@ pub async fn build_skill_injections(mentioned_skills: &[SkillMetadata]) -> Skill
                 });
             }
             Err(err) => {
+                if let Some(tracker) = analytics_tracker {
+                    tracker(skill, "error");
+                }
                 result.warnings.push(format!(
                     "Failed to load skill {} at {}: {err:#}",
                     skill.name,

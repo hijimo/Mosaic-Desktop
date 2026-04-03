@@ -163,6 +163,26 @@ pub fn load_skills_from_roots(roots: impl IntoIterator<Item = SkillRoot>) -> Ski
 
 /// Build default skill roots for a given cwd and codex_home.
 pub fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
+    skill_roots_for_cwd_with_markers(codex_home, cwd, &default_project_root_markers())
+}
+
+/// Default project root markers.
+pub fn default_project_root_markers() -> Vec<String> {
+    vec![
+        ".git".to_string(),
+        ".hg".to_string(),
+        ".svn".to_string(),
+        "Cargo.toml".to_string(),
+        "package.json".to_string(),
+    ]
+}
+
+/// Build skill roots using explicit project root markers.
+pub fn skill_roots_for_cwd_with_markers(
+    codex_home: &Path,
+    cwd: &Path,
+    project_root_markers: &[String],
+) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
     // Repo: <cwd>/.codex/skills  and  <cwd>/.agents/skills
@@ -182,18 +202,17 @@ pub fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     }
 
     // Walk ancestors up to project root for .agents/skills dirs.
-    if let Some(project_root) = find_project_root(cwd) {
-        for dir in dirs_between_project_root_and_cwd(cwd, &project_root) {
-            if dir == cwd {
-                continue;
-            } // already handled above
-            let dir_agents = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-            if dir_agents.is_dir() {
-                roots.push(SkillRoot {
-                    path: dir_agents,
-                    scope: SkillScope::Repo,
-                });
-            }
+    let project_root = find_project_root(cwd, project_root_markers);
+    for dir in dirs_between_project_root_and_cwd(cwd, &project_root) {
+        if dir == cwd {
+            continue;
+        }
+        let dir_agents = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
+        if dir_agents.is_dir() {
+            roots.push(SkillRoot {
+                path: dir_agents,
+                scope: SkillScope::Repo,
+            });
         }
     }
 
@@ -227,21 +246,61 @@ pub fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     }
 
     // Deduplicate by path.
-    let mut seen = HashSet::new();
-    roots.retain(|r| seen.insert(r.path.clone()));
+    dedupe_skill_roots_by_path(&mut roots);
     roots
 }
 
-fn find_project_root(cwd: &Path) -> Option<PathBuf> {
-    const MARKERS: &[&str] = &[".git", ".hg", ".svn", "Cargo.toml", "package.json"];
+/// Build skill roots from a `ConfigLayerStack` and cwd.
+///
+/// This is the Mosaic equivalent of codex-main's `skill_roots(config_layer_stack, cwd, plugin_roots)`.
+/// Since Mosaic doesn't have a separate plugins system, plugin_roots is always empty.
+pub fn skill_roots_from_config_layer_stack(
+    config: &crate::config::ConfigLayerStack,
+    cwd: &Path,
+) -> Vec<SkillRoot> {
+    let codex_home = dirs::home_dir()
+        .map(|h| h.join(".codex"))
+        .unwrap_or_else(|| cwd.join(".codex"));
+
+    // Extract project_root_markers from config if available.
+    let merged = config.merge();
+    let markers = merged
+        .project_root_markers
+        .clone()
+        .unwrap_or_else(default_project_root_markers);
+
+    skill_roots_for_cwd_with_markers(&codex_home, cwd, &markers)
+}
+
+/// Extract project root markers from a config, falling back to defaults.
+pub fn project_root_markers_from_config(
+    config: &crate::config::ConfigLayerStack,
+) -> Vec<String> {
+    let merged = config.merge();
+    merged
+        .project_root_markers
+        .clone()
+        .unwrap_or_else(default_project_root_markers)
+}
+
+/// Find the project root by walking ancestors and checking for markers.
+pub fn find_project_root(cwd: &Path, project_root_markers: &[String]) -> PathBuf {
+    if project_root_markers.is_empty() {
+        return cwd.to_path_buf();
+    }
     for ancestor in cwd.ancestors() {
-        for marker in MARKERS {
+        for marker in project_root_markers {
             if ancestor.join(marker).exists() {
-                return Some(ancestor.to_path_buf());
+                return ancestor.to_path_buf();
             }
         }
     }
-    None
+    cwd.to_path_buf()
+}
+
+fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
+    let mut seen = HashSet::new();
+    roots.retain(|r| seen.insert(r.path.clone()));
 }
 
 // ── BFS discovery ────────────────────────────────────────────────────────────

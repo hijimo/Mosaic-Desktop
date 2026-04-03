@@ -49,10 +49,9 @@ pub struct MacOsSkillPermissions {
 
 /// Compile a skill's `permission_profile` field into a [`SkillPermissions`].
 ///
-/// Currently supports string-based profiles ("network", "read-only", "elevated")
-/// as a simplified mapping. The source project uses a full structured
-/// `PermissionProfile` with `file_system.read/write` paths and macOS seatbelt
-/// extensions.
+/// This is the Mosaic equivalent of codex-main's `compile_permission_profile(Option<PermissionProfile>)`.
+/// Since Mosaic uses string-based profiles rather than structured `PermissionProfile`,
+/// this maps known profile names to permission structures.
 pub fn compile_skill_permissions(skill: &SkillMetadata) -> Option<SkillPermissions> {
     let profile = skill.permission_profile.as_deref()?;
     match profile {
@@ -69,6 +68,65 @@ pub fn compile_skill_permissions(skill: &SkillMetadata) -> Option<SkillPermissio
             tracing::warn!("unknown skill permission profile: {profile}");
             None
         }
+    }
+}
+
+/// Alias matching codex-main's function name.
+pub fn compile_permission_profile(skill: &SkillMetadata) -> Option<SkillPermissions> {
+    compile_skill_permissions(skill)
+}
+
+/// Build macOS seatbelt profile extensions from a skill's macOS permissions.
+///
+/// Matches codex-main's `build_macos_seatbelt_profile_extensions(&MacOsPermissions)`.
+/// Returns `None` on non-macOS platforms.
+pub fn build_macos_seatbelt_profile_extensions(
+    macos: &MacOsSkillPermissions,
+) -> Option<MacOsSkillPermissions> {
+    if macos == &MacOsSkillPermissions::default() {
+        return None;
+    }
+    Some(macos.clone())
+}
+
+/// Resolve macOS preferences permission from a string value.
+///
+/// Matches codex-main's `resolve_macos_preferences_permission(Option<&MacOsPreferencesValue>, default)`.
+pub fn resolve_macos_preferences_permission(
+    value: Option<&str>,
+    default: Option<String>,
+) -> Option<String> {
+    match value {
+        Some("true") | Some("readonly") | Some("read-only") => Some("readonly".to_string()),
+        Some("false") => None,
+        Some("readwrite") | Some("read-write") => Some("readwrite".to_string()),
+        Some(other) => {
+            tracing::warn!(
+                "ignoring permissions.macos.preferences: expected true/false, readonly, or readwrite, got {other}"
+            );
+            default
+        }
+        None => default,
+    }
+}
+
+/// Resolve macOS automation permission from a value.
+///
+/// Matches codex-main's `resolve_macos_automation_permission(Option<&MacOsAutomationValue>, default)`.
+pub fn resolve_macos_automation_permission(
+    value: Option<&[String]>,
+    default: Vec<String>,
+) -> Vec<String> {
+    match value {
+        Some(bundle_ids) if !bundle_ids.is_empty() => {
+            bundle_ids
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
+        Some(_) => Vec::new(),
+        None => default,
     }
 }
 

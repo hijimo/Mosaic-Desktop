@@ -87,6 +87,35 @@ impl SkillsManager {
         info!("skills cache cleared ({count} entries)");
     }
 
+    /// Load skills for an already-constructed config, avoiding additional config-layer loading.
+    /// This also seeds the per-cwd cache for subsequent lookups.
+    ///
+    /// Matches codex-main's `skills_for_config(&Config)`.
+    pub fn skills_for_config(
+        &self,
+        config: &crate::config::ConfigLayerStack,
+        cwd: &Path,
+    ) -> SkillLoadOutcome {
+        if let Some(cached) = self.cached(cwd) {
+            return cached;
+        }
+        let roots = self.skill_roots_for_config(config, cwd);
+        let outcome = finalize_outcome_with_config(load_skills_from_roots(roots), config);
+        self.store(cwd, outcome.clone());
+        outcome
+    }
+
+    /// Extract skill roots from a config layer stack.
+    ///
+    /// Matches codex-main's `skill_roots_for_config(&Config)`.
+    pub fn skill_roots_for_config(
+        &self,
+        config: &crate::config::ConfigLayerStack,
+        cwd: &Path,
+    ) -> Vec<SkillRoot> {
+        super::loader::skill_roots_from_config_layer_stack(config, cwd)
+    }
+
     /// Apply disabled paths to an existing outcome.
     pub fn apply_disabled_paths(&self, outcome: &mut SkillLoadOutcome, disabled: HashSet<PathBuf>) {
         outcome.disabled_paths = disabled;
@@ -112,6 +141,60 @@ fn finalize_outcome(mut outcome: SkillLoadOutcome) -> SkillLoadOutcome {
     outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts);
     outcome.implicit_skills_by_doc_path = Arc::new(by_doc);
     outcome
+}
+
+/// Finalize with config-driven disabled paths.
+///
+/// Matches codex-main's `finalize_skill_outcome(outcome, config_layer_stack)`.
+fn finalize_outcome_with_config(
+    mut outcome: SkillLoadOutcome,
+    config: &crate::config::ConfigLayerStack,
+) -> SkillLoadOutcome {
+    outcome.disabled_paths = disabled_paths_from_config(config);
+    let implicit = outcome.allowed_skills_for_implicit_invocation();
+    let (by_scripts, by_doc) = build_implicit_skill_path_indexes(implicit);
+    outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts);
+    outcome.implicit_skills_by_doc_path = Arc::new(by_doc);
+    outcome
+}
+
+/// Extract disabled skill paths from a `ConfigLayerStack`.
+///
+/// Matches codex-main's `disabled_paths_from_stack(config_layer_stack)`.
+pub fn disabled_paths_from_config(
+    config: &crate::config::ConfigLayerStack,
+) -> HashSet<PathBuf> {
+    let merged = config.merge();
+    let mut disabled = HashSet::new();
+
+    // Parse skills config from the merged JSON value.
+    if let Some(ref skills_value) = merged.skills {
+        #[derive(serde::Deserialize)]
+        struct SkillsConfig {
+            #[serde(default)]
+            config: Vec<SkillConfigEntry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SkillConfigEntry {
+            path: PathBuf,
+            #[serde(default = "default_true")]
+            enabled: bool,
+        }
+        fn default_true() -> bool {
+            true
+        }
+
+        if let Ok(skills) = serde_json::from_value::<SkillsConfig>(skills_value.clone()) {
+            for entry in &skills.config {
+                if !entry.enabled {
+                    let path = dunce::canonicalize(&entry.path)
+                        .unwrap_or_else(|_| entry.path.clone());
+                    disabled.insert(path);
+                }
+            }
+        }
+    }
+    disabled
 }
 
 /// Build a set of disabled skill paths from a list of `(path, enabled)` entries.

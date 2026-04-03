@@ -95,6 +95,71 @@ pub fn resolve_dependencies(
     }
 }
 
+/// Resolve required dependency values for a turn, using a session-level cache
+/// and the OS environment. Missing values are collected for prompting.
+///
+/// Matches codex-main's `resolve_skill_dependencies_for_turn(sess, turn_context, dependencies)`.
+///
+/// - `dependency_env`: mutable session-level cache of resolved values.
+/// - `dependencies`: the env-var dependencies to resolve.
+/// - Returns the list of still-missing dependencies after resolution.
+pub async fn resolve_skill_dependencies_for_turn(
+    dependency_env: &tokio::sync::Mutex<HashMap<String, String>>,
+    dependencies: &[SkillDependencyInfo],
+) -> Vec<SkillDependencyInfo> {
+    if dependencies.is_empty() {
+        return Vec::new();
+    }
+
+    let existing = dependency_env.lock().await.clone();
+    let resolved = resolve_dependencies(dependencies, &existing);
+
+    if !resolved.loaded_from_env.is_empty() {
+        let mut env_cache = dependency_env.lock().await;
+        env_cache.extend(resolved.loaded_from_env);
+    }
+
+    resolved.missing
+}
+
+/// Build user-facing prompts for missing skill dependencies.
+///
+/// Matches codex-main's `request_skill_dependencies(sess, turn_context, dependencies)`.
+/// Returns a list of `(id, header, question, is_secret)` tuples suitable for
+/// presenting to the user via a UI prompt or elicitation request.
+pub fn request_skill_dependencies(
+    dependencies: &[SkillDependencyInfo],
+) -> Vec<(String, String, String, bool)> {
+    dependencies
+        .iter()
+        .map(|dep| {
+            let requirement = dep.description.as_ref().map_or_else(
+                || {
+                    format!(
+                        "The skill \"{}\" requires \"{}\" to be set.",
+                        dep.skill_name, dep.name
+                    )
+                },
+                |description| {
+                    format!(
+                        "The skill \"{}\" requires \"{}\" to be set ({}).",
+                        dep.skill_name, dep.name, description
+                    )
+                },
+            );
+            let question = format!(
+                "{requirement} This is an experimental internal feature. The value is stored in memory for this session only.",
+            );
+            (
+                dep.name.clone(),
+                "Skill requires environment variable".to_string(),
+                question,
+                true, // is_secret
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
