@@ -20,6 +20,7 @@ pub struct ThreadsPage {
     pub items: Vec<ThreadItem>,
     pub next_cursor: Option<Cursor>,
     pub num_scanned_files: usize,
+    pub reached_scan_cap: bool,
 }
 
 /// Summary for a single thread rollout file.
@@ -30,8 +31,13 @@ pub struct ThreadItem {
     pub first_user_message: Option<String>,
     pub cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
+    pub git_sha: Option<String>,
+    pub git_origin_url: Option<String>,
     pub source: Option<SessionSource>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
     pub model_provider: Option<String>,
+    pub cli_version: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -65,6 +71,54 @@ pub async fn get_threads(
 ) -> io::Result<ThreadsPage> {
     let root = mosaic_home.join(SESSIONS_SUBDIR);
     get_threads_in_root(root, page_size, cursor, sort_key, allowed_sources).await
+}
+
+/// List archived threads under `mosaic_home/archived_sessions/` with pagination.
+pub async fn list_archived_threads(
+    mosaic_home: &Path,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+) -> io::Result<ThreadsPage> {
+    let root = mosaic_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    get_threads_in_root(root, page_size, cursor, sort_key, allowed_sources).await
+}
+
+/// Find the newest recorded thread path, optionally filtering to a matching cwd.
+pub async fn find_latest_thread_path(
+    mosaic_home: &Path,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    filter_cwd: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
+    let mut current_cursor = cursor.cloned();
+    loop {
+        let page = get_threads(
+            mosaic_home,
+            page_size,
+            current_cursor.as_ref(),
+            sort_key,
+            allowed_sources,
+        )
+        .await?;
+
+        for item in &page.items {
+            if let Some(filter) = filter_cwd {
+                if item.cwd.as_deref() != Some(filter) {
+                    continue;
+                }
+            }
+            return Ok(Some(item.path.clone()));
+        }
+
+        current_cursor = page.next_cursor;
+        if current_cursor.is_none() {
+            return Ok(None);
+        }
+    }
 }
 
 /// List threads in a specific root directory.
@@ -132,10 +186,13 @@ pub async fn get_threads_in_root(
         None
     };
 
+    let reached_scan_cap = scanned >= MAX_SCAN_FILES;
+
     Ok(ThreadsPage {
         items,
         next_cursor,
         num_scanned_files: scanned,
+        reached_scan_cap,
     })
 }
 
@@ -200,8 +257,13 @@ async fn build_thread_item(path: &Path, allowed_sources: &[SessionSource]) -> Op
         first_user_message: summary.first_user_message,
         cwd: summary.cwd,
         git_branch: summary.git_branch,
+        git_sha: summary.git_sha,
+        git_origin_url: summary.git_origin_url,
         source: summary.source,
+        agent_nickname: summary.agent_nickname,
+        agent_role: summary.agent_role,
         model_provider: summary.model_provider,
+        cli_version: summary.cli_version,
         created_at,
         updated_at: updated_at_val,
     })
@@ -217,8 +279,13 @@ struct HeadTailSummary {
     first_user_message: Option<String>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    git_sha: Option<String>,
+    git_origin_url: Option<String>,
     source: Option<SessionSource>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
     model_provider: Option<String>,
+    cli_version: Option<String>,
     created_at: Option<String>,
 }
 
@@ -248,12 +315,18 @@ async fn read_head_summary(path: &Path) -> io::Result<HeadTailSummary> {
         match rollout_line.item {
             RolloutItem::SessionMeta(meta_line) => {
                 if !summary.saw_session_meta {
-                    summary.source = Some(meta_line.meta.source);
-                    summary.model_provider = meta_line.meta.model_provider;
-                    summary.thread_id = Some(meta_line.meta.id);
-                    summary.cwd = Some(meta_line.meta.cwd);
+                    summary.source = Some(meta_line.meta.source.clone());
+                    summary.model_provider = meta_line.meta.model_provider.clone();
+                    summary.thread_id = Some(meta_line.meta.id.clone());
+                    summary.cwd = Some(meta_line.meta.cwd.clone());
                     summary.git_branch = meta_line.git.as_ref().and_then(|g| g.branch.clone());
-                    summary.created_at = Some(meta_line.meta.timestamp);
+                    summary.git_sha = meta_line.git.as_ref().and_then(|g| g.commit_hash.clone());
+                    summary.git_origin_url =
+                        meta_line.git.as_ref().and_then(|g| g.repository_url.clone());
+                    summary.agent_nickname = meta_line.meta.agent_nickname.clone();
+                    summary.agent_role = meta_line.meta.agent_role.clone();
+                    summary.cli_version = Some(meta_line.meta.cli_version.clone());
+                    summary.created_at = Some(meta_line.meta.timestamp.clone());
                     summary.saw_session_meta = true;
                 }
             }

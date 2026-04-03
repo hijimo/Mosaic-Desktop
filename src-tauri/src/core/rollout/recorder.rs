@@ -26,6 +26,7 @@ pub struct RolloutRecorder {
     tx: mpsc::Sender<RolloutCmd>,
     pub rollout_path: PathBuf,
     event_persistence_mode: EventPersistenceMode,
+    state_db: Option<crate::core::state_db::StateDb>,
 }
 
 /// Parameters for creating or resuming a recorder.
@@ -294,7 +295,18 @@ impl RolloutRecorder {
             tx,
             rollout_path,
             event_persistence_mode: mode,
+            state_db: None,
         })
+    }
+
+    /// Get the state database handle, if available.
+    pub fn state_db(&self) -> Option<crate::core::state_db::StateDb> {
+        self.state_db.clone()
+    }
+
+    /// Set the state database handle.
+    pub fn set_state_db(&mut self, db: Option<crate::core::state_db::StateDb>) {
+        self.state_db = db;
     }
 
     /// Record items, filtering by persistence policy.
