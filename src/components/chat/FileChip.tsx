@@ -30,7 +30,7 @@ function getIcon(ext: string): React.ElementType {
 
 interface FileChipProps {
   file: AttachedFile;
-  onRemove: (id: string) => void;
+  onRemove?: (id: string) => void;
 }
 
 export function FileChip({ file, onRemove }: FileChipProps): React.ReactElement {
@@ -63,13 +63,15 @@ export function FileChip({ file, onRemove }: FileChipProps): React.ReactElement 
       >
         {file.name}
       </Typography>
-      <IconButton
-        size="small"
-        onClick={() => onRemove(file.id)}
-        sx={{ p: 0.25, ml: 0.5 }}
-      >
-        <X size={8} color="#41484e" />
-      </IconButton>
+      {onRemove && (
+        <IconButton
+          size="small"
+          onClick={() => onRemove(file.id)}
+          sx={{ p: 0.25, ml: 0.5 }}
+        >
+          <X size={8} color="#41484e" />
+        </IconButton>
+      )}
     </Box>
   );
 }

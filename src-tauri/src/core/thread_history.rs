@@ -114,6 +114,17 @@ impl ThreadHistoryBuilder {
                                     text_elements: vec![],
                                 })
                             }
+                            ContentItem::InputImage { image_url } => {
+                                if let Some(path) = image_url.strip_prefix("file://") {
+                                    Some(crate::protocol::types::UserInput::LocalImage {
+                                        path: std::path::PathBuf::from(path),
+                                    })
+                                } else {
+                                    Some(crate::protocol::types::UserInput::Image {
+                                        image_url: image_url.clone(),
+                                    })
+                                }
+                            }
                             _ => None,
                         })
                         .collect();

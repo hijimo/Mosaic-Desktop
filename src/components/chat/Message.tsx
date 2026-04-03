@@ -2,7 +2,6 @@ import { Box, Typography } from '@mui/material';
 import type {
   TurnItem,
   TurnGroup,
-  UserInput,
   ToolCallState,
   ApprovalRequestState,
   ClarificationState,
@@ -10,6 +9,7 @@ import type {
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
 import { StreamdownRenderer } from './shared/StreamdownRenderer';
+import { FileChip } from './FileChip';
 import { ThinkingPanel } from './agent/ThinkingPanel';
 import { WebSearchCard } from './agent/WebSearchCard';
 import { McpToolCallCard } from './agent/McpToolCallCard';
@@ -210,24 +210,35 @@ export function Message({
               boxShadow: '0px 1px 2px rgba(0,0,0,0.05)',
             }}
           >
-            {item.content
-              .filter(
-                (c): c is UserInput & { type: 'text' } => c.type === 'text',
-              )
-              .map((c, i) => (
-                <Typography
-                  key={i}
-                  sx={{
-                    fontSize: 14,
-                    fontWeight: 500,
-                    color: '#334155',
-                    lineHeight: '22.75px',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {c.text}
-                </Typography>
-              ))}
+            {item.content.map((c, i) => {
+              if (c.type === 'text') {
+                return (
+                  <Typography
+                    key={i}
+                    sx={{
+                      fontSize: 14,
+                      fontWeight: 500,
+                      color: '#334155',
+                      lineHeight: '22.75px',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {c.text}
+                  </Typography>
+                );
+              }
+              if (c.type === 'local_image') {
+                const name = c.path.split(/[\\/]/).pop() ?? c.path;
+                const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+                return (
+                  <FileChip
+                    key={i}
+                    file={{ id: `${item.id}-${i}`, name, path: c.path, ext }}
+                  />
+                );
+              }
+              return null;
+            })}
           </Box>
           <UserAvatar />
         </Box>

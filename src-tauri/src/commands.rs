@@ -239,8 +239,8 @@ pub async fn submit_op(
                         }
                     }
                     crate::protocol::types::UserInput::LocalImage { path } => {
-                        crate::protocol::types::ContentItem::InputText {
-                            text: format!("[image: {}]", path.display()),
+                        crate::protocol::types::ContentItem::InputImage {
+                            image_url: format!("file://{}", path.display()),
                         }
                     }
                     crate::protocol::types::UserInput::Skill { name, path } => {
