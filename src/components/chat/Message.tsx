@@ -1,4 +1,5 @@
 import { Box, Typography } from '@mui/material';
+import { useCallback } from 'react';
 import type {
   TurnItem,
   TurnGroup,
@@ -6,6 +7,8 @@ import type {
   ApprovalRequestState,
   ClarificationState,
 } from '@/types';
+import { useMessageStore } from '@/stores/messageStore';
+import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
 import { StreamdownRenderer } from './shared/StreamdownRenderer';
@@ -22,6 +25,7 @@ import { ErrorCard } from './ErrorCard';
 
 interface MessageProps {
   group: TurnGroup;
+  threadId?: string;
   toolCalls?: ToolCallState[];
   approvalRequests?: ApprovalRequestState[];
   clarifications?: ClarificationState[];
@@ -31,6 +35,7 @@ interface MessageProps {
 
 export function Message({
   group,
+  threadId,
   toolCalls,
   approvalRequests,
   clarifications,
@@ -38,6 +43,31 @@ export function Message({
   isStreaming,
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
+  const dismissTurnError = useMessageStore((s) => s.dismissTurnError);
+  const submitOp = useSubmitOp();
+
+  const handleRetry = useCallback(async () => {
+    if (!threadId) return;
+    // 提取失败 turn 中的 user message items
+    const userMsg = items.find((i): i is TurnItem & { type: 'UserMessage' } => i.type === 'UserMessage');
+    if (!userMsg) return;
+    // 清除当前 turn 的 error，让新的 streaming 渲染到这个位置
+    dismissTurnError(threadId, group.turn_id);
+    // 重新提交
+    await submitOp(threadId, {
+      type: 'user_turn',
+      items: userMsg.content,
+      cwd: '.',
+      model: '',
+      approval_policy: 'on-request',
+      sandbox_policy: { type: 'danger-full-access' },
+    });
+  }, [threadId, group.turn_id, items, dismissTurnError, submitOp]);
+
+  const handleDismiss = useCallback(() => {
+    if (!threadId) return;
+    dismissTurnError(threadId, group.turn_id);
+  }, [threadId, group.turn_id, dismissTurnError]);
   const hasExternalAgentContent = Boolean(
     toolCalls?.length || approvalRequests?.length || clarifications?.length || isStreaming,
   );
@@ -333,7 +363,11 @@ export function Message({
             ) : null}
 
             {group.error && (
-              <ErrorCard message={group.error.message} />
+              <ErrorCard
+                message={group.error.message}
+                onRetry={handleRetry}
+                onDismiss={handleDismiss}
+              />
             )}
           </Box>
         </Box>

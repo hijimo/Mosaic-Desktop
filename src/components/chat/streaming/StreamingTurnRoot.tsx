@@ -81,6 +81,7 @@ export function StreamingTurnRoot({
         <Message
           key={`${group.turn_id}-${index}`}
           group={group}
+          threadId={threadId}
           onApprovalDecision={onApprovalDecision}
         />
       ))}
@@ -88,6 +89,7 @@ export function StreamingTurnRoot({
       {isStreaming && streamingGroup ? (
         <Message
           group={streamingGroup}
+          threadId={threadId}
           toolCalls={activeToolCalls.filter((toolCall) => toolCall.type === 'patch')}
           approvalRequests={approvals}
           clarifications={clarifications}

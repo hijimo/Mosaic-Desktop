@@ -1,11 +1,11 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import errorAlertIcon from '@/assets/icons/error-alert.svg';
 import retryIcon from '@/assets/icons/retry.svg';
 
 interface ErrorCardProps {
   message: string;
-  onRetry?: () => void;
-  onDismiss?: () => void;
+  onRetry: () => void;
+  onDismiss: () => void;
 }
 
 export function ErrorCard({ message, onRetry, onDismiss }: ErrorCardProps): React.ReactElement {
@@ -42,40 +42,44 @@ export function ErrorCard({ message, onRetry, onDismiss }: ErrorCardProps): Reac
             {message}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, pt: 1.5 }}>
-            <Box
+            <Button
+              variant="contained"
+              size="small"
               onClick={onRetry}
+              startIcon={<Box component="img" src={retryIcon} alt="" sx={{ width: 8, height: 8 }} />}
               sx={{
                 bgcolor: '#dc2626',
                 borderRadius: 1,
                 px: 2,
                 py: '6.5px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                textTransform: 'none',
                 boxShadow: '0px 1px 2px rgba(0,0,0,0.05)',
+                '&:hover': { bgcolor: '#b91c1c' },
               }}
             >
-              <Box component="img" src={retryIcon} alt="" sx={{ width: 8, height: 8 }} />
-              <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#fff', lineHeight: '16px' }}>
-                重新生成
-              </Typography>
-            </Box>
-            <Box
+              重新生成
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
               onClick={onDismiss}
               sx={{
                 bgcolor: '#fff',
-                border: '1px solid #fecaca',
+                borderColor: '#fecaca',
                 borderRadius: 1,
                 px: 2,
                 py: '7px',
-                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#b91c1c',
+                textTransform: 'none',
+                '&:hover': { bgcolor: '#fef2f2', borderColor: '#fca5a5' },
               }}
             >
-              <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#b91c1c', lineHeight: '16px' }}>
-                忽略
-              </Typography>
-            </Box>
+              忽略
+            </Button>
           </Box>
         </Box>
       </Box>

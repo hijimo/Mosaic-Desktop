@@ -68,6 +68,7 @@ interface MessageState {
 
   appendMessage: (threadId: string, turnId: string, item: TurnItem) => void;
   setMessages: (threadId: string, groups: TurnGroup[]) => void;
+  dismissTurnError: (threadId: string, turnId: string) => void;
   startStreaming: (turnId: string) => void;
   stopStreaming: () => void;
   clearThread: (threadId: string) => void;
@@ -102,6 +103,22 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     set((state) => {
       const next = new Map(state.messagesByThread);
       next.set(threadId, groups);
+      return { messagesByThread: next };
+    }),
+
+  dismissTurnError: (threadId, turnId) =>
+    set((state) => {
+      const groups = state.messagesByThread.get(threadId);
+      if (!groups) return state;
+      const next = new Map(state.messagesByThread);
+      next.set(
+        threadId,
+        groups.map((g) =>
+          g.turn_id === turnId
+            ? { ...g, error: undefined, status: 'Completed' as const }
+            : g,
+        ),
+      );
       return { messagesByThread: next };
     }),
 
