@@ -49,6 +49,7 @@ export function ErrorCard({ message, onRetry, onDismiss }: ErrorCardProps): Reac
               startIcon={<Box component="img" src={retryIcon} alt="" sx={{ width: 8, height: 8 }} />}
               sx={{
                 bgcolor: '#dc2626',
+                color: '#fff',
                 borderRadius: 1,
                 px: 2,
                 py: '6.5px',
