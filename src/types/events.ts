@@ -273,7 +273,7 @@ export type TurnItem =
 export interface TurnGroup {
   turn_id: string;
   items: TurnItem[];
-  status?: "Completed" | "Interrupted" | "Failed" | "InProgress";
+  status?: "Completed" | "Interrupted" | "Failed" | "InProgress" | "Dismissed";
   error?: { message: string; codex_error_info?: string };
 }
 

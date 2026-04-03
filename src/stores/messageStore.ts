@@ -115,7 +115,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
         threadId,
         groups.map((g) =>
           g.turn_id === turnId
-            ? { ...g, error: undefined, status: 'Completed' as const }
+            ? { ...g, status: 'Dismissed' as const }
             : g,
         ),
       );

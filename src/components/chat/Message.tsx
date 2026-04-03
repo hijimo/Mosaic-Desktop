@@ -9,6 +9,7 @@ import type {
 } from '@/types';
 import { useMessageStore } from '@/stores/messageStore';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
+import { useThread } from '@/hooks/useThread';
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
 import { StreamdownRenderer } from './shared/StreamdownRenderer';
@@ -44,25 +45,38 @@ export function Message({
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
   const dismissTurnError = useMessageStore((s) => s.dismissTurnError);
+  const allGroups = useMessageStore((s) => threadId ? s.messagesByThread.get(threadId) ?? [] : []);
   const submitOp = useSubmitOp();
+  const { resumeThread } = useThread();
 
   const handleRetry = useCallback(async () => {
     if (!threadId) return;
-    // 提取失败 turn 中的 user message items
-    const userMsg = items.find((i): i is TurnItem & { type: 'UserMessage' } => i.type === 'UserMessage');
-    if (!userMsg) return;
-    // 清除当前 turn 的 error，让新的 streaming 渲染到这个位置
-    dismissTurnError(threadId, group.turn_id);
-    // 重新提交
+    // 找到当前 failed turn 前面的 turn group 中的 UserMessage
+    const idx = allGroups.findIndex((g) => g.turn_id === group.turn_id);
+    let userContent: import('@/types').UserInput[] | undefined;
+    // 先在当前 turn 找，再往前找
+    for (let i = idx; i >= 0; i--) {
+      const um = allGroups[i].items.find(
+        (it): it is TurnItem & { type: 'UserMessage' } => it.type === 'UserMessage',
+      );
+      if (um) { userContent = um.content; break; }
+    }
+    if (!userContent) return;
+
+    // 1. resume thread 引擎
+    await resumeThread(threadId);
+    // 2. rollback 失败的 turn
+    await submitOp(threadId, { type: 'thread_rollback', num_turns: 1 });
+    // 3. 重新提交用户消息
     await submitOp(threadId, {
       type: 'user_turn',
-      items: userMsg.content,
+      items: userContent,
       cwd: '.',
       model: '',
       approval_policy: 'on-request',
       sandbox_policy: { type: 'danger-full-access' },
     });
-  }, [threadId, group.turn_id, items, dismissTurnError, submitOp]);
+  }, [threadId, group.turn_id, allGroups, resumeThread, submitOp]);
 
   const handleDismiss = useCallback(() => {
     if (!threadId) return;
@@ -71,7 +85,7 @@ export function Message({
   const hasExternalAgentContent = Boolean(
     toolCalls?.length || approvalRequests?.length || clarifications?.length || isStreaming,
   );
-  if (items.length === 0 && !hasExternalAgentContent && !group.error) return null;
+  if (items.length === 0 && !hasExternalAgentContent && !group.error && group.status !== 'Dismissed') return null;
 
   // Separate user messages and agent-side items
   const userItems = items.filter(
@@ -89,7 +103,8 @@ export function Message({
     Boolean(approvalRequests?.length) ||
     Boolean(clarifications?.length) ||
     shouldRenderStreamingPlaceholder ||
-    Boolean(group.error);
+    Boolean(group.error) ||
+    group.status === 'Dismissed';
 
   const renderAgentItem = (item: Exclude<TurnItem, { type: 'UserMessage' }>): React.ReactNode => {
     switch (item.type) {
@@ -362,12 +377,17 @@ export function Message({
               />
             ) : null}
 
-            {group.error && (
+            {group.error && group.status === 'Failed' && (
               <ErrorCard
                 message={group.error.message}
                 onRetry={handleRetry}
                 onDismiss={handleDismiss}
               />
+            )}
+            {group.status === 'Dismissed' && (
+              <Typography sx={{ fontSize: 12, color: '#991b1b', fontStyle: 'italic' }}>
+                该消息已被忽略
+              </Typography>
             )}
           </Box>
         </Box>
