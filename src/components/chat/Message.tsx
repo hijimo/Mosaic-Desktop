@@ -10,6 +10,7 @@ import type {
 import { useMessageStore } from '@/stores/messageStore';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { useThread } from '@/hooks/useThread';
+import { dismissTurnError as dismissTurnErrorApi } from '@/services/api';
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
 import { StreamdownRenderer } from './shared/StreamdownRenderer';
@@ -78,8 +79,9 @@ export function Message({
     });
   }, [threadId, group.turn_id, allGroups, resumeThread, submitOp]);
 
-  const handleDismiss = useCallback(() => {
+  const handleDismiss = useCallback(async () => {
     if (!threadId) return;
+    await dismissTurnErrorApi(threadId, group.turn_id);
     dismissTurnError(threadId, group.turn_id);
   }, [threadId, group.turn_id, dismissTurnError]);
   const hasExternalAgentContent = Boolean(

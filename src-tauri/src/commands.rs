@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -937,6 +938,52 @@ pub async fn pick_files(app: AppHandle, filters: Option<Vec<String>>) -> Result<
     }
     let picked = builder.blocking_pick_files();
     Ok(picked.unwrap_or_default().into_iter().map(|p| p.to_string()).collect())
+}
+
+/// Dismiss a failed turn's error, persisting the status to the rollout file.
+#[tauri::command]
+pub async fn dismiss_turn_error(
+    state: State<'_, AppState>,
+    thread_id: String,
+    turn_id: String,
+) -> Result<(), String> {
+    let marker = crate::protocol::types::ResponseItem::Message {
+        id: Some(format!("dismiss-{turn_id}")),
+        role: "system".into(),
+        content: vec![crate::protocol::types::ContentItem::InputText {
+            text: format!("[turn_dismissed:{turn_id}]"),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    let rollout_item = crate::core::rollout::policy::RolloutItem::ResponseItem(marker);
+
+    // Try recorder first (active session)
+    if let Some(recorder) = state.recorders.lock().await.get(&thread_id) {
+        let _ = recorder.record_items(&[rollout_item]).await;
+        return Ok(());
+    }
+
+    // Fallback: append directly to rollout file
+    let persisted = state
+        .db
+        .get_thread(&thread_id)
+        .await
+        .ok_or_else(|| format!("thread not found: {thread_id}"))?;
+    let path = persisted
+        .rollout_path
+        .ok_or_else(|| format!("no rollout path for thread: {thread_id}"))?;
+    let line = serde_json::to_string(&rollout_item)
+        .map_err(|e| format!("serialize failed: {e}"))?;
+    tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .await
+        .map_err(|e| format!("open rollout failed: {e}"))?
+        .write_all(format!("\n{line}").as_bytes())
+        .await
+        .map_err(|e| format!("write rollout failed: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]

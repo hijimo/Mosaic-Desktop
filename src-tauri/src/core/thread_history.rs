@@ -31,6 +31,7 @@ pub enum TurnStatus {
     Interrupted,
     Failed,
     InProgress,
+    Dismissed,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -172,6 +173,24 @@ impl ThreadHistoryBuilder {
                                 content: vec![AgentMessageContent::Text { text }],
                                 phase: phase.clone(),
                             }));
+                    }
+                } else if role == "system" {
+                    // Detect dismiss marker: [turn_dismissed:<turn_id>]
+                    if let Some(ContentItem::InputText { text }) = content.first() {
+                        if let Some(dismissed_turn_id) = text.strip_prefix("[turn_dismissed:") {
+                            let dismissed_turn_id = dismissed_turn_id.trim_end_matches(']');
+                            // Find the matching turn and mark it Dismissed
+                            for turn in &mut self.turns {
+                                if turn.turn_id == dismissed_turn_id {
+                                    turn.status = TurnStatus::Dismissed;
+                                }
+                            }
+                            if let Some(ref mut current) = self.current_turn {
+                                if current.id == dismissed_turn_id {
+                                    current.status = TurnStatus::Dismissed;
+                                }
+                            }
+                        }
                     }
                 }
             }

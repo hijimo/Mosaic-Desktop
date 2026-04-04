@@ -51,6 +51,10 @@ export async function pickFiles(filters?: string[]): Promise<string[]> {
   return invoke<string[]>('pick_files', { filters });
 }
 
+export async function dismissTurnError(threadId: string, turnId: string): Promise<void> {
+  return invoke<void>('dismiss_turn_error', { threadId, turnId });
+}
+
 export async function getConfig(): Promise<unknown> {
   return invoke<unknown>('get_config');
 }

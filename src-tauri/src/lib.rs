@@ -146,6 +146,7 @@ pub fn run() {
             commands::list_cwds,
             commands::pick_folder,
             commands::pick_files,
+            commands::dismiss_turn_error,
             commands::share_message,
         ])
         .run(tauri::generate_context!())
