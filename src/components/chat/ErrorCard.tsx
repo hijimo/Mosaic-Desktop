@@ -1,14 +1,12 @@
 import { Box, Button, Typography } from '@mui/material';
 import errorAlertIcon from '@/assets/icons/error-alert.svg';
-import retryIcon from '@/assets/icons/retry.svg';
 
 interface ErrorCardProps {
   message: string;
-  onRetry: () => void;
   onDismiss: () => void;
 }
 
-export function ErrorCard({ message, onRetry, onDismiss }: ErrorCardProps): React.ReactElement {
+export function ErrorCard({ message, onDismiss }: ErrorCardProps): React.ReactElement {
   return (
     <Box
       sx={{
@@ -42,26 +40,6 @@ export function ErrorCard({ message, onRetry, onDismiss }: ErrorCardProps): Reac
             {message}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, pt: 1.5 }}>
-            <Button
-              variant="contained"
-              size="small"
-              onClick={onRetry}
-              startIcon={<Box component="img" src={retryIcon} alt="" sx={{ width: 8, height: 8 }} />}
-              sx={{
-                bgcolor: '#dc2626',
-                color: '#fff',
-                borderRadius: 1,
-                px: 2,
-                py: '6.5px',
-                fontSize: 12,
-                fontWeight: 600,
-                textTransform: 'none',
-                boxShadow: '0px 1px 2px rgba(0,0,0,0.05)',
-                '&:hover': { bgcolor: '#b91c1c' },
-              }}
-            >
-              重新生成
-            </Button>
             <Button
               variant="outlined"
               size="small"

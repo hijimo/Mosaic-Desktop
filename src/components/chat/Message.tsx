@@ -8,8 +8,6 @@ import type {
   ClarificationState,
 } from '@/types';
 import { useMessageStore } from '@/stores/messageStore';
-import { useSubmitOp } from '@/hooks/useSubmitOp';
-import { useThread } from '@/hooks/useThread';
 import { dismissTurnError as dismissTurnErrorApi } from '@/services/api';
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
@@ -46,38 +44,6 @@ export function Message({
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
   const dismissTurnError = useMessageStore((s) => s.dismissTurnError);
-  const allGroups = useMessageStore((s) => threadId ? s.messagesByThread.get(threadId) ?? [] : []);
-  const submitOp = useSubmitOp();
-  const { resumeThread } = useThread();
-
-  const handleRetry = useCallback(async () => {
-    if (!threadId) return;
-    // 找到当前 failed turn 前面的 turn group 中的 UserMessage
-    const idx = allGroups.findIndex((g) => g.turn_id === group.turn_id);
-    let userContent: import('@/types').UserInput[] | undefined;
-    // 先在当前 turn 找，再往前找
-    for (let i = idx; i >= 0; i--) {
-      const um = allGroups[i].items.find(
-        (it): it is TurnItem & { type: 'UserMessage' } => it.type === 'UserMessage',
-      );
-      if (um) { userContent = um.content; break; }
-    }
-    if (!userContent) return;
-
-    // 1. resume thread 引擎
-    await resumeThread(threadId);
-    // 2. rollback 失败的 turn
-    await submitOp(threadId, { type: 'thread_rollback', num_turns: 1 });
-    // 3. 重新提交用户消息
-    await submitOp(threadId, {
-      type: 'user_turn',
-      items: userContent,
-      cwd: '.',
-      model: '',
-      approval_policy: 'on-request',
-      sandbox_policy: { type: 'danger-full-access' },
-    });
-  }, [threadId, group.turn_id, allGroups, resumeThread, submitOp]);
 
   const handleDismiss = useCallback(async () => {
     if (!threadId) return;
@@ -382,7 +348,6 @@ export function Message({
             {group.error && group.status === 'Failed' && (
               <ErrorCard
                 message={group.error.message}
-                onRetry={handleRetry}
                 onDismiss={handleDismiss}
               />
             )}
