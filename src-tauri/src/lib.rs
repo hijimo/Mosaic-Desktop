@@ -70,11 +70,11 @@ pub fn run() {
         let path = std::path::Path::new(&home).join(".codex/config.toml");
         if let Ok(content) = std::fs::read_to_string(&path) {
             // Strip sections that cause parse errors (e.g. shell_environment_policy
-            // with scalar value instead of expected array, mcp_servers with inline tables)
+            // with scalar value instead of expected array)
             let mut skip = false;
             let mut cleaned = Vec::new();
             for line in content.lines() {
-                if line.starts_with("[shell_environment_policy") || line.starts_with("[mcp_servers")
+                if line.starts_with("[shell_environment_policy")
                 {
                     skip = true;
                     continue;
@@ -82,7 +82,6 @@ pub fn run() {
                 if skip {
                     if line.starts_with('[')
                         && !line.starts_with("[shell_environment_policy")
-                        && !line.starts_with("[mcp_servers")
                     {
                         skip = false;
                     } else {

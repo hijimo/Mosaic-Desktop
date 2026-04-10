@@ -6,6 +6,7 @@ mod heuristics;
 mod manager;
 
 pub use heuristics::render_decision_for_unmatched_command;
+pub use bash::parse_shell_lc_plain_commands as bash_parse_shell_lc_plain_commands;
 pub use manager::{
     collect_policy_files, load_exec_policy, ExecApprovalRequirement, ExecPolicyError,
     ExecPolicyManager, ExecPolicyUpdateError,

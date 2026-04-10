@@ -1,5 +1,5 @@
 pub mod auth_status;
-mod logging_client_handler;
+pub mod logging_client_handler;
 pub mod oauth;
 pub mod perform_oauth_login;
 mod program_resolver;

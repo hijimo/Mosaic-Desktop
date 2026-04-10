@@ -51,7 +51,7 @@ pub struct SandboxState {
     pub sandbox_policy: SandboxPolicy,
 }
 
-type RmcpClient = RunningService<RoleClient, ()>;
+type RmcpClient = RunningService<RoleClient, crate::rmcp_client::logging_client_handler::LoggingClientHandler>;
 
 struct McpConnection {
     state: McpConnectionState,
@@ -61,10 +61,12 @@ struct McpConnection {
     tool_timeout: Duration,
 }
 
+#[derive(Clone)]
 pub struct McpConnectionManager {
     connections: Arc<Mutex<HashMap<String, McpConnection>>>,
     tx_event: Option<async_channel::Sender<Event>>,
     next_event_id: Arc<Mutex<u64>>,
+    elicitation_requests: Arc<Mutex<HashMap<(String, String), tokio::sync::oneshot::Sender<crate::rmcp_client::ElicitationResponse>>>>,
 }
 
 impl McpConnectionManager {
@@ -73,6 +75,7 @@ impl McpConnectionManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             tx_event: None,
             next_event_id: Arc::new(Mutex::new(1)),
+            elicitation_requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -81,7 +84,95 @@ impl McpConnectionManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             tx_event: Some(tx_event),
             next_event_id: Arc::new(Mutex::new(1)),
+            elicitation_requests: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Resolve a pending MCP elicitation request.
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        request_id: String,
+        response: crate::rmcp_client::ElicitationResponse,
+    ) -> anyhow::Result<()> {
+        self.elicitation_requests
+            .lock()
+            .await
+            .remove(&(server_name, request_id))
+            .ok_or_else(|| anyhow::anyhow!("elicitation request not found"))?
+            .send(response)
+            .map_err(|_| anyhow::anyhow!("failed to send elicitation response"))
+    }
+
+    /// Clear all pending elicitation requests (called on turn interrupt).
+    pub async fn clear_pending_elicitations(&self) {
+        self.elicitation_requests.lock().await.clear();
+    }
+
+    /// Create a `SendElicitation` closure for a specific MCP server.
+    pub fn make_send_elicitation(
+        &self,
+        server_name: String,
+    ) -> crate::rmcp_client::SendElicitation {
+        let requests = self.elicitation_requests.clone();
+        let tx_event = self.tx_event.clone();
+
+        Box::new(move |request_id, elicitation| {
+            let requests = requests.clone();
+            let server_name = server_name.clone();
+            let tx_event = tx_event.clone();
+
+            Box::pin(async move {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let request_id_str = format!("{request_id}");
+
+                {
+                    let mut lock = requests.lock().await;
+                    lock.insert((server_name.clone(), request_id_str.clone()), tx);
+                }
+
+                // Extract fields from elicitation params by mode
+                let (mode, message, schema, url) = match &elicitation {
+                    rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                        message, requested_schema, ..
+                    } => (
+                        "form".to_string(),
+                        message.clone(),
+                        serde_json::to_value(requested_schema).ok(),
+                        None,
+                    ),
+                    rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                        message, url, ..
+                    } => (
+                        "url".to_string(),
+                        message.clone(),
+                        None,
+                        Some(url.clone()),
+                    ),
+                };
+
+                if let Some(tx_event) = &tx_event {
+                    let _ = tx_event
+                        .send(Event {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            msg: EventMsg::ElicitationRequest(
+                                crate::protocol::event::ElicitationRequestEvent {
+                                    server_name,
+                                    request_id: request_id_str,
+                                    message,
+                                    mode: Some(mode),
+                                    schema,
+                                    url,
+                                },
+                            ),
+                        })
+                        .await;
+                }
+
+                rx.await
+                    .map_err(|_| anyhow::anyhow!("elicitation channel closed"))
+            })
+        })
     }
 
     pub async fn connect(
@@ -410,9 +501,17 @@ impl McpConnectionManager {
 
     async fn build_client(
         &self,
-        _server_name: &str,
+        server_name: &str,
         transport: &McpServerTransportConfig,
     ) -> Result<RmcpClient, CodexError> {
+        let send_elicitation = self.make_send_elicitation(server_name.to_string());
+        let client_info = rmcp::model::ClientInfo::default();
+        let handler =
+            crate::rmcp_client::logging_client_handler::LoggingClientHandler::new(
+                client_info,
+                send_elicitation,
+            );
+
         match transport {
             McpServerTransportConfig::Stdio { command, args, env } => {
                 let mut cmd = Command::new(command);
@@ -423,7 +522,7 @@ impl McpConnectionManager {
                         format!("spawn failed: {e}"),
                     )
                 })?;
-                serve_client((), transport).await.map_err(|e| {
+                serve_client(handler, transport).await.map_err(|e| {
                     CodexError::new(
                         ErrorCode::McpServerUnavailable,
                         format!("MCP init failed: {e}"),
@@ -437,13 +536,11 @@ impl McpConnectionManager {
                 ..
             } => {
                 let mut config = StreamableHttpClientTransportConfig::with_uri(url.clone());
-                // Resolve bearer token from env var.
                 if let Some(env_var) = bearer_token_env_var {
                     if let Ok(token) = std::env::var(env_var) {
                         config = config.auth_header(format!("Bearer {token}"));
                     }
                 }
-                // Apply explicit auth header if present.
                 if let Some(headers) = http_headers {
                     if let Some(auth) = headers
                         .get("Authorization")
@@ -453,7 +550,7 @@ impl McpConnectionManager {
                     }
                 }
                 let transport = StreamableHttpClientTransport::from_config(config);
-                serve_client((), transport).await.map_err(|e| {
+                serve_client(handler, transport).await.map_err(|e| {
                     CodexError::new(
                         ErrorCode::McpServerUnavailable,
                         format!("MCP init failed: {e}"),

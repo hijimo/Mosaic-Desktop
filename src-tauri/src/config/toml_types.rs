@@ -373,6 +373,17 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             args: Vec<String>,
             #[serde(default)]
             env: HashMap<String, String>,
+            // Inline streamable-http fields (when type = "streamable-http" or "http")
+            #[serde(default, rename = "type")]
+            transport_type: Option<String>,
+            #[serde(default)]
+            url: Option<String>,
+            #[serde(default)]
+            bearer_token_env_var: Option<String>,
+            #[serde(default)]
+            http_headers: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_http_headers: Option<HashMap<String, String>>,
             #[serde(default = "default_true")]
             enabled: bool,
             #[serde(default)]
@@ -402,9 +413,22 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 env: compat.env,
             },
             (None, None) => {
-                return Err(de::Error::custom(
-                    "missing MCP server transport: expected `transport` or legacy `command`",
-                ));
+                // Check for inline streamable-http format: type + url
+                match (compat.transport_type.as_deref(), compat.url) {
+                    (Some("streamable-http" | "http"), Some(url)) => {
+                        McpServerTransportConfig::StreamableHttp {
+                            url,
+                            bearer_token_env_var: compat.bearer_token_env_var,
+                            http_headers: compat.http_headers,
+                            env_http_headers: compat.env_http_headers,
+                        }
+                    }
+                    _ => {
+                        return Err(de::Error::custom(
+                            "missing MCP server transport: expected `transport`, `command`, or `type`+`url`",
+                        ));
+                    }
+                }
             }
         };
 

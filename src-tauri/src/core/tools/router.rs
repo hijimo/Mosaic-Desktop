@@ -50,11 +50,11 @@ impl ToolRouter {
         }
     }
 
-    pub fn from_config(config: ToolsConfig, has_agent_control: bool) -> Self {
+    pub fn from_config(config: ToolsConfig, has_agent_control: bool, mcp_manager: McpConnectionManager) -> Self {
         let assembled = build_specs(&config, has_agent_control);
         Self {
             registry: assembled.registry,
-            mcp_manager: McpConnectionManager::new(),
+            mcp_manager,
             dynamic_tools: HashMap::new(),
             configured_specs: assembled.configured_specs,
         }
@@ -73,21 +73,8 @@ impl ToolRouter {
 
         // 2. Try MCP tool (format: mcp__{server}__{tool})
         if let Some((server, tool)) = parse_mcp_tool_name(tool_name) {
-            let mcp_kind = ToolKind::Mcp {
-                server: server.to_string(),
-                tool: tool.to_string(),
-            };
-            if self.registry.find(&mcp_kind).is_some() {
-                return RouteResult::Handled(self.registry.dispatch(&mcp_kind, args).await);
-            }
-            // Check if the MCP server is connected even without a registry entry
-            let connected = self.mcp_manager.connected_servers().await;
-            if connected.contains(&server.to_string()) {
-                return RouteResult::Handled(Err(CodexError::new(
-                    ErrorCode::ToolExecutionFailed,
-                    format!("MCP tool '{tool_name}' found on server '{server}' but call delegation is not yet implemented"),
-                )));
-            }
+            let result = self.mcp_manager.call_tool(server, tool, args).await;
+            return RouteResult::Handled(result);
         }
 
         // 3. Try dynamic tools — signal the caller to use the DynamicToolHandler protocol
@@ -410,7 +397,7 @@ mod tests {
     #[test]
     fn from_config_collects_stable_specs() {
         let config = crate::core::tools::spec::ToolsConfig::default();
-        let router = ToolRouter::from_config(config, false);
+        let router = ToolRouter::from_config(config, false, McpConnectionManager::new());
         let names: Vec<String> = router
             .configured_specs()
             .iter()
@@ -427,30 +414,27 @@ mod tests {
 
     #[test]
     fn list_all_tools_prefers_configured_specs_when_present() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: true,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: true,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let names: Vec<String> = router
             .list_all_tools()
             .into_iter()
@@ -464,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn from_config_router_still_routes_builtin_tools() {
         let router =
-            ToolRouter::from_config(crate::core::tools::spec::ToolsConfig::default(), false);
+            ToolRouter::from_config(crate::core::tools::spec::ToolsConfig::default(), false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "read_file",
@@ -477,30 +461,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_update_plan_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: true,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: true,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "update_plan",
@@ -524,30 +505,27 @@ mod tests {
         let image_path = dir.path().join("fixture.png");
         std::fs::write(&image_path, b"png-bytes").unwrap();
 
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: true,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: true,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "view_image",
@@ -566,30 +544,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_request_user_input_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: true,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: true,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "request_user_input",
@@ -616,30 +591,27 @@ mod tests {
     #[tokio::test]
     async fn from_config_router_routes_shell_command_when_enabled() {
         let tempdir = tempfile::tempdir().unwrap();
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: true,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: true,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "shell_command",
@@ -661,30 +633,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_presentation_artifact_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: true,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: true,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "presentation_artifact",
@@ -707,30 +676,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_exec_command_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: true,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: true,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "exec_command",
@@ -755,30 +721,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_write_stdin_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: true,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: true,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "write_stdin",
@@ -799,30 +762,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_list_mcp_resources_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: true,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: true,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call("list_mcp_resources", serde_json::json!({}))
             .await;
@@ -838,30 +798,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_list_mcp_resource_templates_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: true,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: true,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call("list_mcp_resource_templates", serde_json::json!({}))
             .await;
@@ -879,30 +836,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_read_mcp_resource_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: true,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: true,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "read_mcp_resource",
@@ -924,30 +878,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_search_tool_bm25_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: true,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: true,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
         let result = router
             .route_tool_call(
                 "search_tool_bm25",
@@ -971,30 +922,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_js_repl_tools_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: true,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: true,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
 
         let repl_result = router
             .route_tool_call("js_repl", serde_json::json!({"code": "1 + 1"}))
@@ -1025,30 +973,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_test_sync_tool_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: true,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: true,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
 
         let result = router
             .route_tool_call(
@@ -1067,30 +1012,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_spawn_agents_on_csv_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: true,
-                agent_jobs_worker_enabled: true,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: true,
+            agent_jobs_worker_enabled: true,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
 
         let result = router
             .route_tool_call(
@@ -1118,30 +1060,27 @@ mod tests {
 
     #[tokio::test]
     async fn from_config_router_routes_report_agent_job_result_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: true,
-                agent_jobs_worker_enabled: true,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: None,
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: true,
+            agent_jobs_worker_enabled: true,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: None,
+        }, false, McpConnectionManager::new());
 
         let result = router
             .route_tool_call(
@@ -1167,30 +1106,27 @@ mod tests {
 
     #[test]
     fn from_config_collects_cached_web_search_spec_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: Some(crate::protocol::types::WebSearchMode::Cached),
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: Some(crate::protocol::types::WebSearchMode::Cached),
+        }, false, McpConnectionManager::new());
 
         let specs = router.collect_tool_specs();
         assert_eq!(specs.len(), 1);
@@ -1207,30 +1143,27 @@ mod tests {
 
     #[test]
     fn from_config_collects_live_web_search_spec_when_enabled() {
-        let router = ToolRouter::from_config(
-            crate::core::tools::spec::ToolsConfig {
-                shell_enabled: false,
-                shell_command_enabled: false,
-                apply_patch_enabled: false,
-                list_dir_enabled: false,
-                read_file_enabled: false,
-                grep_files_enabled: false,
-                mcp_resources_enabled: false,
-                unified_exec_enabled: false,
-                update_plan_enabled: false,
-                view_image_enabled: false,
-                request_user_input_enabled: false,
-                js_repl_enabled: false,
-                test_sync_enabled: false,
-                agent_jobs_enabled: false,
-                agent_jobs_worker_enabled: false,
-                collab_tools: false,
-                search_tool: false,
-                presentation_artifact: false,
-                web_search_mode: Some(crate::protocol::types::WebSearchMode::Live),
-            },
-            false,
-        );
+        let router = ToolRouter::from_config(crate::core::tools::spec::ToolsConfig {
+            shell_enabled: false,
+            shell_command_enabled: false,
+            apply_patch_enabled: false,
+            list_dir_enabled: false,
+            read_file_enabled: false,
+            grep_files_enabled: false,
+            mcp_resources_enabled: false,
+            unified_exec_enabled: false,
+            update_plan_enabled: false,
+            view_image_enabled: false,
+            request_user_input_enabled: false,
+            js_repl_enabled: false,
+            test_sync_enabled: false,
+            agent_jobs_enabled: false,
+            agent_jobs_worker_enabled: false,
+            collab_tools: false,
+            search_tool: false,
+            presentation_artifact: false,
+            web_search_mode: Some(crate::protocol::types::WebSearchMode::Live),
+        }, false, McpConnectionManager::new());
 
         let specs = router.collect_tool_specs();
         assert_eq!(specs.len(), 1);
