@@ -263,7 +263,10 @@ impl ThreadHistoryBuilder {
             EventMsg::AgentReasoningRawContent(p) => self.handle_agent_reasoning_raw(p),
             EventMsg::WebSearchEnd(p) => self.handle_web_search_end(p),
             EventMsg::ExecCommandEnd(p) => self.handle_exec_command_end(p),
+            EventMsg::McpToolCallBegin(p) => self.handle_mcp_tool_call_begin(p),
             EventMsg::McpToolCallEnd(p) => self.handle_mcp_tool_call_end(p),
+            EventMsg::ElicitationRequest(p) => self.handle_elicitation_request(p),
+            EventMsg::ElicitationResponse(p) => self.handle_elicitation_response(p),
             EventMsg::PatchApplyEnd(p) => self.handle_patch_apply_end(p),
             EventMsg::ApplyPatchApprovalRequest(p) => self.handle_patch_approval(p),
             EventMsg::DynamicToolCallRequest(p) => self.handle_dynamic_request(p),
@@ -710,6 +713,20 @@ impl ThreadHistoryBuilder {
         self.upsert_item_in_turn_id(&p.turn_id, item);
     }
 
+    fn handle_mcp_tool_call_begin(&mut self, p: &crate::protocol::event::McpToolCallBeginEvent) {
+        let item = TurnItem::McpToolCall(McpToolCallItem {
+            id: p.call_id.clone(),
+            server: p.invocation.server.clone(),
+            tool: p.invocation.tool.clone(),
+            status: McpToolCallStatus::InProgress,
+            arguments: p.invocation.arguments.clone().unwrap_or(serde_json::Value::Null),
+            result: None,
+            error: None,
+            duration_ms: None,
+        });
+        self.upsert_item_in_current_turn(item);
+    }
+
     fn handle_mcp_tool_call_end(&mut self, p: &McpToolCallEndEvent) {
         let (status, result, error) = match &p.result {
             Ok(_) => (McpToolCallStatus::Completed, None, None),
@@ -737,6 +754,35 @@ impl ThreadHistoryBuilder {
             duration_ms,
         });
         self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_elicitation_request(&mut self, p: &crate::protocol::event::ElicitationRequestEvent) {
+        let item = TurnItem::Elicitation(ElicitationItem {
+            id: p.request_id.clone(),
+            server_name: p.server_name.clone(),
+            message: p.message.clone(),
+            mode: p.mode.clone(),
+            schema: p.schema.clone(),
+            url: p.url.clone(),
+            response_action: None,
+            response_content: None,
+        });
+        self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_elicitation_response(&mut self, p: &crate::protocol::event::ElicitationResponseEvent) {
+        // Find the matching Elicitation item by request_id and update it
+        if let Some(ct) = self.current_turn.as_mut() {
+            for item in ct.items.iter_mut() {
+                if let TurnItem::Elicitation(e) = item {
+                    if e.id == p.request_id && e.server_name == p.server_name {
+                        e.response_action = Some(p.action.clone());
+                        e.response_content = p.content.clone();
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     fn handle_patch_apply_end(&mut self, p: &PatchApplyEndEvent) {

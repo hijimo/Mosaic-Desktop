@@ -696,6 +696,7 @@ mod tests {
                         server_name,
                         request_id,
                         decision,
+                        content: None,
                     }
                 }),
             // DynamicToolResponse
@@ -1148,7 +1149,9 @@ mod tests {
                         server_name,
                         request_id,
                         message,
+                        mode: Some("form".to_string()),
                         schema,
+                        url: None,
                     })
                 }),
             // PatchApplyBegin
@@ -1391,6 +1394,169 @@ mod tests {
         #[test]
         fn response_input_item_roundtrip(v in arb_response_input_item()) {
             assert_roundtrip(&v);
+        }
+    }
+}
+
+#[cfg(test)]
+mod op_deser_tests {
+    use crate::protocol::submission::Op;
+
+    fn try_parse(label: &str, json: &str) {
+        match serde_json::from_str::<Op>(json) {
+            Ok(_) => eprintln!("  ✅ {label}"),
+            Err(e) => eprintln!("  ❌ {label}: {e}\n     JSON: {json}"),
+        }
+    }
+
+    #[test]
+    fn test_all_op_formats() {
+        eprintln!("\n=== Op deserialization tests ===\n");
+
+        try_parse("user_turn on-request", r#"{"type":"user_turn","items":[{"type":"text","text":"hi","text_elements":[]}],"cwd":".","model":"","approval_policy":"on-request","sandbox_policy":{"type":"danger-full-access"}}"#);
+
+        try_parse("user_turn untrusted", r#"{"type":"user_turn","items":[{"type":"text","text":"hi","text_elements":[]}],"cwd":".","model":"","approval_policy":"untrusted","sandbox_policy":{"type":"danger-full-access"}}"#);
+
+        try_parse("exec_approval approved", r#"{"type":"exec_approval","id":"c1","decision":"approved"}"#);
+
+        try_parse("exec_approval abort", r#"{"type":"exec_approval","id":"c1","decision":"abort"}"#);
+
+        try_parse("exec_approval approved_for_session", r#"{"type":"exec_approval","id":"c1","decision":"approved_for_session"}"#);
+
+        try_parse("exec_approval amendment", r#"{"type":"exec_approval","id":"c1","decision":{"approved_execpolicy_amendment":{"proposed_execpolicy_amendment":["cargo","test"]}}}"#);
+
+        try_parse("patch_approval approved", r#"{"type":"patch_approval","id":"p1","decision":"approved"}"#);
+
+        try_parse("resolve_elicitation", r#"{"type":"resolve_elicitation","server_name":"srv","request_id":"r1","decision":"accept"}"#);
+
+        try_parse("user_turn read-only", r#"{"type":"user_turn","items":[{"type":"text","text":"hi","text_elements":[]}],"cwd":".","model":"","approval_policy":"on-request","sandbox_policy":{"type":"read-only"}}"#);
+
+        eprintln!("\n=== Done ===\n");
+    }
+}
+
+#[cfg(test)]
+mod config_approval_test {
+    use crate::config::toml_types::ConfigToml;
+    use crate::protocol::types::AskForApproval;
+
+    #[test]
+    fn approval_policy_serialization() {
+        let mut config = ConfigToml::default();
+        config.approval_policy = Some(AskForApproval::UnlessTrusted);
+        let json = serde_json::to_value(&config).unwrap();
+        let ap = json.get("approval_policy").unwrap();
+        println!("[test] approval_policy JSON value: {ap}");
+        println!("[test] approval_policy JSON type: {:?}", ap);
+
+        // Also test what getConfig returns
+        let config2 = ConfigToml::default();
+        let json2 = serde_json::to_value(&config2).unwrap();
+        let ap2 = json2.get("approval_policy");
+        println!("[test] default approval_policy: {ap2:?}");
+    }
+}
+
+#[cfg(test)]
+mod config_load_test {
+    use crate::config::{deserialize_toml, ConfigLayerStack, ConfigLayer};
+
+    #[test]
+    fn load_user_config_approval_policy() {
+        let home = std::env::var("HOME").unwrap();
+        let path = std::path::Path::new(&home).join(".codex/config.toml");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        println!("[test] raw config.toml:\n{content}");
+
+        // Apply same cleaning as lib.rs
+        let mut skip = false;
+        let mut cleaned = Vec::new();
+        for line in content.lines() {
+            if line.starts_with("[shell_environment_policy") || line.starts_with("[mcp_servers") {
+                skip = true;
+                continue;
+            }
+            if skip {
+                if line.starts_with('[') && !line.starts_with("[shell_environment_policy") && !line.starts_with("[mcp_servers") {
+                    skip = false;
+                } else {
+                    continue;
+                }
+            }
+            cleaned.push(line);
+        }
+        let cleaned_str = cleaned.join("\n");
+        println!("[test] cleaned config:\n{cleaned_str}");
+
+        let parsed = deserialize_toml(&cleaned_str).unwrap();
+        println!("[test] parsed approval_policy: {:?}", parsed.approval_policy);
+
+        let mut stack = ConfigLayerStack::new();
+        stack.add_layer(ConfigLayer::User, parsed);
+        let merged = stack.merge();
+        println!("[test] merged approval_policy: {:?}", merged.approval_policy);
+
+        let json = serde_json::to_value(&merged).unwrap();
+        println!("[test] JSON approval_policy: {}", json.get("approval_policy").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod mcp_config_test {
+    use crate::config::{deserialize_toml, ConfigLayerStack, ConfigLayer};
+
+    #[test]
+    fn parse_mcp_servers_from_real_config() {
+        let home = std::env::var("HOME").unwrap();
+        let path = std::path::Path::new(&home).join(".codex/config.toml");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        
+        // Apply same cleaning as lib.rs
+        let mut skip = false;
+        let mut cleaned = Vec::new();
+        for line in content.lines() {
+            if line.starts_with("[shell_environment_policy") {
+                skip = true;
+                continue;
+            }
+            if skip {
+                if line.starts_with('[') && !line.starts_with("[shell_environment_policy") {
+                    skip = false;
+                } else {
+                    continue;
+                }
+            }
+            cleaned.push(line);
+        }
+        let cleaned_str = cleaned.join("\n");
+        
+        match deserialize_toml(&cleaned_str) {
+            Ok(parsed) => {
+                println!("[test] mcp_servers count: {}", parsed.mcp_servers.len());
+                for (name, config) in &parsed.mcp_servers {
+                    println!("[test] MCP server '{}': {:?}", name, config);
+                }
+                
+                // Also test with profile resolve
+                let mut stack = ConfigLayerStack::new();
+                stack.add_layer(ConfigLayer::User, parsed);
+                let base = stack.merge();
+                let resolved = match &base.profile {
+                    Some(p) => {
+                        println!("[test] Active profile: {}", p);
+                        stack.resolve_with_profile(p)
+                    }
+                    None => base,
+                };
+                println!("[test] Resolved mcp_servers count: {}", resolved.mcp_servers.len());
+                for (name, _) in &resolved.mcp_servers {
+                    println!("[test] Resolved MCP server: '{}'", name);
+                }
+            }
+            Err(e) => {
+                println!("[test] PARSE ERROR: {}", e.message);
+                println!("[test] Cleaned config:\n{}", cleaned_str);
+            }
         }
     }
 }
