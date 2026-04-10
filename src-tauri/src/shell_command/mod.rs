@@ -164,19 +164,37 @@ pub fn is_dangerous_command(tokens: &[String]) -> bool {
     if tokens.is_empty() {
         return false;
     }
-    let cmd = tokens[0].as_str();
-    if matches!(cmd, "rm" | "rmdir" | "dd" | "mkfs" | "fdisk" | "format") {
+
+    if is_dangerous_to_call_with_exec(tokens) {
         return true;
     }
-    // rm -rf / pattern
-    if cmd == "rm" && tokens.iter().any(|t| t.contains("rf") || t == "/") {
-        return true;
+
+    // Support `bash -lc "<script>"` where any part of the script might be dangerous.
+    if let Some(inner_commands) =
+        crate::core::exec_policy::bash_parse_shell_lc_plain_commands(tokens)
+    {
+        if inner_commands
+            .iter()
+            .any(|cmd| is_dangerous_to_call_with_exec(cmd))
+        {
+            return true;
+        }
     }
-    // sudo with dangerous subcommand
-    if cmd == "sudo" && tokens.len() > 1 {
-        return is_dangerous_command(&tokens[1..]);
-    }
+
     false
+}
+
+/// Check if a command is dangerous when called directly (not through a shell wrapper).
+/// Aligned with codex-main `is_dangerous_to_call_with_exec`, plus additional
+/// destructive commands (dd, mkfs, fdisk, format).
+fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
+    let cmd0 = command.first().map(String::as_str);
+    match cmd0 {
+        Some("rm") => true,
+        Some("dd" | "mkfs" | "fdisk" | "format") => true,
+        Some("sudo") if command.len() > 1 => is_dangerous_to_call_with_exec(&command[1..]),
+        _ => false,
+    }
 }
 
 /// Detect the current shell type.
@@ -318,15 +336,43 @@ mod tests {
 
     #[test]
     fn dangerous_commands() {
+        // rm is always dangerous
         assert!(is_dangerous_command(&["rm".to_string()]));
+        assert!(is_dangerous_command(&[
+            "rm".to_string(),
+            "-rf".to_string(),
+            "/".to_string()
+        ]));
+        assert!(is_dangerous_command(&[
+            "rm".to_string(),
+            "-f".to_string(),
+            "file".to_string()
+        ]));
+        assert!(is_dangerous_command(&[
+            "rm".to_string(),
+            "file".to_string()
+        ]));
+        // dd, mkfs, fdisk, format are dangerous
         assert!(is_dangerous_command(&["dd".to_string()]));
+        assert!(is_dangerous_command(&["mkfs".to_string()]));
+        assert!(is_dangerous_command(&["fdisk".to_string()]));
+        assert!(is_dangerous_command(&["format".to_string()]));
+        // sudo with dangerous subcommand
         assert!(is_dangerous_command(&[
             "sudo".to_string(),
             "rm".to_string(),
             "-rf".to_string(),
             "/".to_string()
         ]));
+        // safe commands
         assert!(!is_dangerous_command(&["ls".to_string()]));
+        assert!(!is_dangerous_command(&["kill".to_string(), "1234".to_string()]));
+        // bash -lc with dangerous inner command
+        assert!(is_dangerous_command(&[
+            "bash".to_string(),
+            "-lc".to_string(),
+            "rm -rf /tmp/foo".to_string()
+        ]));
     }
 
     #[test]

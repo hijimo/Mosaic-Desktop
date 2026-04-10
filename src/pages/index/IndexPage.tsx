@@ -22,9 +22,11 @@ import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { MessageList } from '@/components/chat/MessageList';
 import { InputArea } from '@/components/chat/InputArea';
-import { getHomeDir, listCwds, pickFolder } from '@/services/api';
+import { getHomeDir, listCwds, pickFolder, getConfig } from '@/services/api';
 import type { AttachedFile } from '@/stores/fileUploadStore';
-import type { UserInput } from '@/types';
+import type { UserInput, ReviewDecision } from '@/types';
+import { useApprovalStore } from '@/stores/approvalStore';
+import { useElicitationStore } from '@/stores/elicitationStore';
 
 interface SkillCard {
   icon: React.ReactNode;
@@ -46,11 +48,6 @@ const SUGGESTIONS = [
   { icon: <Languages size={16} />, label: 'Translate', prompt: 'Translate this to English.' },
 ];
 
-function handleApprovalDecision(callId: string, decision: 'approve' | 'deny'): void {
-  // TODO: wire to submitOp with exec_approval/patch_approval
-  console.log('approval decision', callId, decision);
-}
-
 export function IndexPage(): React.ReactElement {
   const { threadId: routeThreadId } = useParams<{ threadId?: string }>();
   const [inputText, setInputText] = useState('');
@@ -60,6 +57,39 @@ export function IndexPage(): React.ReactElement {
   const streamingTurn = useMessageStore((s) => s.streamingTurn);
   const { createThread, resumeThread } = useThread();
   const submitOp = useSubmitOp();
+  const removeApproval = useApprovalStore((s) => s.removeApproval);
+
+  const handleApproval = useCallback(
+    (callId: string, decision: ReviewDecision) => {
+      if (!activeThreadId) return;
+      const approval = useApprovalStore.getState().approvals.get(callId);
+      if (!approval) return;
+
+      const op = approval.type === 'exec'
+        ? { type: 'exec_approval' as const, id: callId, decision }
+        : { type: 'patch_approval' as const, id: callId, decision };
+
+      submitOp(activeThreadId, op);
+      removeApproval(callId);
+    },
+    [activeThreadId, submitOp, removeApproval],
+  );
+
+  const removeElicitation = useElicitationStore((s) => s.removeRequest);
+  const handleElicitation = useCallback(
+    (requestId: string, serverName: string, decision: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => {
+      if (!activeThreadId) return;
+      submitOp(activeThreadId, {
+        type: 'resolve_elicitation',
+        server_name: serverName,
+        request_id: requestId,
+        decision,
+        ...(content ? { content } : {}),
+      });
+      removeElicitation(requestId);
+    },
+    [activeThreadId, submitOp, removeElicitation],
+  );
 
   // ── Workspace selector state ──
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
@@ -94,6 +124,38 @@ export function IndexPage(): React.ReactElement {
   const threadMessages = currentThreadId ? messages.get(currentThreadId) ?? [] : [];
   const hasMessages = threadMessages.length > 0 || streamingTurn?.isStreaming;
 
+  // ── Read config for approval/sandbox policies ──
+  const [approvalPolicy, setApprovalPolicy] = useState<import('@/types/events').ApprovalPolicy>('on-request');
+  const [sandboxPolicy, setSandboxPolicy] = useState<import('@/types/events').SandboxPolicy>({ type: 'danger-full-access' });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const config = await getConfig() as Record<string, unknown>;
+
+        // approval_policy is already resolved by Rust (profile merged)
+        if (config.approval_policy && typeof config.approval_policy === 'string') {
+          setApprovalPolicy(config.approval_policy as import('@/types/events').ApprovalPolicy);
+        }
+
+        const mode = config.sandbox_mode as string | undefined;
+        const wsWrite = config.sandbox_workspace_write as { writable_roots?: string[]; network_access?: boolean } | undefined;
+        if (mode === 'workspace-write') {
+          setSandboxPolicy({
+            type: 'workspace-write',
+            writable_roots: wsWrite?.writable_roots ?? [],
+            read_only_access: { type: 'full-access' },
+            network_access: wsWrite?.network_access ?? false,
+          });
+        } else if (mode === 'read-only') {
+          setSandboxPolicy({ type: 'read-only', access: { type: 'full-access' } });
+        }
+      } catch (e) {
+        console.warn('failed to read config, using defaults', e);
+      }
+    })();
+  }, []);
+
   const handleSend = useCallback(
     async (text?: string, files: AttachedFile[] = []) => {
       const msg = (text ?? inputText).trim();
@@ -121,11 +183,11 @@ export function IndexPage(): React.ReactElement {
         items,
         cwd: '.',
         model: '',
-        approval_policy: 'on-request',
-        sandbox_policy: { type: 'danger-full-access' },
+        approval_policy: approvalPolicy,
+        sandbox_policy: sandboxPolicy,
       });
     },
-    [inputText, currentThreadId, selectedCwd, createThread, resumeThread, submitOp],
+    [inputText, currentThreadId, selectedCwd, createThread, resumeThread, submitOp, approvalPolicy, sandboxPolicy],
   );
 
   // ── Chat view (has messages) ──
@@ -160,7 +222,8 @@ export function IndexPage(): React.ReactElement {
         {/* Messages */}
         <MessageList
           threadId={currentThreadId!}
-          onApprovalDecision={handleApprovalDecision}
+          onApprovalDecision={handleApproval}
+          onElicitationDecision={handleElicitation}
         />
 
         {/* Input */}

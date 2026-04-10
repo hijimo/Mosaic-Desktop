@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use std::collections::HashMap;
+
 use crate::config::toml_types::ConfigToml;
 use crate::config::ConfigLayerStack;
 use crate::core::context_manager::history::ContextManager;
@@ -7,12 +9,13 @@ use crate::core::hooks::HookRegistry;
 use crate::core::mcp_client::McpConnectionManager;
 use crate::core::rollout::policy::TurnContextItem;
 use crate::core::rollout::reconstruction::PreviousTurnSettings;
+use crate::core::state::TurnState;
 use crate::core::tools::router::ToolRouter;
 use crate::protocol::error::{CodexError, ErrorCode};
 use crate::protocol::event::{ErrorEvent, Event, EventMsg};
 use crate::protocol::types::{
     AskForApproval, CollaborationMode, Effort, Personality, ReasoningSummary, ResponseInputItem,
-    SandboxPolicy, ServiceTier, TokenUsageInfo, TurnContextOverrides,
+    ReviewDecision, SandboxPolicy, ServiceTier, TokenUsageInfo, TurnContextOverrides,
 };
 
 // ── ModelInfo ────────────────────────────────────────────────────
@@ -183,6 +186,12 @@ pub struct Session {
     turn_counter: tokio::sync::Mutex<u64>,
     /// Runtime config requirements that can constrain turn-level tool exposure.
     config_requirements: tokio::sync::RwLock<crate::config::ConfigRequirements>,
+    /// Per-turn mutable state for pending approvals / user input.
+    turn_state: std::sync::Arc<tokio::sync::Mutex<TurnState>>,
+    /// Session-scoped approval cache (ApprovedForSession decisions).
+    tool_approvals: std::sync::Arc<tokio::sync::Mutex<crate::core::tools::sandboxing::ApprovalStore>>,
+    /// Execution policy manager for command approval evaluation.
+    exec_policy_mgr: crate::core::exec_policy::ExecPolicyManager,
 }
 
 impl Session {
@@ -351,7 +360,7 @@ impl Session {
         config: ConfigLayerStack,
         tx_event: async_channel::Sender<Event>,
     ) -> Self {
-        Self::new_with_agent_control(cwd, config, tx_event, None)
+        Self::new_with_agent_control(cwd, config, tx_event, None, McpConnectionManager::new())
     }
 
     pub fn new_with_agent_control(
@@ -359,11 +368,13 @@ impl Session {
         config: ConfigLayerStack,
         tx_event: async_channel::Sender<Event>,
         agent_control: Option<std::sync::Arc<crate::core::agent::control::AgentControl>>,
+        mcp_manager: McpConnectionManager,
     ) -> Self {
         let resolved_config = config.merge();
         let mut router = ToolRouter::from_config(
             Self::tools_config_from_resolved_config(&resolved_config),
             agent_control.is_some(),
+            mcp_manager.clone(),
         );
 
         if let Some(ctrl) = agent_control {
@@ -381,7 +392,7 @@ impl Session {
             config,
             active_profile: None,
             tool_router: tokio::sync::Mutex::new(router),
-            mcp_manager: McpConnectionManager::new(),
+            mcp_manager,
             hooks: tokio::sync::Mutex::new(HookRegistry::new()),
             tx_event,
             cwd,
@@ -389,7 +400,20 @@ impl Session {
             config_requirements: tokio::sync::RwLock::new(
                 crate::config::ConfigRequirements::default(),
             ),
+            turn_state: std::sync::Arc::new(tokio::sync::Mutex::new(TurnState::default())),
+            tool_approvals: std::sync::Arc::new(tokio::sync::Mutex::new(
+                crate::core::tools::sandboxing::ApprovalStore::default(),
+            )),
+            exec_policy_mgr: crate::core::exec_policy::ExecPolicyManager::default(),
         }
+    }
+
+    /// Replace the turn state with an externally shared instance.
+    pub fn set_shared_turn_state(
+        &mut self,
+        ts: std::sync::Arc<tokio::sync::Mutex<TurnState>>,
+    ) {
+        self.turn_state = ts;
     }
 
     pub fn id(&self) -> &str {
@@ -470,6 +494,8 @@ impl Session {
         let mut state = self.state.lock().await;
         state.turn_active = false;
         state.pending_approval = None;
+        // Clear any lingering oneshot-channel approvals
+        self.turn_state.lock().await.clear_pending();
     }
 
     /// Interrupt the current turn.
@@ -478,6 +504,11 @@ impl Session {
         state.turn_active = false;
         state.pending_approval = None;
         state.turn_context = None;
+        // Clear any lingering oneshot-channel approvals
+        drop(state); // release state lock before acquiring turn_state lock
+        self.turn_state.lock().await.clear_pending();
+        // Clear any pending MCP elicitation requests
+        self.mcp_manager.clear_pending_elicitations().await;
     }
 
     /// Check if a turn is currently active.
@@ -683,10 +714,193 @@ impl Session {
         state.pending_approval.take()
     }
 
+    // ── Oneshot-channel approval (Phase 1) ───────────────────────
+
+    /// Request user approval for a command execution.
+    ///
+    /// Inserts a oneshot sender into `TurnState`, emits an
+    /// `ExecApprovalRequestEvent`, then awaits the receiver.
+    /// The future resolves when `notify_approval` sends a decision.
+    pub async fn request_exec_approval(
+        &self,
+        call_id: String,
+        turn_id: String,
+        command: Vec<String>,
+        cwd: std::path::PathBuf,
+        reason: Option<String>,
+        proposed_execpolicy_amendment: Option<crate::protocol::types::ExecPolicyAmendment>,
+    ) -> ReviewDecision {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut ts = self.turn_state.lock().await;
+            ts.insert_pending_approval(call_id.clone(), tx);
+        }
+
+        let parsed_cmd = vec![crate::shell_command::classify_command(&command)];
+        let available_decisions =
+            crate::protocol::event::ExecApprovalRequestEvent::default_available_decisions(
+                proposed_execpolicy_amendment.as_ref(),
+            );
+        let event = EventMsg::ExecApprovalRequest(
+            crate::protocol::event::ExecApprovalRequestEvent {
+                call_id,
+                approval_id: None,
+                turn_id,
+                command,
+                cwd,
+                reason,
+                network_approval_context: None,
+                proposed_execpolicy_amendment,
+                proposed_network_policy_amendments: None,
+                additional_permissions: None,
+                available_decisions: Some(available_decisions),
+                parsed_cmd,
+            },
+        );
+        let _ = self.tx_event.send(Event {
+            id: uuid::Uuid::new_v4().to_string(),
+            msg: event,
+        }).await;
+
+        match rx.await {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::warn!("exec approval channel closed (turn interrupted?), defaulting to Denied");
+                ReviewDecision::Denied
+            }
+        }
+    }
+
+    /// Request user approval for a patch application.
+    pub async fn request_patch_approval(
+        &self,
+        call_id: String,
+        turn_id: String,
+        changes: HashMap<std::path::PathBuf, crate::protocol::types::FileChange>,
+        cwd: std::path::PathBuf,
+        reason: Option<String>,
+    ) -> ReviewDecision {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut ts = self.turn_state.lock().await;
+            ts.insert_pending_approval(call_id.clone(), tx);
+        }
+
+        let event = EventMsg::ApplyPatchApprovalRequest(
+            crate::protocol::event::ApplyPatchApprovalRequestEvent {
+                call_id,
+                turn_id,
+                changes,
+                reason,
+                grant_root: Some(cwd),
+            },
+        );
+        let _ = self.tx_event.send(Event {
+            id: uuid::Uuid::new_v4().to_string(),
+            msg: event,
+        }).await;
+
+        match rx.await {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::warn!("patch approval channel closed (turn interrupted?), defaulting to Denied");
+                ReviewDecision::Denied
+            }
+        }
+    }
+
+    /// Deliver a user's approval decision to the waiting oneshot channel.
+    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let entry = {
+            let mut ts = self.turn_state.lock().await;
+            ts.remove_pending_approval(approval_id)
+        };
+        if let Some(tx) = entry {
+            let _ = tx.send(decision);
+        }
+    }
+
+    /// Get a shared reference to the turn state (for clearing on interrupt).
+    pub fn turn_state(&self) -> &std::sync::Arc<tokio::sync::Mutex<TurnState>> {
+        &self.turn_state
+    }
+
+    /// Check the approval cache before prompting the user.
+    ///
+    /// If all keys are already `ApprovedForSession`, returns immediately.
+    /// Otherwise calls `fetch` to get a user decision, and if the result
+    /// is `ApprovedForSession`, caches it for future lookups.
+    pub async fn with_cached_approval<K: serde::Serialize>(
+        &self,
+        keys: &[K],
+        fetch: impl std::future::Future<Output = ReviewDecision>,
+    ) -> ReviewDecision {
+        use crate::core::tools::sandboxing::ApprovalDecision;
+
+        if keys.is_empty() {
+            return fetch.await;
+        }
+        {
+            let store = self.tool_approvals.lock().await;
+            if keys.iter().all(|k| {
+                store
+                    .get(k)
+                    .map_or(false, |d| matches!(d, ApprovalDecision::ApprovedForSession))
+            }) {
+                return ReviewDecision::ApprovedForSession;
+            }
+        }
+        let decision = fetch.await;
+        if matches!(
+            decision,
+            ReviewDecision::ApprovedForSession
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        ) {
+            let mut store = self.tool_approvals.lock().await;
+            for key in keys {
+                store.put(key, ApprovalDecision::ApprovedForSession);
+            }
+        }
+        decision
+    }
+
     // ── Component access ─────────────────────────────────────────
 
     pub fn mcp_manager(&self) -> &McpConnectionManager {
         &self.mcp_manager
+    }
+
+    /// Resolve an MCP elicitation request by forwarding the user's decision.
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        request_id: String,
+        action: crate::protocol::types::ElicitationAction,
+    ) -> anyhow::Result<()> {
+        let (rmcp_action, content) = match action {
+            crate::protocol::types::ElicitationAction::Accept => (
+                rmcp::model::ElicitationAction::Accept,
+                Some(serde_json::json!({})),
+            ),
+            crate::protocol::types::ElicitationAction::Decline => {
+                (rmcp::model::ElicitationAction::Decline, None)
+            }
+            crate::protocol::types::ElicitationAction::Cancel => {
+                (rmcp::model::ElicitationAction::Cancel, None)
+            }
+        };
+        let response = rmcp::model::CreateElicitationResult {
+            action: rmcp_action,
+            content,
+        };
+        self.mcp_manager
+            .resolve_elicitation(server_name, request_id, response)
+            .await
+    }
+
+    /// Access the execution policy manager.
+    pub fn exec_policy_manager(&self) -> &crate::core::exec_policy::ExecPolicyManager {
+        &self.exec_policy_mgr
     }
 
     pub async fn tool_router(&self) -> tokio::sync::MutexGuard<'_, ToolRouter> {
@@ -708,6 +922,17 @@ impl Session {
             let router = self.tool_router().await;
             router.collect_tool_specs()
         };
+
+        // Add MCP tools from connected servers
+        let mcp_tools = self.mcp_manager.all_tools().await;
+        for tool in mcp_tools {
+            specs.push(serde_json::json!({
+                "type": "function",
+                "name": tool.qualified_name,
+                "description": tool.description,
+                "parameters": tool.input_schema.unwrap_or(serde_json::json!({"type": "object", "properties": {}})),
+            }));
+        }
 
         let preferred = Self::web_search_mode_from_tool_specs(&specs);
         let resolved = turn_context
@@ -743,7 +968,13 @@ impl Session {
     }
 
     /// Take (consume) any pending custom instructions.
+    /// Checks both session state and shared turn state.
     pub async fn take_custom_instructions(&self) -> Option<String> {
+        // Prefer turn_state (set by submit_op fast path)
+        let from_turn = self.turn_state.lock().await.take_custom_instructions();
+        if from_turn.is_some() {
+            return from_turn;
+        }
         let mut state = self.state.lock().await;
         state.custom_instructions.take()
     }
@@ -1159,6 +1390,7 @@ mod tests {
             ConfigLayerStack::new(),
             tx,
             Some(agent_control),
+            McpConnectionManager::new(),
         );
         let router = session.tool_router.lock().await;
         let names: Vec<String> = router

@@ -19,6 +19,12 @@ use crate::share::types::{ShareMessageRequest, ShareMessageResponse};
 pub struct ThreadHandle {
     pub sq_tx: async_channel::Sender<Submission>,
     pub eq_rx: async_channel::Receiver<Event>,
+    /// Shared turn state for direct approval delivery without session lock.
+    pub turn_state: std::sync::Arc<tokio::sync::Mutex<crate::core::state::TurnState>>,
+    /// Shared MCP connection manager for direct elicitation resolution without session lock.
+    pub mcp_manager: crate::core::mcp_client::McpConnectionManager,
+    /// Working directory for this thread (used for .codexpolicy writes without session lock).
+    pub cwd: std::path::PathBuf,
 }
 
 /// Lightweight metadata for a thread, queryable without a running engine.
@@ -277,12 +283,107 @@ pub async fn submit_op(
         }
     }
 
-    let threads = state.threads.lock().await;
-    let handle = threads
-        .get(&thread_id)
-        .ok_or_else(|| format!("thread not found: {thread_id}"))?;
-    handle
-        .sq_tx
+    // Extract what we need, then immediately drop the threads lock.
+    let (turn_state, sq_tx, thread_cwd, mcp_manager) = {
+        let threads = state.threads.lock().await;
+        let handle = threads
+            .get(&thread_id)
+            .ok_or_else(|| format!("thread not found: {thread_id}"))?;
+        (handle.turn_state.clone(), handle.sq_tx.clone(), handle.cwd.clone(), handle.mcp_manager.clone())
+    };
+    // All locks released.
+
+    // Approval and elicitation ops bypass the submission queue: the main loop
+    // is blocked inside run_turn → tool call / orchestrator → oneshot, so
+    // sending through the queue deadlocks.
+    match &op {
+        Op::ExecApproval { id, decision, custom_instructions, .. } => {
+            // Side effect: persist execpolicy amendment (no session lock needed)
+            if let crate::protocol::types::ReviewDecision::ApprovedExecpolicyAmendment {
+                ref proposed_execpolicy_amendment,
+            } = decision {
+                let policy_path = thread_cwd.join(".codexpolicy");
+                if let Err(e) = crate::execpolicy::amend::blocking_append_allow_prefix_rule(
+                    &policy_path,
+                    &proposed_execpolicy_amendment.command,
+                ) {
+                    tracing::warn!("failed to amend execpolicy at {}: {e}", policy_path.display());
+                }
+            }
+            // Forward custom instructions via shared turn state
+            if let Some(instructions) = custom_instructions {
+                if !instructions.is_empty() {
+                    turn_state.lock().await.set_custom_instructions(instructions.clone());
+                }
+            }
+            // Deliver decision via oneshot channel
+            let entry = turn_state.lock().await.remove_pending_approval(id);
+            if let Some(tx) = entry {
+                let _ = tx.send(decision.clone());
+            }
+            return Ok(());
+        }
+        Op::PatchApproval { id, decision, custom_instructions, .. } => {
+            // Forward custom instructions via shared turn state
+            if let Some(instructions) = custom_instructions {
+                if !instructions.is_empty() {
+                    turn_state.lock().await.set_custom_instructions(instructions.clone());
+                }
+            }
+            let entry = turn_state.lock().await.remove_pending_approval(id);
+            if let Some(tx) = entry {
+                let _ = tx.send(decision.clone());
+            }
+            return Ok(());
+        }
+        Op::ResolveElicitation {
+            server_name,
+            request_id,
+            decision,
+            content,
+        } => {
+            let (rmcp_action, rmcp_content) = match decision {
+                crate::protocol::types::ElicitationAction::Accept => (
+                    rmcp::model::ElicitationAction::Accept,
+                    content.clone().or_else(|| Some(serde_json::json!({}))),
+                ),
+                crate::protocol::types::ElicitationAction::Decline => {
+                    (rmcp::model::ElicitationAction::Decline, None)
+                }
+                crate::protocol::types::ElicitationAction::Cancel => {
+                    (rmcp::model::ElicitationAction::Cancel, None)
+                }
+            };
+            let response = rmcp::model::CreateElicitationResult {
+                action: rmcp_action,
+                content: rmcp_content,
+            };
+            mcp_manager
+                .resolve_elicitation(server_name.clone(), request_id.clone(), response)
+                .await
+                .map_err(|e| format!("failed to resolve elicitation: {e}"))?;
+            // Persist the user's response to rollout for history replay
+            let action_str = format!("{:?}", decision).to_lowercase();
+            if let Some(recorder) = state.recorders.lock().await.get(&thread_id) {
+                let _ = recorder.record_items(&[
+                    crate::core::rollout::policy::RolloutItem::EventMsg(
+                        crate::protocol::event::EventMsg::ElicitationResponse(
+                            crate::protocol::event::ElicitationResponseEvent {
+                                server_name: server_name.clone(),
+                                request_id: request_id.clone(),
+                                action: action_str,
+                                content: content.clone(),
+                            },
+                        ),
+                    ),
+                ]).await;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    sq_tx
         .send(Submission { id, op })
         .await
         .map_err(|e| format!("send failed: {e}"))
@@ -373,9 +474,12 @@ pub async fn thread_start(
     threads.insert(
         thread_id.clone(),
         ThreadHandle {
-            sq_tx: handle.tx_sub,
-            eq_rx: async_channel::unbounded().1,
-        },
+                    sq_tx: handle.tx_sub,
+                    eq_rx: async_channel::unbounded().1,
+                    turn_state: handle.turn_state.clone(),
+                    mcp_manager: handle.mcp_manager.clone(),
+                    cwd: handle.cwd.clone(),
+                },
     );
     Ok(thread_id)
 }
@@ -551,7 +655,10 @@ pub fn parse_rollout_items(text: &str) -> Vec<crate::core::rollout::policy::Roll
             | "thread_rolled_back"
             | "error"
             | "exec_command_end"
+            | "mcp_tool_call_begin"
             | "mcp_tool_call_end"
+            | "elicitation_request"
+            | "elicitation_response"
             | "patch_apply_end"
             | "web_search_begin"
             | "web_search_end"
@@ -695,9 +802,12 @@ pub async fn thread_resume(
     threads.insert(
         thread_id,
         ThreadHandle {
-            sq_tx: handle.tx_sub,
-            eq_rx: async_channel::unbounded().1,
-        },
+                    sq_tx: handle.tx_sub,
+                    eq_rx: async_channel::unbounded().1,
+                    turn_state: handle.turn_state.clone(),
+                    mcp_manager: handle.mcp_manager.clone(),
+                    cwd: handle.cwd.clone(),
+                },
     );
 
     Ok(meta)
@@ -834,9 +944,12 @@ pub async fn thread_fork(
     threads.insert(
         new_thread_id.clone(),
         ThreadHandle {
-            sq_tx: handle.tx_sub,
-            eq_rx: async_channel::unbounded().1,
-        },
+                    sq_tx: handle.tx_sub,
+                    eq_rx: async_channel::unbounded().1,
+                    turn_state: handle.turn_state.clone(),
+                    mcp_manager: handle.mcp_manager.clone(),
+                    cwd: handle.cwd.clone(),
+                },
     );
     Ok(new_thread_id)
 }
@@ -880,12 +993,16 @@ pub async fn fuzzy_file_search(
     Ok(result.matches)
 }
 
-/// Get the current merged configuration.
+/// Get the current merged configuration (with active profile resolved).
 #[tauri::command]
 pub async fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let config = state.config.lock().await;
-    let merged = config.merge();
-    serde_json::to_value(&merged).map_err(|e| format!("serialize failed: {e}"))
+    let base = config.merge();
+    let resolved = match &base.profile {
+        Some(profile) => config.resolve_with_profile(profile),
+        None => base,
+    };
+    serde_json::to_value(&resolved).map_err(|e| format!("serialize failed: {e}"))
 }
 
 /// Update configuration from a TOML string.
