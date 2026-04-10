@@ -4,9 +4,12 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useBottomLockScroll } from '@/hooks/useBottomLockScroll';
 import { StreamingTurnRoot } from './streaming/StreamingTurnRoot';
 
+import type { ReviewDecision } from '@/types';
+
 interface MessageListProps {
   threadId: string;
-  onApprovalDecision?: (callId: string, decision: 'approve' | 'deny') => void;
+  onApprovalDecision?: (callId: string, decision: ReviewDecision) => void;
+  onElicitationDecision?: (requestId: string, serverName: string, decision: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => void;
 }
 
 const EMPTY_GROUPS: never[] = [];
@@ -14,6 +17,7 @@ const EMPTY_GROUPS: never[] = [];
 export function MessageList({
   threadId,
   onApprovalDecision,
+  onElicitationDecision,
 }: MessageListProps): React.ReactElement {
   const turnGroups = useMessageStore(
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
@@ -48,6 +52,7 @@ export function MessageList({
       <StreamingTurnRoot
         threadId={threadId}
         onApprovalDecision={onApprovalDecision}
+        onElicitationDecision={onElicitationDecision}
       />
     </Box>
   );

@@ -5,6 +5,7 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useToolCallStore } from '@/stores/toolCallStore';
 import { useApprovalStore } from '@/stores/approvalStore';
 import { useClarificationStore } from '@/stores/clarificationStore';
+import { useElicitationStore } from '@/stores/elicitationStore';
 import type { CodexEventPayload } from '@/types';
 
 /**
@@ -29,6 +30,7 @@ export function useCodexEvent(): void {
     useToolCallStore();
   const { addApproval, clearAll: clearApprovals } = useApprovalStore();
   const { addRequest: addClarification, clearAll: clearClarifications } = useClarificationStore();
+  const { addRequest: addElicitation, clearAll: clearElicitations } = useElicitationStore();
   const eventOrderRef = useRef(0);
 
   const nextEventOrder = (): number => {
@@ -59,6 +61,7 @@ export function useCodexEvent(): void {
           clearAll();
           clearApprovals();
           clearClarifications();
+          clearElicitations();
           startStreaming(msg.turn_id);
           break;
 
@@ -194,6 +197,7 @@ export function useCodexEvent(): void {
             command: msg.command,
             cwd: msg.cwd,
             reason: msg.reason,
+            availableDecisions: msg.available_decisions,
           });
           break;
 
@@ -205,6 +209,19 @@ export function useCodexEvent(): void {
             order: nextEventOrder(),
             reason: msg.reason,
             changes: msg.changes as Record<string, unknown>,
+            availableDecisions: ['approved', 'approved_for_session', 'abort'],
+          });
+          break;
+
+        case 'elicitation_request':
+          addElicitation({
+            serverName: msg.server_name,
+            requestId: msg.request_id,
+            message: msg.message,
+            mode: (msg.mode as 'form' | 'url' | undefined) ?? 'form',
+            schema: msg.schema as Record<string, unknown> | undefined,
+            url: msg.url,
+            order: nextEventOrder(),
           });
           break;
 
@@ -242,5 +259,7 @@ export function useCodexEvent(): void {
     clearApprovals,
     addClarification,
     clearClarifications,
+    addElicitation,
+    clearElicitations,
   ]);
 }

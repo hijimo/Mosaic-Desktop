@@ -6,6 +6,7 @@ import type {
   ToolCallState,
   ApprovalRequestState,
   ClarificationState,
+  ReviewDecision,
 } from '@/types';
 import { useMessageStore } from '@/stores/messageStore';
 import { dismissTurnError as dismissTurnErrorApi } from '@/services/api';
@@ -18,6 +19,8 @@ import { WebSearchCard } from './agent/WebSearchCard';
 import { McpToolCallCard } from './agent/McpToolCallCard';
 import { CodeExecutionBlock } from './agent/CodeExecutionBlock';
 import { ApprovalRequestCard } from './agent/ApprovalRequestCard';
+import { ElicitationRequest } from './ElicitationRequest';
+import { useElicitationStore } from '@/stores/elicitationStore';
 import { CodeDiffBlock } from './agent/CodeDiffBlock';
 import { ClarificationCard } from './agent/ClarificationCard';
 import { MessageActionBar } from './agent/MessageActionBar';
@@ -29,7 +32,8 @@ interface MessageProps {
   toolCalls?: ToolCallState[];
   approvalRequests?: ApprovalRequestState[];
   clarifications?: ClarificationState[];
-  onApprovalDecision?: (callId: string, decision: 'approve' | 'deny') => void;
+  onApprovalDecision?: (callId: string, decision: ReviewDecision) => void;
+  onElicitationDecision?: (requestId: string, serverName: string, decision: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => void;
   isStreaming?: boolean;
 }
 
@@ -40,10 +44,12 @@ export function Message({
   approvalRequests,
   clarifications,
   onApprovalDecision,
+  onElicitationDecision,
   isStreaming,
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
   const dismissTurnError = useMessageStore((s) => s.dismissTurnError);
+  const elicitations = useElicitationStore((s) => s.requests);
 
   const handleDismiss = useCallback(async () => {
     if (!threadId) return;
@@ -202,6 +208,20 @@ export function Message({
             🤝 {item.tool} → {item.receiver_thread_ids.join(', ')} [{item.status}]
           </Box>
         );
+      case 'Elicitation':
+        return (
+          <ElicitationRequest
+            key={item.id}
+            serverName={item.server_name}
+            requestId={item.id}
+            message={item.message}
+            mode={item.mode as 'form' | 'url' | undefined}
+            schema={item.schema}
+            url={item.url}
+            responseAction={item.response_action}
+            responseContent={item.response_content}
+          />
+        );
       default:
         return null;
     }
@@ -319,6 +339,20 @@ export function Message({
                 key={ar.callId}
                 request={ar}
                 onDecision={onApprovalDecision}
+              />
+            ))}
+
+            {/* Elicitation requests */}
+            {isStreaming && Array.from(elicitations.values()).map((er) => (
+              <ElicitationRequest
+                key={er.requestId}
+                serverName={er.serverName}
+                requestId={er.requestId}
+                message={er.message}
+                mode={er.mode}
+                schema={er.schema}
+                url={er.url}
+                onDecision={onElicitationDecision}
               />
             ))}
 

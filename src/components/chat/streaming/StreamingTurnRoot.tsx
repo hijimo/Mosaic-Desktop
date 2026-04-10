@@ -3,14 +3,15 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useToolCallStore } from '@/stores/toolCallStore';
 import { useApprovalStore } from '@/stores/approvalStore';
 import { useClarificationStore } from '@/stores/clarificationStore';
-import type { ToolCallState, TurnGroup, TurnItem } from '@/types';
+import type { ToolCallState, TurnGroup, TurnItem, ReviewDecision } from '@/types';
 import { Message } from '../Message';
 import { TaskStartedIndicator } from '../indicators/TaskStartedIndicator';
 import { TaskCompletedIndicator } from '../indicators/TaskCompletedIndicator';
 
 interface StreamingTurnRootProps {
   threadId: string;
-  onApprovalDecision?: (callId: string, decision: 'approve' | 'deny') => void;
+  onApprovalDecision?: (callId: string, decision: ReviewDecision) => void;
+  onElicitationDecision?: (requestId: string, serverName: string, decision: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => void;
 }
 
 const EMPTY_GROUPS: never[] = [];
@@ -18,6 +19,7 @@ const EMPTY_GROUPS: never[] = [];
 export function StreamingTurnRoot({
   threadId,
   onApprovalDecision,
+  onElicitationDecision,
 }: StreamingTurnRootProps): React.ReactElement {
   const turnGroups = useMessageStore(
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
@@ -83,6 +85,7 @@ export function StreamingTurnRoot({
           group={group}
           threadId={threadId}
           onApprovalDecision={onApprovalDecision}
+          onElicitationDecision={onElicitationDecision}
         />
       ))}
 
@@ -94,6 +97,7 @@ export function StreamingTurnRoot({
           approvalRequests={approvals}
           clarifications={clarifications}
           onApprovalDecision={onApprovalDecision}
+          onElicitationDecision={onElicitationDecision}
           isStreaming
         />
       ) : null}

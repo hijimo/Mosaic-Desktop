@@ -1,17 +1,24 @@
 import { Box } from '@mui/material';
 import { useApprovalStore } from '@/stores/approvalStore';
+import { useElicitationStore } from '@/stores/elicitationStore';
 import { ApprovalRequestCard } from '../agent/ApprovalRequestCard';
+import { ElicitationRequest } from '../ElicitationRequest';
+
+import type { ReviewDecision } from '@/types';
 
 interface StreamingApprovalRegionProps {
-  onApprovalDecision?: (callId: string, decision: 'approve' | 'deny') => void;
+  onApprovalDecision?: (callId: string, decision: ReviewDecision) => void;
+  onElicitationDecision?: (requestId: string, serverName: string, decision: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => void;
 }
 
 export function StreamingApprovalRegion({
   onApprovalDecision,
+  onElicitationDecision,
 }: StreamingApprovalRegionProps): React.ReactElement | null {
   const approvals = useApprovalStore((s) => s.approvals);
+  const elicitations = useElicitationStore((s) => s.requests);
 
-  if (approvals.size === 0) return null;
+  if (approvals.size === 0 && elicitations.size === 0) return null;
 
   return (
     <Box
@@ -27,6 +34,18 @@ export function StreamingApprovalRegion({
           key={request.callId}
           request={request}
           onDecision={onApprovalDecision}
+        />
+      ))}
+      {Array.from(elicitations.values()).map((request) => (
+        <ElicitationRequest
+          key={request.requestId}
+          serverName={request.serverName}
+          requestId={request.requestId}
+          message={request.message}
+          mode={request.mode}
+          schema={request.schema}
+          url={request.url}
+          onDecision={onElicitationDecision}
         />
       ))}
     </Box>
