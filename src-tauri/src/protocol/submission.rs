@@ -82,6 +82,9 @@ pub enum Op {
         server_name: String,
         request_id: String,
         decision: ElicitationAction,
+        /// User-provided form data (only present when decision is Accept in form mode).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<serde_json::Value>,
     },
 
     // --- Context override ---

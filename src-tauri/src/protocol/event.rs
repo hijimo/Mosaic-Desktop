@@ -314,6 +314,33 @@ pub struct ExecApprovalRequestEvent {
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 
+impl ExecApprovalRequestEvent {
+    /// Compute the effective available decisions, falling back to defaults
+    /// when the field is absent (backwards compatibility with older senders).
+    pub fn effective_available_decisions(&self) -> Vec<ReviewDecision> {
+        match &self.available_decisions {
+            Some(decisions) => decisions.clone(),
+            None => Self::default_available_decisions(
+                self.proposed_execpolicy_amendment.as_ref(),
+            ),
+        }
+    }
+
+    /// Compute the default set of decisions based on context.
+    pub fn default_available_decisions(
+        proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
+    ) -> Vec<ReviewDecision> {
+        let mut decisions = vec![ReviewDecision::Approved];
+        if let Some(prefix) = proposed_execpolicy_amendment {
+            decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: prefix.clone(),
+            });
+        }
+        decisions.push(ReviewDecision::Abort);
+        decisions
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequestUserInputEvent {
     pub id: String,
@@ -339,8 +366,24 @@ pub struct ElicitationRequestEvent {
     pub server_name: String,
     pub request_id: String,
     pub message: String,
+    /// "form" or "url". Absent means "form" (backwards compat).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// JSON Schema for form mode elicitation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<serde_json::Value>,
+    /// Target URL for url mode elicitation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ElicitationResponseEvent {
+    pub server_name: String,
+    pub request_id: String,
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
 }
 
 // ── Patch events ─────────────────────────────────────────────────
@@ -730,6 +773,7 @@ pub enum EventMsg {
     RequestUserInput(RequestUserInputEvent),
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
     ElicitationRequest(ElicitationRequestEvent),
+    ElicitationResponse(ElicitationResponseEvent),
 
     // --- Dynamic tools ---
     DynamicToolCallRequest(DynamicToolCallRequest),

@@ -268,6 +268,17 @@ export type TurnItem =
       receiver_thread_ids: string[];
       prompt?: string;
       agents_states: Record<string, { status: string; message?: string }>;
+    }
+  | {
+      type: "Elicitation";
+      id: string;
+      server_name: string;
+      message: string;
+      mode?: string;
+      schema?: Record<string, unknown>;
+      url?: string;
+      response_action?: string;
+      response_content?: Record<string, unknown>;
     };
 
 export interface TurnGroup {
@@ -457,6 +468,8 @@ export interface ExecApprovalRequestEvent {
   cwd: string;
   reason?: string;
   parsed_cmd: ParsedCommand[];
+  available_decisions?: import('./chat').ReviewDecision[];
+  proposed_execpolicy_amendment?: string[];
 }
 
 export interface FileChange {
@@ -617,7 +630,7 @@ export type EventMsg =
   | { type: "exec_approval_request" } & ExecApprovalRequestEvent
   | { type: "apply_patch_approval_request" } & ApplyPatchApprovalRequestEvent
   | { type: "request_user_input"; id: string; message: string; schema?: unknown }
-  | { type: "elicitation_request"; server_name: string; request_id: string; message: string; schema?: unknown }
+  | { type: "elicitation_request"; server_name: string; request_id: string; message: string; mode?: string; schema?: unknown; url?: string }
   // Patch
   | { type: "patch_apply_begin" } & PatchApplyBeginEvent
   | { type: "patch_apply_end" } & PatchApplyEndEvent
@@ -686,8 +699,9 @@ export type Op =
   | { type: 'user_input'; items: UserInput[]; final_output_json_schema?: unknown }
   | { type: 'interrupt' }
   | { type: 'shutdown' }
-  | { type: 'exec_approval'; id: string; turn_id?: string; decision: string; custom_instructions?: string }
-  | { type: 'patch_approval'; id: string; decision: string; custom_instructions?: string }
+  | { type: 'exec_approval'; id: string; turn_id?: string; decision: import('./chat').ReviewDecision; custom_instructions?: string }
+  | { type: 'patch_approval'; id: string; decision: import('./chat').ReviewDecision; custom_instructions?: string }
+  | { type: 'resolve_elicitation'; server_name: string; request_id: string; decision: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> }
   | { type: 'compact' }
   | { type: 'undo' }
   | { type: 'thread_rollback'; num_turns: number }

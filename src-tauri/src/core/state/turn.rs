@@ -65,6 +65,8 @@ pub struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<serde_json::Value>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    /// Custom instructions from approval decisions, forwarded to the agent on the next turn.
+    custom_instructions: Option<String>,
 }
 
 impl TurnState {
@@ -88,6 +90,14 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+    }
+
+    pub fn set_custom_instructions(&mut self, instructions: String) {
+        self.custom_instructions = Some(instructions);
+    }
+
+    pub fn take_custom_instructions(&mut self) -> Option<String> {
+        self.custom_instructions.take()
     }
 
     pub fn insert_pending_user_input(

@@ -28,6 +28,7 @@ pub enum TurnItem {
     EnteredReviewMode(EnteredReviewModeItem),
     ExitedReviewMode(ExitedReviewModeItem),
     CollabToolCall(CollabToolCallItem),
+    Elicitation(ElicitationItem),
 }
 
 impl TurnItem {
@@ -47,6 +48,7 @@ impl TurnItem {
             Self::EnteredReviewMode(i) => &i.id,
             Self::ExitedReviewMode(i) => &i.id,
             Self::CollabToolCall(i) => &i.id,
+            Self::Elicitation(i) => &i.id,
         }
     }
 }
@@ -259,6 +261,25 @@ pub struct ExitedReviewModeItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElicitationItem {
+    pub id: String,
+    pub server_name: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// User's decision: "accept", "decline", or "cancel". Populated from ElicitationResponse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_action: Option<String>,
+    /// User-provided form data (when action is accept in form mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_content: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CollabToolCallItem {
     pub id: String,
     pub tool: CollabAgentTool,
@@ -466,7 +487,8 @@ impl TurnItem {
             | Self::ImageView(_)
             | Self::EnteredReviewMode(_)
             | Self::ExitedReviewMode(_)
-            | Self::CollabToolCall(_) => Vec::new(),
+            | Self::CollabToolCall(_)
+            | Self::Elicitation(_) => Vec::new(),
         }
     }
 }
