@@ -77,6 +77,8 @@ pub struct Codex {
     /// Shared MCP connection manager — accessible from CodexHandle for direct
     /// elicitation resolution without holding the session Mutex.
     shared_mcp_manager: crate::core::mcp_client::McpConnectionManager,
+    /// Whether the thread has been auto-named (first user turn).
+    thread_named: std::sync::atomic::AtomicBool,
 }
 
 use super::initial_history::InitialHistory;
@@ -174,6 +176,7 @@ impl Codex {
                 crate::core::state::TurnState::default(),
             )),
             shared_mcp_manager,
+            thread_named: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -299,6 +302,11 @@ impl Codex {
             InitialHistory::New => 0,
         };
         let can_append = !matches!(initial_history, InitialHistory::New);
+
+        // Resumed/forked threads already had their first turn — skip auto-naming.
+        if can_append {
+            self.thread_named.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
 
         self.emit(EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: session_id.clone(),
@@ -1623,7 +1631,7 @@ impl Codex {
         .await;
 
         // Auto-generate thread name on first turn
-        if turn_id == "turn-1" && !user_text.is_empty() {
+        if !self.thread_named.swap(true, std::sync::atomic::Ordering::Relaxed) && !user_text.is_empty() {
             let eq_tx = self.eq_tx.clone();
             let session_id = session.id().to_string();
             let base_url_clone = base_url.clone();

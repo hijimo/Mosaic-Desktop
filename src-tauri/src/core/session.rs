@@ -182,8 +182,6 @@ pub struct Session {
     tx_event: async_channel::Sender<Event>,
     /// Working directory.
     cwd: PathBuf,
-    /// Turn counter for generating turn IDs.
-    turn_counter: tokio::sync::Mutex<u64>,
     /// Runtime config requirements that can constrain turn-level tool exposure.
     config_requirements: tokio::sync::RwLock<crate::config::ConfigRequirements>,
     /// Per-turn mutable state for pending approvals / user input.
@@ -396,7 +394,6 @@ impl Session {
             hooks: tokio::sync::Mutex::new(HookRegistry::new()),
             tx_event,
             cwd,
-            turn_counter: tokio::sync::Mutex::new(0),
             config_requirements: tokio::sync::RwLock::new(
                 crate::config::ConfigRequirements::default(),
             ),
@@ -482,9 +479,7 @@ impl Session {
         let config = self.resolved_config();
         state.turn_context = Some(TurnContext::from_config(&config, self.cwd.clone()));
 
-        let mut counter = self.turn_counter.lock().await;
-        *counter += 1;
-        let turn_id = format!("turn-{counter}");
+        let turn_id = uuid::Uuid::new_v4().to_string();
 
         Ok(turn_id)
     }
@@ -1414,7 +1409,9 @@ mod tests {
     async fn start_turn_creates_context() {
         let (session, _rx) = make_session();
         let turn_id = session.start_turn().await.unwrap();
-        assert_eq!(turn_id, "turn-1");
+        assert!(!turn_id.is_empty());
+        // turn_id should be a valid UUID
+        assert!(uuid::Uuid::parse_str(&turn_id).is_ok());
         assert!(session.is_turn_active().await);
         assert!(session.turn_context().await.is_some());
     }
@@ -1440,7 +1437,7 @@ mod tests {
 
         assert!(!session.is_turn_active().await);
         let turn_id = session.start_turn().await.unwrap();
-        assert_eq!(turn_id, "turn-2");
+        assert!(uuid::Uuid::parse_str(&turn_id).is_ok());
     }
 
     #[tokio::test]
