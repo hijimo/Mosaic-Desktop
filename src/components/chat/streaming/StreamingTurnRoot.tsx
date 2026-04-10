@@ -5,8 +5,6 @@ import { useApprovalStore } from '@/stores/approvalStore';
 import { useClarificationStore } from '@/stores/clarificationStore';
 import type { ToolCallState, TurnGroup, TurnItem, ReviewDecision } from '@/types';
 import { Message } from '../Message';
-import { TaskStartedIndicator } from '../indicators/TaskStartedIndicator';
-import { TaskCompletedIndicator } from '../indicators/TaskCompletedIndicator';
 
 interface StreamingTurnRootProps {
   threadId: string;
@@ -34,7 +32,6 @@ export function StreamingTurnRoot({
   const approvalsMap = useApprovalStore((s) => s.approvals);
   const clarificationsMap = useClarificationStore((s) => s.requests);
   const isStreaming = streamingView?.isStreaming ?? false;
-  const isComplete = !isStreaming && turnGroups.length > 0;
   const frameRef = useRef<number | null>(null);
   const streamingTurnId = streamingView?.turnId ?? null;
   const currentStreamingGroup =
@@ -77,8 +74,6 @@ export function StreamingTurnRoot({
 
   return (
     <>
-      {(isStreaming || turnGroups.length > 0) && <TaskStartedIndicator />}
-
       {visibleTurnGroups.map((group, index) => (
         <Message
           key={`${group.turn_id}-${index}`}
@@ -88,7 +83,6 @@ export function StreamingTurnRoot({
           onElicitationDecision={onElicitationDecision}
         />
       ))}
-
       {isStreaming && streamingGroup ? (
         <Message
           group={streamingGroup}
@@ -101,8 +95,6 @@ export function StreamingTurnRoot({
           isStreaming
         />
       ) : null}
-
-      {isComplete && <TaskCompletedIndicator />}
     </>
   );
 }

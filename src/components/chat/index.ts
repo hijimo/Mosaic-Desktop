@@ -3,10 +3,6 @@ export { MessageList } from './MessageList';
 export { InputArea } from './InputArea';
 export { FileChip } from './FileChip';
 
-// Indicators
-export { TaskStartedIndicator } from './indicators/TaskStartedIndicator';
-export { TaskCompletedIndicator } from './indicators/TaskCompletedIndicator';
-
 // Agent components
 export { ThinkingPanel } from './agent/ThinkingPanel';
 export { WebSearchCard } from './agent/WebSearchCard';
