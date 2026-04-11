@@ -6,6 +6,7 @@ import { useToolCallStore } from '@/stores/toolCallStore';
 import { useApprovalStore } from '@/stores/approvalStore';
 import { useClarificationStore } from '@/stores/clarificationStore';
 import { useElicitationStore } from '@/stores/elicitationStore';
+import { useSkillStore } from '@/stores/skillStore';
 import type { CodexEventPayload } from '@/types';
 
 /**
@@ -31,6 +32,7 @@ export function useCodexEvent(): void {
   const { addApproval, clearAll: clearApprovals } = useApprovalStore();
   const { addRequest: addClarification, clearAll: clearClarifications } = useClarificationStore();
   const { addRequest: addElicitation, clearAll: clearElicitations } = useElicitationStore();
+  const setSkills = useSkillStore((s) => s.setSkills);
   const eventOrderRef = useRef(0);
 
   const nextEventOrder = (): number => {
@@ -76,6 +78,9 @@ export function useCodexEvent(): void {
         case 'turn_aborted':
           flushVisibleStreaming();
           stopStreaming();
+          void threadGetMessages(thread_id).then((messages) => {
+            setMessages(thread_id, messages);
+          });
           break;
 
         // ── v2 Structured item events ──
@@ -233,6 +238,10 @@ export function useCodexEvent(): void {
             schema: msg.schema,
           });
           break;
+
+        case 'list_skills_response':
+          setSkills(msg.skills);
+          break;
       }
     });
 
@@ -261,5 +270,6 @@ export function useCodexEvent(): void {
     clearClarifications,
     addElicitation,
     clearElicitations,
+    setSkills,
   ]);
 }

@@ -390,6 +390,11 @@ export function Message({
                 该消息已被忽略
               </Typography>
             )}
+            {group.status === 'Interrupted' && (
+              <Typography sx={{ fontSize: 12, color: '#b45309', fontStyle: 'italic' }}>
+                已中止
+              </Typography>
+            )}
           </Box>
         </Box>
       )}

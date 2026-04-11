@@ -43,6 +43,8 @@ pub struct CodexHandle {
     pub features: Arc<super::features::Features>,
     /// State database handle.
     pub state_db: Option<crate::core::state_db::StateDb>,
+    /// Shared flag for direct interrupt from submit_op.
+    pub interrupted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Core engine that processes the SQ/EQ loop.
@@ -79,6 +81,8 @@ pub struct Codex {
     shared_mcp_manager: crate::core::mcp_client::McpConnectionManager,
     /// Whether the thread has been auto-named (first user turn).
     thread_named: std::sync::atomic::AtomicBool,
+    /// Flag set by external interrupt to abort the active turn's streaming loop.
+    interrupted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 use super::initial_history::InitialHistory;
@@ -177,6 +181,7 @@ impl Codex {
             )),
             shared_mcp_manager,
             thread_named: std::sync::atomic::AtomicBool::new(false),
+            interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -237,6 +242,7 @@ impl Codex {
         let features_ref = Arc::clone(&codex.features);
         let turn_state_ref = Arc::clone(&codex.shared_turn_state);
         let mcp_manager_ref = codex.shared_mcp_manager.clone();
+        let interrupted_ref = Arc::clone(&codex.interrupted);
 
         tokio::spawn(async move {
             if let Err(e) = codex.run_with_history(initial_history).await {
@@ -260,6 +266,7 @@ impl Codex {
             config,
             features: features_ref,
             state_db: None,
+            interrupted: interrupted_ref,
         })
     }
 
@@ -456,17 +463,22 @@ impl Codex {
     async fn handle_op(&self, _id: String, op: Op) -> Result<(), CodexError> {
         match op {
             Op::Interrupt => {
+                self.interrupted.store(true, std::sync::atomic::Ordering::Release);
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
                     s.interrupt().await;
-                    self.emit(EventMsg::TurnAborted(
-                        crate::protocol::event::TurnAbortedEvent {
-                            turn_id: None,
-                            reason: crate::protocol::types::TurnAbortReason::Interrupted,
-                        },
-                    ))
-                    .await;
                 }
+                // Always emit TurnAborted when processed via the queue.
+                // When run_turn detects the interrupted flag it emits its own
+                // TurnAborted *before* this Op is dequeued, so duplicates are
+                // harmless — the frontend treats them idempotently.
+                self.emit(EventMsg::TurnAborted(
+                    crate::protocol::event::TurnAbortedEvent {
+                        turn_id: None,
+                        reason: crate::protocol::types::TurnAbortReason::Interrupted,
+                    },
+                ))
+                .await;
             }
             Op::Shutdown => {
                 // Notify hooks of session end
@@ -829,6 +841,9 @@ impl Codex {
         turn_id: &str,
         items: Vec<crate::protocol::types::UserInput>,
     ) {
+        // Reset interrupted flag at the start of each turn
+        self.interrupted.store(false, std::sync::atomic::Ordering::Release);
+
         // Notify hooks of turn start
         session.hooks().await.notify_turn_start(turn_id);
 
@@ -1195,7 +1210,11 @@ impl Codex {
                 }
                 Ok(mut stream) => {
                     use futures::StreamExt;
-                    while let Some(event_result) = stream.next().await {
+                    loop {
+                        if self.interrupted.load(std::sync::atomic::Ordering::Acquire) {
+                            break;
+                        }
+                        let Some(event_result) = stream.next().await else { break };
                         match event_result {
                             Err(e) => {
                                 self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
@@ -1556,8 +1575,13 @@ impl Codex {
                             // Created, ServerModel, RateLimits
                             _ => {}
                         }
-                    }
+                    } // loop
                 }
+            }
+
+            // Check if interrupted before dispatching tool calls
+            if self.interrupted.load(std::sync::atomic::Ordering::Acquire) {
+                break;
             }
 
             // Dispatch pending tool calls in parallel
@@ -1621,14 +1645,58 @@ impl Codex {
         session.hooks().await.notify_turn_complete(turn_id);
         session.complete_turn().await;
 
-        // Emit TurnComplete bracket event
-        self.emit(EventMsg::TurnComplete(
-            crate::protocol::event::TurnCompleteEvent {
-                turn_id: turn_id.to_string(),
-                last_agent_message,
-            },
-        ))
-        .await;
+        let was_interrupted = self.interrupted.load(std::sync::atomic::Ordering::Acquire);
+        if was_interrupted {
+            // Persist any accumulated text that wasn't finalized via OutputItemDone
+            if !accumulated_text.is_empty() {
+                session
+                    .add_to_history(vec![
+                        crate::protocol::types::ResponseInputItem::text_message(
+                            "assistant",
+                            accumulated_text.clone(),
+                        ),
+                    ])
+                    .await;
+                // Persist to rollout so threadGetMessages can reconstruct it
+                self.emit(EventMsg::RawResponseItem(
+                    crate::protocol::event::RawResponseItemEvent {
+                        item: crate::protocol::types::ResponseItem::Message {
+                            id: None,
+                            role: "assistant".into(),
+                            content: vec![
+                                crate::protocol::types::ContentItem::OutputText {
+                                    text: accumulated_text.clone(),
+                                },
+                            ],
+                            end_turn: None,
+                            phase: None,
+                        },
+                    },
+                ))
+                .await;
+                if last_agent_message.is_none() {
+                    last_agent_message = Some(accumulated_text);
+                }
+            }
+
+            // Emit TurnAborted — already-streamed content is preserved on the frontend
+            self.emit(EventMsg::TurnAborted(
+                crate::protocol::event::TurnAbortedEvent {
+                    turn_id: Some(turn_id.to_string()),
+                    reason: crate::protocol::types::TurnAbortReason::Interrupted,
+                },
+            ))
+            .await;
+        } else {
+            // Emit TurnComplete bracket event
+            self.emit(EventMsg::TurnComplete(
+                crate::protocol::event::TurnCompleteEvent {
+                    turn_id: turn_id.to_string(),
+                    last_agent_message,
+                },
+            ))
+            .await;
+        }
 
         // Auto-generate thread name on first turn
         if !self.thread_named.swap(true, std::sync::atomic::Ordering::Relaxed) && !user_text.is_empty() {

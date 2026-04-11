@@ -10,6 +10,7 @@ use tracing::error;
 use crate::config::{deserialize_toml, ConfigLayerStack, ConfigRequirements, ConfigService};
 use crate::core::rollout::policy::{EventPersistenceMode, RolloutItem};
 use crate::core::rollout::{RolloutRecorder, RolloutRecorderParams};
+use crate::core::skills::manager::SkillsManager;
 use crate::core::state_db::{PersistedThreadMeta, StateDb};
 use crate::protocol::event::{Event, EventMsg};
 use crate::protocol::submission::{Op, Submission};
@@ -25,6 +26,10 @@ pub struct ThreadHandle {
     pub mcp_manager: crate::core::mcp_client::McpConnectionManager,
     /// Working directory for this thread (used for .codexpolicy writes without session lock).
     pub cwd: std::path::PathBuf,
+    /// Shared session reference for direct interrupt without going through the submission queue.
+    pub session: std::sync::Arc<tokio::sync::Mutex<Option<crate::core::session::Session>>>,
+    /// Shared flag to abort the active turn's streaming loop.
+    pub interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Lightweight metadata for a thread, queryable without a running engine.
@@ -51,6 +56,7 @@ pub struct AppState {
     pub config: Arc<Mutex<ConfigLayerStack>>,
     pub config_requirements: Arc<Mutex<ConfigRequirements>>,
     pub db: StateDb,
+    pub skills_manager: Arc<SkillsManager>,
 }
 
 // ── Event bridge ─────────────────────────────────────────────────
@@ -284,14 +290,28 @@ pub async fn submit_op(
     }
 
     // Extract what we need, then immediately drop the threads lock.
-    let (turn_state, sq_tx, thread_cwd, mcp_manager) = {
+    let (turn_state, sq_tx, thread_cwd, mcp_manager, session_ref, interrupted) = {
         let threads = state.threads.lock().await;
         let handle = threads
             .get(&thread_id)
             .ok_or_else(|| format!("thread not found: {thread_id}"))?;
-        (handle.turn_state.clone(), handle.sq_tx.clone(), handle.cwd.clone(), handle.mcp_manager.clone())
+        (handle.turn_state.clone(), handle.sq_tx.clone(), handle.cwd.clone(), handle.mcp_manager.clone(), handle.session.clone(), handle.interrupted.clone())
     };
     // All locks released.
+
+    // Interrupt bypasses the submission queue: set the interrupted flag and
+    // call session.interrupt() directly. run_turn will detect the flag,
+    // persist accumulated text, and emit TurnAborted with the correct turn_id.
+    if matches!(&op, Op::Interrupt) {
+        let session_guard = session_ref.lock().await;
+        if let Some(s) = session_guard.as_ref() {
+            if s.is_turn_active().await {
+                interrupted.store(true, std::sync::atomic::Ordering::Release);
+            }
+            s.interrupt().await;
+        }
+        return Ok(());
+    }
 
     // Approval and elicitation ops bypass the submission queue: the main loop
     // is blocked inside run_turn → tool call / orchestrator → oneshot, so
@@ -479,6 +499,8 @@ pub async fn thread_start(
                     turn_state: handle.turn_state.clone(),
                     mcp_manager: handle.mcp_manager.clone(),
                     cwd: handle.cwd.clone(),
+                    session: handle.session.clone(),
+                    interrupted: handle.interrupted.clone(),
                 },
     );
     Ok(thread_id)
@@ -807,6 +829,8 @@ pub async fn thread_resume(
                     turn_state: handle.turn_state.clone(),
                     mcp_manager: handle.mcp_manager.clone(),
                     cwd: handle.cwd.clone(),
+                    session: handle.session.clone(),
+                    interrupted: handle.interrupted.clone(),
                 },
     );
 
@@ -949,6 +973,8 @@ pub async fn thread_fork(
                     turn_state: handle.turn_state.clone(),
                     mcp_manager: handle.mcp_manager.clone(),
                     cwd: handle.cwd.clone(),
+                    session: handle.session.clone(),
+                    interrupted: handle.interrupted.clone(),
                 },
     );
     Ok(new_thread_id)
@@ -1109,6 +1135,30 @@ pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageR
         error!("share message failed: {e:#}");
         format!("share message failed: {e:#}")
     })
+}
+
+/// List available skills for a given working directory.
+/// This is a direct query command that does not require a thread.
+#[tauri::command]
+pub fn list_skills(
+    state: State<'_, AppState>,
+    cwd: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let cwd_path = PathBuf::from(&cwd);
+    let outcome = state.skills_manager.skills_for_cwd(&cwd_path, false);
+    let skills: Vec<serde_json::Value> = outcome
+        .skills
+        .iter()
+        .filter_map(|s| {
+            serde_json::to_value(serde_json::json!({
+                "name": s.name,
+                "description": s.description,
+                "scope": s.scope,
+            }))
+            .ok()
+        })
+        .collect();
+    Ok(skills)
 }
 
 #[cfg(test)]
