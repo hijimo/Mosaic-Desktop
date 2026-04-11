@@ -510,10 +510,41 @@ impl Codex {
                 service_tier: _service_tier,
                 collaboration_mode,
                 personality,
+                agent_role,
                 ..
             } => {
+                // Resolve agent role instructions before acquiring session lock (avoid
+                // doing config.merge() while holding the session mutex).
+                let role_instructions: Option<String> = agent_role.and_then(|role_name| {
+                    if role_name == "default" { return None; }
+                    let merged = self.config.merge();
+                    let user_roles = merged.agents.as_ref()
+                        .map(|a| a.roles.iter().map(|(k, v)| {
+                            (k.clone(), crate::core::agent::AgentRoleConfig {
+                                description: v.description.clone(),
+                                config_file: v.config_file.clone(),
+                            })
+                        }).collect())
+                        .unwrap_or_default();
+                    match crate::core::agent::role::resolve_role(&role_name, &user_roles) {
+                        Some((cfg, _)) => cfg.description.map(|desc| {
+                            format!("You are operating as the '{}' agent role. Follow these instructions:\n{}", role_name, desc)
+                        }),
+                        None => {
+                            tracing::warn!("unknown agent role '{}', ignoring", role_name);
+                            None
+                        }
+                    }
+                });
+
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
+                    // Inject role instructions into system prompt via custom_instructions
+                    // (consumed once by run_turn, not persisted in user-visible history)
+                    if let Some(instr) = role_instructions {
+                        s.set_custom_instructions(instr).await;
+                    }
+
                     let turn_id = s.start_turn().await?;
 
                     // Apply submitted parameters as overrides on the TurnContext

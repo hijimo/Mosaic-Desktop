@@ -43,6 +43,8 @@ pub enum Op {
         collaboration_mode: Option<CollaborationMode>,
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_role: Option<String>,
     },
 
     /// Legacy user input.

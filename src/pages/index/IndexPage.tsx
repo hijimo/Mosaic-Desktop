@@ -30,6 +30,7 @@ import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { useLoadSkills } from '@/hooks/useLoadSkills';
 import { useLoadAgentRoles } from '@/hooks/useLoadAgentRoles';
+import { useAgentRoleStore } from '@/stores/agentRoleStore';
 import { MessageList } from '@/components/chat/MessageList';
 import { InputArea } from '@/components/chat/InputArea';
 import { getHomeDir, listCwds, pickFolder, getConfig } from '@/services/api';
@@ -253,6 +254,9 @@ export function IndexPage(): React.ReactElement {
         model: '',
         approval_policy: approvalPolicy,
         sandbox_policy: sandboxPolicy,
+        // Read from store directly (not via hook) to always get latest value
+        // without adding activeRole to the useCallback dependency array.
+        agent_role: useAgentRoleStore.getState().activeRole?.name,
       });
     },
     [

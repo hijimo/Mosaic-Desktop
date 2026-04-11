@@ -696,6 +696,7 @@ export type Op =
       service_tier?: string;
       collaboration_mode?: unknown;
       personality?: string;
+      agent_role?: string;
     }
   | { type: 'user_input'; items: UserInput[]; final_output_json_schema?: unknown }
   | { type: 'interrupt' }
