@@ -103,12 +103,11 @@ impl ToolHandler for ListDirHandler {
         }
 
         let path = PathBuf::from(&params.dir_path);
-        if !path.is_absolute() {
-            return Err(CodexError::new(
-                ErrorCode::InvalidInput,
-                "dir_path must be an absolute path",
-            ));
-        }
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        };
 
         let entries = list_dir_slice(&path, params.offset, params.limit, params.depth).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);

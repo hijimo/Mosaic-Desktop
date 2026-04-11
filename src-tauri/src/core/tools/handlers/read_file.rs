@@ -147,12 +147,11 @@ impl ToolHandler for ReadFileHandler {
         }
 
         let path = PathBuf::from(&params.file_path);
-        if !path.is_absolute() {
-            return Err(CodexError::new(
-                ErrorCode::InvalidInput,
-                "file_path must be an absolute path",
-            ));
-        }
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        };
 
         let collected = match params.mode {
             ReadMode::Slice => slice_read(&path, params.offset, params.limit).await?,
