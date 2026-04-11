@@ -17,10 +17,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: <MessageSquarePlus size={20} />, label: 'New Chat', key: 'new-chat' },
-  { icon: <Workflow size={20} />, label: 'Automation', key: 'automation' },
-  { icon: <Sparkles size={20} />, label: 'Skills', key: 'skills' },
-  { icon: <Bot size={20} />, label: 'Agents', key: 'agents' },
+  { icon: <MessageSquarePlus size={20} />, label: '新对话', key: 'new-chat' },
+  { icon: <Workflow size={20} />, label: '自动化', key: 'automation' },
+  { icon: <Sparkles size={20} />, label: '技能', key: 'skills' },
+  { icon: <Bot size={20} />, label: '智能体', key: 'agents' },
 ];
 
 export function Sidebar(): React.ReactElement {
@@ -88,7 +88,7 @@ export function Sidebar(): React.ReactElement {
                 lineHeight: '15px',
               }}
             >
-              The Ethereal Workspace
+              灵感工作台
             </Typography>
           </Box>
         </Box>
@@ -141,7 +141,7 @@ export function Sidebar(): React.ReactElement {
           }}
         >
           <Settings size={20} color="#475569" />
-          <Typography sx={{ fontSize: 14, color: '#475569' }}>Settings</Typography>
+          <Typography sx={{ fontSize: 14, color: '#475569' }}>设置</Typography>
         </Box>
       </Box>
     </Box>

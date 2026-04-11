@@ -19,7 +19,7 @@ function relativeTime(iso: string): string {
 }
 
 function projectName(cwd?: string | null): string {
-  if (!cwd) return 'Unknown Project';
+  if (!cwd) return '未知项目';
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] || cwd;
 }
@@ -159,13 +159,13 @@ export function RecentChats(): React.ReactElement {
     <Box sx={{ pt: '24px', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Section header */}
       <Box sx={{ px: '12px' }}>
-        <Typography sx={sectionTitle}>Recent Chats</Typography>
+        <Typography sx={sectionTitle}>最近对话</Typography>
       </Box>
 
       {allThreads.length === 0 && (
         <Box sx={{ px: '12px', py: 1 }}>
           <Typography sx={{ fontSize: 12, color: 'rgba(65,72,78,0.5)', fontStyle: 'italic' }}>
-            No conversations yet
+            暂无对话记录
           </Typography>
         </Box>
       )}
@@ -234,7 +234,7 @@ export function RecentChats(): React.ReactElement {
                               ml: isActive ? '8px' : 0,
                             }}
                           >
-                            {chat.name || 'New Chat'}
+                            {chat.name || '新对话'}
                           </Typography>
                         </Box>
                         {isHovered || confirmId === chat.thread_id ? (
