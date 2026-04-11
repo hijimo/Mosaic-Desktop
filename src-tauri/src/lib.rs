@@ -156,6 +156,7 @@ pub fn run() {
             commands::dismiss_turn_error,
             commands::share_message,
             commands::list_skills,
+            commands::list_agent_roles,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

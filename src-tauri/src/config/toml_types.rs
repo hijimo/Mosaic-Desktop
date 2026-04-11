@@ -229,6 +229,19 @@ pub struct TuiToml {
 #[serde(rename_all = "kebab-case", default)]
 pub struct AgentsToml {
     pub max_concurrent_threads: Option<usize>,
+    pub max_depth: Option<i32>,
+    pub job_max_runtime_seconds: Option<u64>,
+    /// User-defined role declarations keyed by role name.
+    #[serde(default, flatten)]
+    pub roles: std::collections::BTreeMap<String, AgentRoleToml>,
+}
+
+/// A single agent role declaration in config TOML.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct AgentRoleToml {
+    pub description: Option<String>,
+    pub config_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

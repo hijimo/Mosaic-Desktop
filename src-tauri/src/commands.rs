@@ -724,10 +724,14 @@ pub async fn thread_resume(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<ThreadMeta, String> {
-    // 1. Already running — return existing meta.
+    // 1. Already running — update process cwd and return existing meta.
     {
         let threads = state.threads.lock().await;
         if threads.contains_key(&thread_id) {
+            // Ensure process cwd matches this thread's working directory
+            if let Some(handle) = threads.get(&thread_id) {
+                let _ = std::env::set_current_dir(&handle.cwd);
+            }
             let meta = state.thread_meta.lock().await;
             if let Some(m) = meta.get(&thread_id) {
                 return Ok(m.clone());
@@ -1159,6 +1163,41 @@ pub fn list_skills(
         })
         .collect();
     Ok(skills)
+}
+
+/// List all agent roles (built-in + user-defined from config).
+#[tauri::command]
+pub async fn list_agent_roles(
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let merged = {
+        let config = state.config.lock().await;
+        config.merge()
+    };
+    let mut roles: Vec<serde_json::Value> = Vec::new();
+
+    // Built-in roles from core::agent::role
+    use crate::core::agent::role::built_in_role_list;
+    for (name, desc) in built_in_role_list() {
+        roles.push(serde_json::json!({
+            "name": name,
+            "description": desc,
+            "source": "built-in",
+        }));
+    }
+
+    // User-defined roles from config
+    if let Some(agents) = &merged.agents {
+        for (name, role) in &agents.roles {
+            roles.push(serde_json::json!({
+                "name": name,
+                "description": role.description,
+                "source": "user",
+            }));
+        }
+    }
+
+    Ok(roles)
 }
 
 #[cfg(test)]

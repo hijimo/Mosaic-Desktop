@@ -277,6 +277,15 @@ impl Codex {
 
     /// Start the SQ/EQ processing loop with initial history.
     async fn run_with_history(&self, initial_history: InitialHistory) -> Result<(), CodexError> {
+        // Set process cwd so legacy tool handlers that use std::env::current_dir()
+        // resolve paths relative to the thread's working directory.
+        // TODO: migrate legacy handlers to use TurnContext.cwd instead of
+        // std::env::current_dir(). set_current_dir is process-global and will
+        // race if multiple threads execute tools concurrently.
+        if let Err(e) = std::env::set_current_dir(&self.cwd) {
+            tracing::warn!("failed to set cwd to {}: {e}", self.cwd.display());
+        }
+
         {
             let mut running = self.running.lock().await;
             *running = true;

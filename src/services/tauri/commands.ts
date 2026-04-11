@@ -76,3 +76,13 @@ export interface SkillItem {
 export async function listSkills(cwd: string): Promise<SkillItem[]> {
   return invoke<SkillItem[]>('list_skills', { cwd });
 }
+
+export interface AgentRole {
+  name: string;
+  description: string | null;
+  source: 'built-in' | 'user';
+}
+
+export async function listAgentRoles(): Promise<AgentRole[]> {
+  return invoke<AgentRole[]>('list_agent_roles');
+}

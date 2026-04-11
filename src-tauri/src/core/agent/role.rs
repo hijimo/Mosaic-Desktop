@@ -139,6 +139,14 @@ pub mod spawn_tool_spec {
 
 // ── Built-in roles ───────────────────────────────────────────────
 
+/// Return a list of (name, description) for all built-in agent roles.
+pub fn built_in_role_list() -> Vec<(String, Option<String>)> {
+    built_in_configs()
+        .iter()
+        .map(|(name, cfg)| (name.clone(), cfg.description.clone()))
+        .collect()
+}
+
 fn built_in_configs() -> &'static BTreeMap<String, AgentRoleConfig> {
     static CONFIGS: LazyLock<BTreeMap<String, AgentRoleConfig>> = LazyLock::new(|| {
         BTreeMap::from([

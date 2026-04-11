@@ -29,6 +29,7 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useThread } from '@/hooks/useThread';
 import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { useLoadSkills } from '@/hooks/useLoadSkills';
+import { useLoadAgentRoles } from '@/hooks/useLoadAgentRoles';
 import { MessageList } from '@/components/chat/MessageList';
 import { InputArea } from '@/components/chat/InputArea';
 import { getHomeDir, listCwds, pickFolder, getConfig } from '@/services/api';
@@ -176,6 +177,7 @@ export function IndexPage(): React.ReactElement {
     : null;
   const effectiveCwd = threadCwd ?? selectedCwd;
   useLoadSkills(effectiveCwd);
+  useLoadAgentRoles();
 
   // ── Read config for approval/sandbox policies ──
   const [approvalPolicy, setApprovalPolicy] =
