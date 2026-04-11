@@ -66,3 +66,13 @@ export interface ShareMessageResult {
 export async function shareMessage(payload: ShareMessagePayload): Promise<ShareMessageResult> {
   return invoke<ShareMessageResult>('share_message', { payload });
 }
+
+export interface SkillItem {
+  name: string;
+  description: string;
+  scope: 'Repo' | 'User' | 'System' | 'Admin';
+}
+
+export async function listSkills(cwd: string): Promise<SkillItem[]> {
+  return invoke<SkillItem[]>('list_skills', { cwd });
+}

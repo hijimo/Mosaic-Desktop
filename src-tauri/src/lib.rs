@@ -114,6 +114,13 @@ pub fn run() {
         .unwrap_or_else(|| std::path::PathBuf::from(".mosaic"));
     let db = StateDb::open(&mosaic_home.join("state.db")).expect("failed to open state database");
 
+    let codex_home = dirs::home_dir()
+        .map(|h| h.join(".codex"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".codex"));
+    let skills_manager = std::sync::Arc::new(
+        crate::core::skills::manager::SkillsManager::new(codex_home),
+    );
+
     let app_state = AppState {
         threads: Arc::new(Mutex::new(HashMap::new())),
         thread_meta: Arc::new(Mutex::new(HashMap::new())),
@@ -121,6 +128,7 @@ pub fn run() {
         config: Arc::new(Mutex::new(config)),
         config_requirements: Arc::new(Mutex::new(config_requirements)),
         db,
+        skills_manager,
     };
 
     tauri::Builder::default()
@@ -147,6 +155,7 @@ pub fn run() {
             commands::pick_files,
             commands::dismiss_turn_error,
             commands::share_message,
+            commands::list_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

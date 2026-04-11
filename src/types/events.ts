@@ -658,6 +658,7 @@ export type EventMsg =
   | { type: "collab_resume_end"; call_id: string; thread_id: string }
   // Misc
   | { type: "shutdown_complete" }
+  | { type: "list_skills_response"; skills: Array<{ name: string; description: string }> }
   | { type: "skills_update_available" }
   | { type: "background_event"; message: string }
   | { type: "deprecation_notice"; summary: string; details?: string }
