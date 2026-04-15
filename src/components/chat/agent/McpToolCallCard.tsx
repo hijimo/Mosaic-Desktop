@@ -23,7 +23,7 @@ export function McpToolCallCard({ toolCall }: McpToolCallCardProps): React.React
         </Typography>
         <Typography sx={{ fontSize: 12, fontWeight: 500, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {toolCall.toolName ? `${toolCall.serverName ? toolCall.serverName + ' → ' : ''}${toolCall.toolName}` : toolCall.name}
-          {toolCall.arguments ? `(${JSON.stringify(toolCall.arguments)})` : ''}
+          {toolCall.arguments ? (() => { const s = JSON.stringify(toolCall.arguments); return `(${s.length > 80 ? s.slice(0, 80) + '…' : s})`; })() : ''}
         </Typography>
       </Box>
       <StatusBadge status={toolCall.status} />

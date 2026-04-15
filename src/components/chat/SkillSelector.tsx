@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Box, Typography, IconButton, InputBase } from '@mui/material';
 import { Search, Check } from 'lucide-react';
 import { useSkillStore, useSkills, type SkillInfo } from '@/stores/skillStore';
@@ -21,6 +21,13 @@ export function SkillSelector({ onConfirm, onCancel }: SkillSelectorProps) {
   const setSelectedSkills = useSkillStore((s) => s.setSelectedSkills);
 
   const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Popover 内 autoFocus 不可靠，手动延迟聚焦
+    const timer = setTimeout(() => searchRef.current?.focus(), 50);
+    return () => clearTimeout(timer);
+  }, []);
 
   // 记录打开时的快照，取消时恢复
   const [snapshot] = useState(() => [...selectedSkills]);
@@ -76,6 +83,7 @@ export function SkillSelector({ onConfirm, onCancel }: SkillSelectorProps) {
         >
           <Search size={16} color="rgba(29,78,216,0.5)" />
           <InputBase
+            inputRef={searchRef}
             autoFocus
             placeholder="搜索技能..."
             value={search}

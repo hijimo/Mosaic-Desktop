@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Box, Typography, InputBase } from '@mui/material';
 import { Search, Check } from 'lucide-react';
 import { useAgentRoleStore, type AgentRoleInfo } from '@/stores/agentRoleStore';
@@ -16,6 +16,12 @@ export function AgentRoleSelector({ onClose }: AgentRoleSelectorProps) {
   const setActiveRole = useAgentRoleStore((s) => s.setActiveRole);
 
   const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => searchRef.current?.focus(), 50);
+    return () => clearTimeout(timer);
+  }, []);
 
   const filtered = useMemo(
     () =>
@@ -65,6 +71,7 @@ export function AgentRoleSelector({ onClose }: AgentRoleSelectorProps) {
         >
           <Search size={16} color="rgba(29,78,216,0.5)" />
           <InputBase
+            inputRef={searchRef}
             autoFocus
             placeholder="搜索 Agent..."
             value={search}
