@@ -6,6 +6,7 @@ export interface SkillInfo {
   name: string;
   description: string;
   scope: SkillScope;
+  path: string;
 }
 
 const MAX_SELECTED_SKILLS = 10;

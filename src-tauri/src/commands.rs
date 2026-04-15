@@ -1147,9 +1147,10 @@ pub async fn share_message(payload: ShareMessageRequest) -> Result<ShareMessageR
 pub fn list_skills(
     state: State<'_, AppState>,
     cwd: String,
+    force_reload: Option<bool>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let cwd_path = PathBuf::from(&cwd);
-    let outcome = state.skills_manager.skills_for_cwd(&cwd_path, false);
+    let outcome = state.skills_manager.skills_for_cwd(&cwd_path, force_reload.unwrap_or(false));
     let skills: Vec<serde_json::Value> = outcome
         .skills
         .iter()
@@ -1158,6 +1159,7 @@ pub fn list_skills(
                 "name": s.name,
                 "description": s.description,
                 "scope": s.scope,
+                "path": s.path_to_skills_md,
             }))
             .ok()
         })

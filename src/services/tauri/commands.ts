@@ -71,10 +71,11 @@ export interface SkillItem {
   name: string;
   description: string;
   scope: 'Repo' | 'User' | 'System' | 'Admin';
+  path: string;
 }
 
-export async function listSkills(cwd: string): Promise<SkillItem[]> {
-  return invoke<SkillItem[]>('list_skills', { cwd });
+export async function listSkills(cwd: string, forceReload?: boolean): Promise<SkillItem[]> {
+  return invoke<SkillItem[]>('list_skills', { cwd, forceReload: forceReload ?? false });
 }
 
 export interface AgentRole {
