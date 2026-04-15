@@ -2,28 +2,41 @@ import { create } from 'zustand';
 import type { ApprovalRequestState } from '@/types';
 
 interface ApprovalStoreState {
-  approvals: Map<string, ApprovalRequestState>;
-  addApproval: (approval: ApprovalRequestState) => void;
-  removeApproval: (callId: string) => void;
-  clearAll: () => void;
+  byThread: Map<string, Map<string, ApprovalRequestState>>;
+
+  addApproval: (threadId: string, approval: ApprovalRequestState) => void;
+  removeApproval: (threadId: string, callId: string) => void;
+  clearThread: (threadId: string) => void;
 }
 
 export const useApprovalStore = create<ApprovalStoreState>((set) => ({
-  approvals: new Map(),
+  byThread: new Map(),
 
-  addApproval: (approval) =>
+  addApproval: (threadId, approval) =>
     set((state) => {
-      const next = new Map(state.approvals);
-      next.set(approval.callId, approval);
-      return { approvals: next };
+      const outer = new Map(state.byThread);
+      const inner = new Map(outer.get(threadId) ?? []);
+      inner.set(approval.callId, approval);
+      outer.set(threadId, inner);
+      return { byThread: outer };
     }),
 
-  removeApproval: (callId) =>
+  removeApproval: (threadId, callId) =>
     set((state) => {
-      const next = new Map(state.approvals);
-      next.delete(callId);
-      return { approvals: next };
+      const inner = state.byThread.get(threadId);
+      if (!inner?.has(callId)) return state;
+      const outer = new Map(state.byThread);
+      const nextInner = new Map(inner);
+      nextInner.delete(callId);
+      outer.set(threadId, nextInner);
+      return { byThread: outer };
     }),
 
-  clearAll: () => set({ approvals: new Map() }),
+  clearThread: (threadId) =>
+    set((state) => {
+      if (!state.byThread.has(threadId)) return state;
+      const outer = new Map(state.byThread);
+      outer.delete(threadId);
+      return { byThread: outer };
+    }),
 }));

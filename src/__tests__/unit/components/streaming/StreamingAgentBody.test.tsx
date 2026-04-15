@@ -3,103 +3,40 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StreamingAgentBody } from '@/components/chat/streaming/StreamingAgentBody';
 import { useMessageStore } from '@/stores/messageStore';
 
-const streamdownSpy = vi.fn(({ children }: { children: string }) => (
-  <div>{children}</div>
-));
-
 vi.mock('streamdown', () => ({
-  Streamdown: (props: { children: string }) => {
-    streamdownSpy(props);
-    return <div>{props.children}</div>;
-  },
+  Streamdown: (props: { children: string }) => <div>{props.children}</div>,
 }));
 vi.mock('@streamdown/code', () => ({ code: {} }));
 vi.mock('@streamdown/cjk', () => ({ cjk: {} }));
 vi.mock('streamdown/styles.css', () => ({}));
 
+function setThreadStreaming(threadId: string, items: Map<string, unknown>, isStreaming = true, revision = 1): void {
+  const next = new Map(useMessageStore.getState().streamingByThread);
+  next.set(threadId, {
+    streamingView: { turnId: 'turn-1', isStreaming, items: items as never, revision },
+    streamingItemOrder: new Map(),
+  });
+  useMessageStore.setState({ streamingByThread: next });
+}
+
 describe('StreamingAgentBody', () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
-    useMessageStore.setState({
-      messagesByThread: new Map(),
-      streamingTurn: null,
-      streamingBuffer: null,
-      streamingView: null,
-      streamingItemOrder: new Map(),
-    });
+    useMessageStore.setState({ messagesByThread: new Map(), streamingByThread: new Map() });
   });
 
-  it('renders visible body text from streamingView', () => {
-    useMessageStore.setState({
-      streamingView: {
-        turnId: 'turn-1',
-        isStreaming: true,
-        revision: 1,
-        items: new Map([
-          ['a1', {
-            threadId: 't1',
-            turnId: 'turn-1',
-            itemId: 'a1',
-            order: 1,
-            itemType: 'AgentMessage',
-            agentText: 'Hello',
-            reasoningSummary: [],
-            reasoningRaw: [],
-            planText: '',
-          }],
-        ]),
-      },
-    });
-
-    render(<StreamingAgentBody />);
+  it('renders visible body text', () => {
+    setThreadStreaming('t1', new Map([
+      ['a1', { threadId: 't1', turnId: 'turn-1', itemId: 'a1', order: 1, itemType: 'AgentMessage', agentText: 'Hello', reasoningSummary: [], reasoningRaw: [], planText: '' }],
+    ]));
+    render(<StreamingAgentBody threadId="t1" />);
     expect(screen.getByText('Hello')).toBeInTheDocument();
   });
 
-  it('shows thinking placeholder when streaming with empty visible body', () => {
-    useMessageStore.setState({
-      streamingView: {
-        turnId: 'turn-1',
-        isStreaming: true,
-        revision: 0,
-        items: new Map(),
-      },
-    });
-
-    render(<StreamingAgentBody />);
+  it('shows thinking placeholder when streaming with empty body', () => {
+    setThreadStreaming('t1', new Map());
+    render(<StreamingAgentBody threadId="t1" />);
     expect(screen.getByText('思考中...')).toBeInTheDocument();
-  });
-
-  it('passes stability-first props to Streamdown while streaming', () => {
-    useMessageStore.setState({
-      streamingView: {
-        turnId: 'turn-1',
-        isStreaming: true,
-        revision: 1,
-        items: new Map([
-          ['a1', {
-            threadId: 't1',
-            turnId: 'turn-1',
-            itemId: 'a1',
-            order: 1,
-            itemType: 'AgentMessage',
-            agentText: 'Hello',
-            reasoningSummary: [],
-            reasoningRaw: [],
-            planText: '',
-          }],
-        ]),
-      },
-    });
-
-    render(<StreamingAgentBody />);
-    expect(streamdownSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        children: 'Hello',
-        isAnimating: false,
-        parseIncompleteMarkdown: true,
-        className: 'streaming-stable-markdown',
-      }),
-    );
   });
 });

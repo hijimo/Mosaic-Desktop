@@ -4,20 +4,19 @@ import { WebSearchCard } from '../agent/WebSearchCard';
 import { McpToolCallCard } from '../agent/McpToolCallCard';
 import { CodeExecutionBlock } from '../agent/CodeExecutionBlock';
 
-export function StreamingToolRegion(): React.ReactElement | null {
-  const activeToolCalls = useToolCallStore((s) => s.toolCalls);
+const EMPTY_MAP = new Map<string, never>();
+
+interface StreamingToolRegionProps {
+  threadId: string;
+}
+
+export function StreamingToolRegion({ threadId }: StreamingToolRegionProps): React.ReactElement | null {
+  const activeToolCalls = useToolCallStore((s) => s.byThread.get(threadId) ?? EMPTY_MAP);
 
   if (activeToolCalls.size === 0) return null;
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 2,
-        flex: 1,
-      }}
-    >
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
       {Array.from(activeToolCalls.values()).map((tc) => {
         switch (tc.type) {
           case 'web_search':

@@ -3,8 +3,19 @@ import { Loader2 } from 'lucide-react';
 import { useMessageStore } from '@/stores/messageStore';
 import { StreamdownRenderer } from '../shared/StreamdownRenderer';
 
-export function StreamingAgentBody(): React.ReactElement | null {
-  const streamingView = useMessageStore((s) => s.streamingView);
+interface StreamingAgentBodyProps {
+  threadId: string;
+}
+
+export function StreamingAgentBody({ threadId }: StreamingAgentBodyProps): React.ReactElement | null {
+  // Primitive selector ensures re-render on every view update
+  const viewRevision = useMessageStore(
+    (s) => s.streamingByThread.get(threadId)?.streamingView.revision ?? -1,
+  );
+  const streamingView = viewRevision >= 0
+    ? useMessageStore.getState().streamingByThread.get(threadId)?.streamingView
+    : undefined;
+
   const isStreaming = streamingView?.isStreaming ?? false;
   const items = Array.from(streamingView?.items.values() ?? []).filter(
     (item) => item.itemType === 'AgentMessage',
@@ -13,23 +24,19 @@ export function StreamingAgentBody(): React.ReactElement | null {
 
   if (!isStreaming && !agentText) return null;
 
-  return (
-    agentText ? (
-      <Box sx={{ fontSize: 16, color: '#41484e', lineHeight: '26px' }}>
-        <StreamdownRenderer
-          isStreaming={isStreaming}
-          mode={isStreaming ? 'streaming-stable' : 'final'}
-        >
-          {agentText}
-        </StreamdownRenderer>
-      </Box>
-    ) : (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Loader2 size={16} color='#005bc1' className='animate-spin' />
-        <Typography sx={{ fontSize: 14, color: '#94a3b8' }}>
-          思考中...
-        </Typography>
-      </Box>
-    )
+  return agentText ? (
+    <Box sx={{ fontSize: 16, color: '#41484e', lineHeight: '26px' }}>
+      <StreamdownRenderer
+        isStreaming={isStreaming}
+        mode={isStreaming ? 'streaming-stable' : 'final'}
+      >
+        {agentText}
+      </StreamdownRenderer>
+    </Box>
+  ) : (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Loader2 size={16} color='#005bc1' className='animate-spin' />
+      <Typography sx={{ fontSize: 14, color: '#94a3b8' }}>思考中...</Typography>
+    </Box>
   );
 }

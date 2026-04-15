@@ -2,28 +2,41 @@ import { create } from 'zustand';
 import type { ClarificationState } from '@/types';
 
 interface ClarificationStoreState {
-  requests: Map<string, ClarificationState>;
-  addRequest: (req: ClarificationState) => void;
-  removeRequest: (id: string) => void;
-  clearAll: () => void;
+  byThread: Map<string, Map<string, ClarificationState>>;
+
+  addRequest: (threadId: string, req: ClarificationState) => void;
+  removeRequest: (threadId: string, id: string) => void;
+  clearThread: (threadId: string) => void;
 }
 
 export const useClarificationStore = create<ClarificationStoreState>((set) => ({
-  requests: new Map(),
+  byThread: new Map(),
 
-  addRequest: (req) =>
+  addRequest: (threadId, req) =>
     set((state) => {
-      const next = new Map(state.requests);
-      next.set(req.id, req);
-      return { requests: next };
+      const outer = new Map(state.byThread);
+      const inner = new Map(outer.get(threadId) ?? []);
+      inner.set(req.id, req);
+      outer.set(threadId, inner);
+      return { byThread: outer };
     }),
 
-  removeRequest: (id) =>
+  removeRequest: (threadId, id) =>
     set((state) => {
-      const next = new Map(state.requests);
-      next.delete(id);
-      return { requests: next };
+      const inner = state.byThread.get(threadId);
+      if (!inner?.has(id)) return state;
+      const outer = new Map(state.byThread);
+      const nextInner = new Map(inner);
+      nextInner.delete(id);
+      outer.set(threadId, nextInner);
+      return { byThread: outer };
     }),
 
-  clearAll: () => set({ requests: new Map() }),
+  clearThread: (threadId) =>
+    set((state) => {
+      if (!state.byThread.has(threadId)) return state;
+      const outer = new Map(state.byThread);
+      outer.delete(threadId);
+      return { byThread: outer };
+    }),
 }));

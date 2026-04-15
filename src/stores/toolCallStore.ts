@@ -2,42 +2,56 @@ import { create } from 'zustand';
 import type { ToolCallState } from '@/types';
 
 interface ToolCallStoreState {
-  /** Active tool calls keyed by call_id */
-  toolCalls: Map<string, ToolCallState>;
+  /** Tool calls keyed by threadId → callId */
+  byThread: Map<string, Map<string, ToolCallState>>;
 
-  beginToolCall: (tc: ToolCallState) => void;
-  updateToolCallOutput: (callId: string, delta: string) => void;
-  endToolCall: (callId: string, updates: Partial<ToolCallState>) => void;
-  clearAll: () => void;
+  beginToolCall: (threadId: string, tc: ToolCallState) => void;
+  updateToolCallOutput: (threadId: string, callId: string, delta: string) => void;
+  endToolCall: (threadId: string, callId: string, updates: Partial<ToolCallState>) => void;
+  clearThread: (threadId: string) => void;
 }
 
 export const useToolCallStore = create<ToolCallStoreState>((set) => ({
-  toolCalls: new Map(),
+  byThread: new Map(),
 
-  beginToolCall: (tc) =>
+  beginToolCall: (threadId, tc) =>
     set((state) => {
-      const next = new Map(state.toolCalls);
-      next.set(tc.callId, tc);
-      return { toolCalls: next };
+      const outer = new Map(state.byThread);
+      const inner = new Map(outer.get(threadId) ?? []);
+      inner.set(tc.callId, tc);
+      outer.set(threadId, inner);
+      return { byThread: outer };
     }),
 
-  updateToolCallOutput: (callId, delta) =>
+  updateToolCallOutput: (threadId, callId, delta) =>
     set((state) => {
-      const existing = state.toolCalls.get(callId);
+      const inner = state.byThread.get(threadId);
+      const existing = inner?.get(callId);
       if (!existing) return state;
-      const next = new Map(state.toolCalls);
-      next.set(callId, { ...existing, output: (existing.output ?? '') + delta });
-      return { toolCalls: next };
+      const outer = new Map(state.byThread);
+      const nextInner = new Map(inner);
+      nextInner.set(callId, { ...existing, output: (existing.output ?? '') + delta });
+      outer.set(threadId, nextInner);
+      return { byThread: outer };
     }),
 
-  endToolCall: (callId, updates) =>
+  endToolCall: (threadId, callId, updates) =>
     set((state) => {
-      const existing = state.toolCalls.get(callId);
+      const inner = state.byThread.get(threadId);
+      const existing = inner?.get(callId);
       if (!existing) return state;
-      const next = new Map(state.toolCalls);
-      next.set(callId, { ...existing, ...updates });
-      return { toolCalls: next };
+      const outer = new Map(state.byThread);
+      const nextInner = new Map(inner);
+      nextInner.set(callId, { ...existing, ...updates });
+      outer.set(threadId, nextInner);
+      return { byThread: outer };
     }),
 
-  clearAll: () => set({ toolCalls: new Map() }),
+  clearThread: (threadId) =>
+    set((state) => {
+      if (!state.byThread.has(threadId)) return state;
+      const outer = new Map(state.byThread);
+      outer.delete(threadId);
+      return { byThread: outer };
+    }),
 }));

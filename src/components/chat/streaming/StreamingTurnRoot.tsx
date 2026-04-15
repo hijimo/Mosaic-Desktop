@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useRef } from 'react';
 import { useMessageStore } from '@/stores/messageStore';
 import { useToolCallStore } from '@/stores/toolCallStore';
 import { useApprovalStore } from '@/stores/approvalStore';
@@ -13,6 +12,7 @@ interface StreamingTurnRootProps {
 }
 
 const EMPTY_GROUPS: never[] = [];
+const EMPTY_MAP = new Map<string, never>();
 
 export function StreamingTurnRoot({
   threadId,
@@ -22,18 +22,26 @@ export function StreamingTurnRoot({
   const turnGroups = useMessageStore(
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
   );
-  const streamingView = useMessageStore((s) => s.streamingView);
-  const streamingItemOrder = useMessageStore((s) => s.streamingItemOrder);
-  const hasPendingStreamingBuffer = useMessageStore(
-    (s) => (s.streamingBuffer?.dirtyItemCount ?? 0) > 0,
+
+  // Subscribe to the revision number (primitive) — guarantees re-render on every view update
+  const viewRevision = useMessageStore(
+    (s) => s.streamingByThread.get(threadId)?.streamingView.revision ?? -1,
   );
-  const flushVisibleStreaming = useMessageStore((s) => s.flushVisibleStreaming);
-  const toolCallsMap = useToolCallStore((s) => s.toolCalls);
-  const approvalsMap = useApprovalStore((s) => s.approvals);
-  const clarificationsMap = useClarificationStore((s) => s.requests);
+
+  // Read the full streaming state imperatively during render (driven by revision change)
+  const threadStreaming = viewRevision >= 0
+    ? useMessageStore.getState().streamingByThread.get(threadId)
+    : undefined;
+  const streamingView = threadStreaming?.streamingView ?? null;
+  const streamingItemOrder = threadStreaming?.streamingItemOrder ?? EMPTY_MAP;
+
+  const toolCallsMap = useToolCallStore((s) => s.byThread.get(threadId) ?? EMPTY_MAP);
+  const approvalsMap = useApprovalStore((s) => s.byThread.get(threadId) ?? EMPTY_MAP);
+  const clarificationsMap = useClarificationStore((s) => s.byThread.get(threadId) ?? EMPTY_MAP);
+
   const isStreaming = streamingView?.isStreaming ?? false;
-  const frameRef = useRef<number | null>(null);
   const streamingTurnId = streamingView?.turnId ?? null;
+
   const currentStreamingGroup =
     isStreaming && streamingTurnId
       ? turnGroups.find((group) => group.turn_id === streamingTurnId) ?? null
@@ -42,35 +50,14 @@ export function StreamingTurnRoot({
     currentStreamingGroup === null
       ? turnGroups
       : turnGroups.filter((group) => group.turn_id !== currentStreamingGroup.turn_id);
+
   const activeToolCalls = Array.from(toolCallsMap.values());
   const approvals = Array.from(approvalsMap.values());
   const clarifications = Array.from(clarificationsMap.values());
+
   const streamingGroup = buildStreamingGroup(
-    streamingView,
-    currentStreamingGroup,
-    streamingItemOrder,
-    activeToolCalls,
+    streamingView, currentStreamingGroup, streamingItemOrder, activeToolCalls,
   );
-
-  const ensureStreamingFlushScheduled = useCallback(() => {
-    if (frameRef.current !== null) return;
-
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      flushVisibleStreaming();
-    });
-  }, [flushVisibleStreaming]);
-
-  useEffect(() => {
-    if (!hasPendingStreamingBuffer) return;
-    ensureStreamingFlushScheduled();
-  }, [hasPendingStreamingBuffer, ensureStreamingFlushScheduled]);
-
-  useEffect(() => () => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-    }
-  }, []);
 
   return (
     <>
@@ -87,7 +74,7 @@ export function StreamingTurnRoot({
         <Message
           group={streamingGroup}
           threadId={threadId}
-          toolCalls={activeToolCalls.filter((toolCall) => toolCall.type === 'patch')}
+          toolCalls={activeToolCalls.filter((tc) => tc.type === 'patch')}
           approvalRequests={approvals}
           clarifications={clarifications}
           onApprovalDecision={onApprovalDecision}
@@ -99,8 +86,26 @@ export function StreamingTurnRoot({
   );
 }
 
+// ── Helpers ──
+
+interface ViewItem {
+  itemId: string;
+  order: number;
+  itemType: 'AgentMessage' | 'Reasoning' | 'Plan';
+  agentText: string;
+  reasoningSummary: string[];
+  reasoningRaw: string[];
+  planText: string;
+}
+
+interface ViewTurn {
+  turnId: string;
+  isStreaming: boolean;
+  items: Map<string, ViewItem>;
+}
+
 function buildStreamingGroup(
-  streamingView: ReturnType<typeof useMessageStore.getState>['streamingView'],
+  streamingView: ViewTurn | null,
   currentStreamingGroup: TurnGroup | null,
   streamingItemOrder: Map<string, number>,
   activeToolCalls: ToolCallState[],
@@ -112,65 +117,43 @@ function buildStreamingGroup(
   const baseAgentTexts = new Set(
     baseItems
       .filter((item): item is Extract<TurnItem, { type: 'AgentMessage' }> => item.type === 'AgentMessage')
-      .map((item) => item.content.map((content) => content.text).join(''))
+      .map((item) => item.content.map((c) => c.text).join(''))
       .filter(Boolean),
   );
+
   const streamingItems = Array.from(streamingView?.items.values() ?? [])
     .map((item) => {
       let turnItem: TurnItem;
-
       switch (item.itemType) {
         case 'Reasoning':
-          turnItem = {
-            type: 'Reasoning',
-            id: item.itemId,
-            summary_text: [...item.reasoningSummary],
-            raw_content: [...item.reasoningRaw],
-          };
+          turnItem = { type: 'Reasoning', id: item.itemId, summary_text: [...item.reasoningSummary], raw_content: [...item.reasoningRaw] };
           break;
         case 'Plan':
-          turnItem = {
-            type: 'Plan',
-            id: item.itemId,
-            text: item.planText,
-          };
+          turnItem = { type: 'Plan', id: item.itemId, text: item.planText };
           break;
         case 'AgentMessage':
         default:
-          turnItem = {
-            type: 'AgentMessage',
-            id: item.itemId,
-            content: [{ type: 'Text', text: item.agentText }],
-          };
+          turnItem = { type: 'AgentMessage', id: item.itemId, content: [{ type: 'Text', text: item.agentText }] };
           break;
       }
-
-      return {
-        item: turnItem,
-        order: streamingItemOrder.get(item.itemId) ?? item.order,
-      };
+      return { item: turnItem, order: streamingItemOrder.get(item.itemId) ?? item.order };
     })
     .filter(({ item }) => {
       if (baseItemIds.has(item.id)) return false;
       if (item.type !== 'AgentMessage') return true;
-
-      const itemText = item.content.map((content) => content.text).join('');
-      return !baseAgentTexts.has(itemText);
+      return !baseAgentTexts.has(item.content.map((c) => c.text).join(''));
     });
 
   const activeToolItems = activeToolCalls
-    .map((toolCall) => buildToolCallTurnItem(toolCall))
+    .map((tc) => buildToolCallTurnItem(tc))
     .filter((entry): entry is { item: TurnItem; order: number } => entry !== null);
 
   const orderedItems = [
-    ...baseItems.map((item, index) => ({
-      item,
-      order: streamingItemOrder.get(item.id) ?? index,
-    })),
+    ...baseItems.map((item, index) => ({ item, order: streamingItemOrder.get(item.id) ?? index })),
     ...activeToolItems,
     ...streamingItems,
   ]
-    .sort((left, right) => left.order - right.order)
+    .sort((a, b) => a.order - b.order)
     .map(({ item }) => item);
 
   return {
@@ -180,69 +163,25 @@ function buildStreamingGroup(
   };
 }
 
-function buildToolCallTurnItem(
-  toolCall: ToolCallState,
-): { item: TurnItem; order: number } | null {
-  const order = toolCall.order ?? Number.MAX_SAFE_INTEGER;
-
-  switch (toolCall.type) {
+function buildToolCallTurnItem(tc: ToolCallState): { item: TurnItem; order: number } | null {
+  const order = tc.order ?? Number.MAX_SAFE_INTEGER;
+  switch (tc.type) {
     case 'mcp':
-      return {
-        order,
-        item: {
-          type: 'McpToolCall',
-          id: toolCall.callId,
-          server: toolCall.serverName ?? '',
-          tool: toolCall.toolName ?? toolCall.name,
-          status: mapToolCallStatus(toolCall.status),
-          arguments: toolCall.arguments,
-          result: undefined,
-          error: toolCall.status === 'failed'
-            ? { message: String((toolCall.result as { error?: unknown } | undefined)?.error ?? 'Tool call failed') }
-            : undefined,
-        },
-      };
+      return { order, item: {
+        type: 'McpToolCall', id: tc.callId, server: tc.serverName ?? '', tool: tc.toolName ?? tc.name,
+        status: tc.status === 'completed' ? 'Completed' : tc.status === 'failed' ? 'Failed' : 'InProgress',
+        arguments: tc.arguments, result: undefined,
+        error: tc.status === 'failed' ? { message: String((tc.result as { error?: unknown } | undefined)?.error ?? 'Tool call failed') } : undefined,
+      }};
     case 'exec':
-      return {
-        order,
-        item: {
-          type: 'CommandExecution',
-          id: toolCall.callId,
-          command: toolCall.command?.join(' ') ?? toolCall.name,
-          cwd: toolCall.cwd ?? '',
-          status: mapExecStatus(toolCall.status),
-          command_actions: [],
-          aggregated_output: toolCall.output,
-          exit_code: toolCall.exitCode ?? null,
-        },
-      };
+      return { order, item: {
+        type: 'CommandExecution', id: tc.callId, command: tc.command?.join(' ') ?? tc.name, cwd: tc.cwd ?? '',
+        status: tc.status === 'completed' ? 'Completed' : tc.status === 'failed' ? 'Failed' : 'InProgress',
+        command_actions: [], aggregated_output: tc.output, exit_code: tc.exitCode ?? null,
+      }};
     case 'web_search':
-      return {
-        order,
-        item: {
-          type: 'WebSearch',
-          id: toolCall.callId,
-          query: toolCall.name,
-        },
-      };
-    case 'patch':
+      return { order, item: { type: 'WebSearch', id: tc.callId, query: tc.name } };
     default:
       return null;
   }
-}
-
-function mapToolCallStatus(
-  status: ToolCallState['status'],
-): 'InProgress' | 'Completed' | 'Failed' {
-  if (status === 'completed') return 'Completed';
-  if (status === 'failed') return 'Failed';
-  return 'InProgress';
-}
-
-function mapExecStatus(
-  status: ToolCallState['status'],
-): 'InProgress' | 'Completed' | 'Failed' | 'Declined' {
-  if (status === 'completed') return 'Completed';
-  if (status === 'failed') return 'Failed';
-  return 'InProgress';
 }

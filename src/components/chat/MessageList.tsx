@@ -22,12 +22,13 @@ export function MessageList({
   const turnGroups = useMessageStore(
     (s) => s.messagesByThread.get(threadId) ?? EMPTY_GROUPS,
   );
-  const streamingView = useMessageStore((s) => s.streamingView);
+  const streamRevision = useMessageStore(
+    (s) => s.streamingByThread.get(threadId)?.streamingView.revision ?? 0,
+  );
   const { attachContainer, handleScroll, scheduleReconcile } =
     useBottomLockScroll();
 
   const msgLen = turnGroups.length;
-  const streamRevision = streamingView?.revision ?? 0;
 
   useLayoutEffect(() => {
     scheduleReconcile();

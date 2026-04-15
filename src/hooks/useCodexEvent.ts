@@ -6,12 +6,11 @@ import { useToolCallStore } from '@/stores/toolCallStore';
 import { useApprovalStore } from '@/stores/approvalStore';
 import { useClarificationStore } from '@/stores/clarificationStore';
 import { useElicitationStore } from '@/stores/elicitationStore';
-import { useSkillStore } from '@/stores/skillStore';
 import type { CodexEventPayload } from '@/types';
 
 /**
  * Listens to all codex-event emissions and dispatches to stores.
- * Mount once at the app root level.
+ * Every event carries a `thread_id` — all store mutations are scoped to that thread.
  */
 export function useCodexEvent(): void {
   const updateThread = useThreadStore((s) => s.updateThread);
@@ -20,24 +19,25 @@ export function useCodexEvent(): void {
     startStreaming,
     stopStreaming,
     startStreamingItem,
-    bufferAgentContentDelta,
-    bufferReasoningContentDelta,
-    bufferReasoningRawContentDelta,
-    bufferPlanDelta,
-    flushVisibleStreaming,
+    appendAgentContentDelta,
+    appendReasoningContentDelta,
+    appendReasoningRawContentDelta,
+    appendPlanDelta,
     completeStreamingItem,
   } = useMessageStore();
-  const { beginToolCall, updateToolCallOutput, endToolCall, clearAll } =
+  const { beginToolCall, updateToolCallOutput, endToolCall, clearThread: clearToolCalls } =
     useToolCallStore();
-  const { addApproval, clearAll: clearApprovals } = useApprovalStore();
-  const { addRequest: addClarification, clearAll: clearClarifications } = useClarificationStore();
-  const { addRequest: addElicitation, clearAll: clearElicitations } = useElicitationStore();
-  const setSkills = useSkillStore((s) => s.setSkills);
-  const eventOrderRef = useRef(0);
+  const { addApproval, clearThread: clearApprovals } = useApprovalStore();
+  const { addRequest: addClarification, clearThread: clearClarifications } = useClarificationStore();
+  const { addRequest: addElicitation, clearThread: clearElicitations } = useElicitationStore();
 
-  const nextEventOrder = (): number => {
-    eventOrderRef.current += 1;
-    return eventOrderRef.current;
+  const eventOrderByThread = useRef<Map<string, number>>(new Map());
+
+  const nextEventOrder = (threadId: string): number => {
+    const current = eventOrderByThread.current.get(threadId) ?? 0;
+    const next = current + 1;
+    eventOrderByThread.current.set(threadId, next);
+    return next;
   };
 
   useEffect(() => {
@@ -59,188 +59,144 @@ export function useCodexEvent(): void {
           break;
 
         case 'task_started':
-          eventOrderRef.current = 0;
-          clearAll();
-          clearApprovals();
-          clearClarifications();
-          clearElicitations();
-          startStreaming(msg.turn_id);
+          eventOrderByThread.current.set(thread_id, 0);
+          clearToolCalls(thread_id);
+          clearApprovals(thread_id);
+          clearClarifications(thread_id);
+          clearElicitations(thread_id);
+          startStreaming(thread_id, msg.turn_id);
           break;
 
         case 'task_complete':
-          flushVisibleStreaming();
-          stopStreaming();
+          stopStreaming(thread_id);
           void threadGetMessages(thread_id).then((messages) => {
             setMessages(thread_id, messages);
           });
           break;
 
         case 'turn_aborted':
-          flushVisibleStreaming();
-          stopStreaming();
+          stopStreaming(thread_id);
           void threadGetMessages(thread_id).then((messages) => {
             setMessages(thread_id, messages);
           });
           break;
 
-        // ── v2 Structured item events ──
         case 'item_started':
-          startStreamingItem(msg.thread_id, msg.turn_id, msg.item, nextEventOrder());
+          startStreamingItem(thread_id, msg.turn_id, msg.item, nextEventOrder(thread_id));
           break;
 
         case 'item_completed':
-          flushVisibleStreaming();
           completeStreamingItem(thread_id, msg.turn_id, msg.item);
           break;
 
         case 'agent_message_content_delta':
-          bufferAgentContentDelta(msg.item_id, msg.delta);
+          appendAgentContentDelta(thread_id, msg.item_id, msg.delta);
           break;
 
         case 'reasoning_content_delta':
-          bufferReasoningContentDelta(msg.item_id, msg.delta, msg.summary_index);
+          appendReasoningContentDelta(thread_id, msg.item_id, msg.delta, msg.summary_index);
           break;
 
         case 'reasoning_raw_content_delta':
-          bufferReasoningRawContentDelta(msg.item_id, msg.delta, msg.content_index);
+          appendReasoningRawContentDelta(thread_id, msg.item_id, msg.delta, msg.content_index);
           break;
 
         case 'plan_delta':
-          bufferPlanDelta(msg.item_id, msg.delta);
+          appendPlanDelta(thread_id, msg.item_id, msg.delta);
           break;
 
-        // ── Tool call events ──
         case 'mcp_tool_call_begin':
-          beginToolCall({
-            callId: msg.call_id,
-            type: 'mcp',
-            status: 'running',
-            name: msg.invocation.tool,
-            order: nextEventOrder(),
-            serverName: msg.invocation.server,
-            toolName: msg.invocation.tool,
-            arguments: msg.invocation.arguments,
+          beginToolCall(thread_id, {
+            callId: msg.call_id, type: 'mcp', status: 'running', name: msg.invocation.tool,
+            order: nextEventOrder(thread_id), serverName: msg.invocation.server,
+            toolName: msg.invocation.tool, arguments: msg.invocation.arguments,
           });
           break;
 
         case 'mcp_tool_call_end':
-          endToolCall(msg.call_id, {
-            status: 'completed',
-            result: msg.result,
-          });
+          endToolCall(thread_id, msg.call_id, { status: 'completed', result: msg.result });
           break;
 
         case 'exec_command_begin':
-          beginToolCall({
-            callId: msg.call_id,
-            type: 'exec',
-            status: 'running',
-            name: msg.command?.[0] ?? 'command',
-            order: nextEventOrder(),
-            command: typeof msg.command === 'string' ? [msg.command] : msg.command,
-            cwd: msg.cwd,
+          beginToolCall(thread_id, {
+            callId: msg.call_id, type: 'exec', status: 'running',
+            name: msg.command?.[0] ?? 'command', order: nextEventOrder(thread_id),
+            command: typeof msg.command === 'string' ? [msg.command] : msg.command, cwd: msg.cwd,
           });
           break;
 
         case 'exec_command_output_delta':
-          updateToolCallOutput(msg.call_id, msg.delta);
+          updateToolCallOutput(thread_id, msg.call_id, msg.delta);
           break;
 
         case 'exec_command_end':
-          endToolCall(msg.call_id, {
-            status: msg.exit_code === 0 ? 'completed' : 'failed',
-            exitCode: msg.exit_code,
+          endToolCall(thread_id, msg.call_id, {
+            status: msg.exit_code === 0 ? 'completed' : 'failed', exitCode: msg.exit_code,
             output: [msg.stdout, msg.stderr].filter(Boolean).join('\n') || undefined,
           });
           break;
 
         case 'web_search_begin':
-          beginToolCall({
-            callId: msg.call_id,
-            type: 'web_search',
-            status: 'running',
-            name: 'Web Search',
-            order: nextEventOrder(),
+          beginToolCall(thread_id, {
+            callId: msg.call_id, type: 'web_search', status: 'running',
+            name: 'Web Search', order: nextEventOrder(thread_id),
           });
           break;
 
         case 'web_search_end':
-          endToolCall(msg.call_id, {
-            status: 'completed',
-            name: msg.query || 'Web Search',
-          });
+          endToolCall(thread_id, msg.call_id, { status: 'completed', name: msg.query || 'Web Search' });
           break;
 
         case 'patch_apply_begin':
-          beginToolCall({
-            callId: msg.call_id,
-            type: 'patch',
-            status: 'running',
-            name: 'Apply Patch',
-            order: nextEventOrder(),
+          beginToolCall(thread_id, {
+            callId: msg.call_id, type: 'patch', status: 'running',
+            name: 'Apply Patch', order: nextEventOrder(thread_id),
           });
           break;
 
         case 'patch_apply_end':
-          endToolCall(msg.call_id, {
-            status: msg.success ? 'completed' : 'failed',
-          });
+          endToolCall(thread_id, msg.call_id, { status: msg.success ? 'completed' : 'failed' });
           break;
 
         case 'error':
         case 'stream_error':
           console.error(`[codex] ${msg.message}`);
-          stopStreaming();
+          stopStreaming(thread_id);
           break;
 
         case 'exec_approval_request':
-          addApproval({
-            callId: msg.call_id,
-            turnId: msg.turn_id,
-            type: 'exec',
-            order: nextEventOrder(),
-            command: msg.command,
-            cwd: msg.cwd,
-            reason: msg.reason,
-            availableDecisions: msg.available_decisions,
+          addApproval(thread_id, {
+            callId: msg.call_id, turnId: msg.turn_id, type: 'exec',
+            order: nextEventOrder(thread_id), command: msg.command, cwd: msg.cwd,
+            reason: msg.reason, availableDecisions: msg.available_decisions,
           });
           break;
 
         case 'apply_patch_approval_request':
-          addApproval({
-            callId: msg.call_id,
-            turnId: msg.turn_id,
-            type: 'patch',
-            order: nextEventOrder(),
-            reason: msg.reason,
+          addApproval(thread_id, {
+            callId: msg.call_id, turnId: msg.turn_id, type: 'patch',
+            order: nextEventOrder(thread_id), reason: msg.reason,
             changes: msg.changes as Record<string, unknown>,
             availableDecisions: ['approved', 'approved_for_session', 'abort'],
           });
           break;
 
         case 'elicitation_request':
-          addElicitation({
-            serverName: msg.server_name,
-            requestId: msg.request_id,
-            message: msg.message,
+          addElicitation(thread_id, {
+            serverName: msg.server_name, requestId: msg.request_id, message: msg.message,
             mode: (msg.mode as 'form' | 'url' | undefined) ?? 'form',
             schema: msg.schema as Record<string, unknown> | undefined,
-            url: msg.url,
-            order: nextEventOrder(),
+            url: msg.url, order: nextEventOrder(thread_id),
           });
           break;
 
         case 'request_user_input':
-          addClarification({
-            id: msg.id,
-            order: nextEventOrder(),
-            message: msg.message,
-            schema: msg.schema,
+          addClarification(thread_id, {
+            id: msg.id, order: nextEventOrder(thread_id), message: msg.message, schema: msg.schema,
           });
           break;
 
         case 'list_skills_response':
-          setSkills(msg.skills);
           break;
       }
     });
@@ -249,27 +205,11 @@ export function useCodexEvent(): void {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, [
-    updateThread,
-    setMessages,
-    startStreaming,
-    stopStreaming,
-    startStreamingItem,
-    bufferAgentContentDelta,
-    bufferReasoningContentDelta,
-    bufferReasoningRawContentDelta,
-    bufferPlanDelta,
-    flushVisibleStreaming,
-    completeStreamingItem,
-    beginToolCall,
-    updateToolCallOutput,
-    endToolCall,
-    clearAll,
-    addApproval,
-    clearApprovals,
-    addClarification,
-    clearClarifications,
-    addElicitation,
-    clearElicitations,
-    setSkills,
+    updateThread, setMessages, startStreaming, stopStreaming,
+    startStreamingItem, appendAgentContentDelta, appendReasoningContentDelta,
+    appendReasoningRawContentDelta, appendPlanDelta, completeStreamingItem,
+    beginToolCall, updateToolCallOutput, endToolCall, clearToolCalls,
+    addApproval, clearApprovals, addClarification, clearClarifications,
+    addElicitation, clearElicitations,
   ]);
 }

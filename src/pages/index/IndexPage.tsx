@@ -31,6 +31,7 @@ import { useSubmitOp } from '@/hooks/useSubmitOp';
 import { useLoadSkills } from '@/hooks/useLoadSkills';
 import { useLoadAgentRoles } from '@/hooks/useLoadAgentRoles';
 import { useAgentRoleStore } from '@/stores/agentRoleStore';
+import { useSkillStore } from '@/stores/skillStore';
 import { MessageList } from '@/components/chat/MessageList';
 import { InputArea } from '@/components/chat/InputArea';
 import { getHomeDir, listCwds, pickFolder, getConfig } from '@/services/api';
@@ -93,7 +94,6 @@ export function IndexPage(): React.ReactElement {
 
   const activeThreadId = useThreadStore((s) => s.activeThreadId);
   const messages = useMessageStore((s) => s.messagesByThread);
-  const streamingTurn = useMessageStore((s) => s.streamingTurn);
   const { createThread, resumeThread } = useThread();
   const submitOp = useSubmitOp();
   const removeApproval = useApprovalStore((s) => s.removeApproval);
@@ -101,7 +101,8 @@ export function IndexPage(): React.ReactElement {
   const handleApproval = useCallback(
     (callId: string, decision: ReviewDecision) => {
       if (!activeThreadId) return;
-      const approval = useApprovalStore.getState().approvals.get(callId);
+      const threadApprovals = useApprovalStore.getState().byThread.get(activeThreadId);
+      const approval = threadApprovals?.get(callId);
       if (!approval) return;
 
       const op =
@@ -110,7 +111,7 @@ export function IndexPage(): React.ReactElement {
           : { type: 'patch_approval' as const, id: callId, decision };
 
       submitOp(activeThreadId, op);
-      removeApproval(callId);
+      removeApproval(activeThreadId, callId);
     },
     [activeThreadId, submitOp, removeApproval],
   );
@@ -131,7 +132,7 @@ export function IndexPage(): React.ReactElement {
         decision,
         ...(content ? { content } : {}),
       });
-      removeElicitation(requestId);
+      removeElicitation(activeThreadId, requestId);
     },
     [activeThreadId, submitOp, removeElicitation],
   );
@@ -169,7 +170,10 @@ export function IndexPage(): React.ReactElement {
   const threadMessages = currentThreadId
     ? (messages.get(currentThreadId) ?? [])
     : [];
-  const hasMessages = threadMessages.length > 0 || streamingTurn?.isStreaming;
+  const isCurrentThreadStreaming = useMessageStore(
+    (s) => currentThreadId ? (s.streamingByThread.get(currentThreadId)?.streamingView.isStreaming ?? false) : false,
+  );
+  const hasMessages = threadMessages.length > 0 || isCurrentThreadStreaming;
 
   // ── Skills: 有效 cwd = 当前 thread 的 cwd（有会话时） 或 selectedCwd（新会话页面） ──
   const threads = useThreadStore((s) => s.threads);
@@ -246,6 +250,11 @@ export function IndexPage(): React.ReactElement {
       for (const f of files) {
         items.push({ type: 'attached_file', name: f.name, path: f.path });
       }
+      // Append selected skills
+      const skills = useSkillStore.getState().selectedSkills;
+      for (const s of skills) {
+        items.push({ type: 'skill', name: s.name, path: s.path });
+      }
 
       await submitOp(tid, {
         type: 'user_turn',
@@ -258,6 +267,9 @@ export function IndexPage(): React.ReactElement {
         // without adding activeRole to the useCallback dependency array.
         agent_role: useAgentRoleStore.getState().activeRole?.name,
       });
+
+      // Clear selected skills after sending
+      if (skills.length > 0) useSkillStore.getState().clearSelectedSkills();
     },
     [
       inputText,
@@ -321,7 +333,7 @@ export function IndexPage(): React.ReactElement {
             value={inputText}
             onChange={setInputText}
             onSend={(text, files) => handleSend(text, files)}
-            isStreaming={streamingTurn?.isStreaming}
+            isStreaming={isCurrentThreadStreaming}
             onStop={() =>
               activeThreadId && submitOp(activeThreadId, { type: 'interrupt' })
             }

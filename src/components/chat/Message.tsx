@@ -13,6 +13,7 @@ import { dismissTurnError as dismissTurnErrorApi } from '@/services/api';
 import { AgentAvatar } from './shared/AgentAvatar';
 import { UserAvatar } from './shared/UserAvatar';
 import { StreamdownRenderer } from './shared/StreamdownRenderer';
+import { Zap } from 'lucide-react';
 import { FileChip } from './FileChip';
 import { ThinkingPanel } from './agent/ThinkingPanel';
 import { WebSearchCard } from './agent/WebSearchCard';
@@ -25,6 +26,8 @@ import { CodeDiffBlock } from './agent/CodeDiffBlock';
 import { ClarificationCard } from './agent/ClarificationCard';
 import { MessageActionBar } from './agent/MessageActionBar';
 import { ErrorCard } from './ErrorCard';
+
+const EMPTY_ELICITATION_MAP = new Map<string, never>();
 
 interface MessageProps {
   group: TurnGroup;
@@ -49,7 +52,7 @@ export function Message({
 }: MessageProps): React.ReactElement | null {
   const { items } = group;
   const dismissTurnError = useMessageStore((s) => s.dismissTurnError);
-  const elicitations = useElicitationStore((s) => s.requests);
+  const elicitations = useElicitationStore((s) => threadId ? (s.byThread.get(threadId) ?? EMPTY_ELICITATION_MAP) : EMPTY_ELICITATION_MAP);
 
   const handleDismiss = useCallback(async () => {
     if (!threadId) return;
@@ -272,6 +275,22 @@ export function Message({
                     const name = c.type === 'attached_file' ? c.name : (c.path.split(/[\\/]/).pop() ?? c.path);
                     const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
                     return <FileChip key={i} file={{ id: `${item.id}-${i}`, name, ext }} />;
+                  }
+                  return null;
+                })}
+              </Box>
+            )}
+            {/* Skill chips */}
+            {item.content.some((c) => c.type === 'skill') && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+                {item.content.map((c, i) => {
+                  if (c.type === 'skill') {
+                    return (
+                      <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: 'rgba(216,226,255,0.5)', border: '1px solid rgba(124,185,232,0.1)', borderRadius: 2, px: 1.25, py: 0.5 }}>
+                        <Zap size={11} color="#001a41" fill="#001a41" />
+                        <Typography sx={{ fontSize: 11, fontWeight: 600, color: '#001a41' }}>{c.name}</Typography>
+                      </Box>
+                    );
                   }
                   return null;
                 })}
