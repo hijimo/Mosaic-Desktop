@@ -18,6 +18,7 @@ use super::session::Session;
 use super::skills::loader::SkillRoot;
 use super::skills::manager::SkillsManager;
 use super::skills::model::{SkillMetadata, SkillScope};
+use super::skills::{collect_explicit_skill_mentions};
 use super::tools::handlers::dynamic::DynamicToolHandler;
 
 /// Handle returned by `Codex::spawn`, giving the caller access to the SQ/EQ channels
@@ -1182,11 +1183,53 @@ impl Codex {
         let instructions: Option<String> = {
             let outcome = self.skills_manager.skills_for_cwd(&self.cwd, false);
             let skill_section = super::skills::render_skills_section(&outcome.skills);
-            match (skill_section, custom_instructions) {
-                (Some(s), Some(c)) => Some(format!("{s}\n\n{c}")),
-                (Some(s), None) => Some(s),
-                (None, Some(c)) => Some(c),
-                (None, None) => None,
+
+            // Resolve explicitly mentioned skills from user input ($skill-name + UI selection)
+            let mentioned = collect_explicit_skill_mentions(
+                &items,
+                &outcome.skills,
+                &outcome.disabled_paths,
+                &std::collections::HashMap::new(),
+            );
+
+            // Pre-read SKILL.md contents for mentioned skills and inject into instructions
+            let skill_injection = if !mentioned.is_empty() {
+                let mut injection_items = Vec::new();
+                for skill in &mentioned {
+                    match tokio::fs::read_to_string(&skill.path_to_skills_md).await {
+                        Ok(contents) => {
+                            injection_items.push((skill.name.clone(), skill.path_to_skills_md.to_string_lossy().into_owned(), contents));
+                        }
+                        Err(err) => {
+                            tracing::warn!("Failed to load skill {} at {}: {err:#}", skill.name, skill.path_to_skills_md.display());
+                        }
+                    }
+                }
+                if injection_items.is_empty() {
+                    None
+                } else {
+                    let mut buf = String::from("## Active skill instructions\nThe user explicitly invoked the following skill(s) for this turn. Follow their instructions.\n");
+                    for (name, path, contents) in &injection_items {
+                        buf.push_str(&format!(
+                            "\n### Skill: {} ({})\n{}\n",
+                            name, path, contents
+                        ));
+                    }
+                    Some(buf)
+                }
+            } else {
+                None
+            };
+
+            match (skill_section, skill_injection, custom_instructions) {
+                (Some(s), Some(inj), Some(c)) => Some(format!("{s}\n\n{inj}\n\n{c}")),
+                (Some(s), Some(inj), None) => Some(format!("{s}\n\n{inj}")),
+                (Some(s), None, Some(c)) => Some(format!("{s}\n\n{c}")),
+                (Some(s), None, None) => Some(s),
+                (None, Some(inj), Some(c)) => Some(format!("{inj}\n\n{c}")),
+                (None, Some(inj), None) => Some(inj),
+                (None, None, Some(c)) => Some(c),
+                (None, None, None) => None,
             }
         };
 

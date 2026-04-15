@@ -121,6 +121,22 @@ impl ThreadHistoryBuilder {
                                         });
                                     }
                                 }
+                                // Detect serialized skill: <skill>\n<name>...</name>\n<path>...</path>\n</skill>
+                                if text.starts_with("<skill>") {
+                                    if let (Some(ns), Some(ne), Some(ps), Some(pe)) = (
+                                        text.find("<name>"),
+                                        text.find("</name>"),
+                                        text.find("<path>"),
+                                        text.find("</path>"),
+                                    ) {
+                                        let name = &text[ns + 6..ne];
+                                        let path = &text[ps + 6..pe];
+                                        return Some(crate::protocol::types::UserInput::Skill {
+                                            name: name.to_string(),
+                                            path: std::path::PathBuf::from(path),
+                                        });
+                                    }
+                                }
                                 Some(crate::protocol::types::UserInput::Text {
                                     text: text.clone(),
                                     text_elements: vec![],
