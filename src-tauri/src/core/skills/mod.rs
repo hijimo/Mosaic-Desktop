@@ -1,4 +1,5 @@
 pub mod env_var_dependencies;
+pub mod hub;
 pub mod injection;
 pub mod invocation_utils;
 pub mod loader;

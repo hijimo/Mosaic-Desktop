@@ -157,6 +157,18 @@ pub fn run() {
             commands::share_message,
             commands::list_skills,
             commands::list_agent_roles,
+            commands::skills_hub_search,
+            commands::skills_hub_inspect,
+            commands::skills_hub_install,
+            commands::skills_hub_list,
+            commands::skills_hub_uninstall,
+            commands::skills_hub_audit,
+            commands::skills_hub_check_updates,
+            commands::skills_hub_taps_list,
+            commands::skills_hub_taps_add,
+            commands::skills_hub_taps_remove,
+            commands::skills_hub_snapshot_export,
+            commands::skills_hub_snapshot_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

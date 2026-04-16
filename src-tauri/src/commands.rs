@@ -1204,6 +1204,309 @@ pub async fn list_agent_roles(
     Ok(roles)
 }
 
+
+// ---------------------------------------------------------------------------
+// Skills Hub commands — mirrors Hermes hermes_cli/skills_hub.py do_* functions
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn skills_hub_search(
+    query: String,
+    source_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::core::skills::hub::SkillHubMeta>, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let sources = crate::core::skills::hub::sources::create_source_router(&paths);
+    let filter = source_filter.as_deref().unwrap_or("all");
+    let results = crate::core::skills::hub::sources::unified_search(
+        &sources, &query, filter, limit.unwrap_or(20),
+    ).await;
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn skills_hub_inspect(
+    identifier: String,
+) -> Result<Option<crate::core::skills::hub::SkillHubMeta>, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let sources = crate::core::skills::hub::sources::create_source_router(&paths);
+    for src in &sources {
+        if let Some(meta) = src.inspect(&identifier).await {
+            return Ok(Some(meta));
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+pub async fn skills_hub_install(
+    state: State<'_, AppState>,
+    identifier: String,
+    category: Option<String>,
+    force: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    use crate::core::skills::hub::{dirs, guard, sources, HubPaths};
+
+    let paths = HubPaths::from_default();
+    dirs::ensure_hub_dirs(&paths).map_err(|e| e.to_string())?;
+    let srcs = sources::create_source_router(&paths);
+
+    // Fetch bundle
+    let mut bundle = None;
+    for src in &srcs {
+        tracing::info!(source = src.source_id(), identifier = %identifier, "trying fetch");
+        match src.fetch(&identifier).await {
+            Some(b) => {
+                tracing::info!(source = src.source_id(), name = %b.name, "fetch succeeded");
+                bundle = Some(b);
+                break;
+            }
+            None => {
+                tracing::warn!(source = src.source_id(), identifier = %identifier, "fetch returned None");
+            }
+        }
+    }
+    let bundle = bundle.ok_or_else(|| {
+        let no_token = std::env::var("GITHUB_TOKEN").is_err() && std::env::var("GH_TOKEN").is_err();
+        let hint = if no_token {
+            " (提示: 未设置 GITHUB_TOKEN，GitHub API 限制 60 次/小时。设置 GITHUB_TOKEN 或运行 gh auth login 可提升到 5000 次/小时)"
+        } else { "" };
+        format!("Could not fetch '{identifier}' from any source{hint}")
+    })?;
+
+    // Quarantine
+    let q_path = dirs::quarantine_bundle(&paths, &bundle)?;
+
+    // Scan
+    let scan_result = guard::scan_skill(&q_path, &bundle.identifier);
+    let (allowed, reason) = guard::should_allow_install(&scan_result, force.unwrap_or(false));
+
+    if allowed == Some(false) {
+        let _ = std::fs::remove_dir_all(&q_path);
+        return Err(format!("Installation blocked: {reason}"));
+    }
+
+    // Install
+    let cat = category.as_deref().unwrap_or("");
+    let install_dir = dirs::install_from_quarantine(&paths, &q_path, &bundle.name, cat, &bundle, &scan_result)?;
+
+    // Invalidate skills cache so the new skill appears immediately
+    state.skills_manager.clear_cache();
+
+    Ok(serde_json::json!({
+        "name": bundle.name,
+        "installPath": install_dir.to_string_lossy(),
+        "scanVerdict": scan_result.verdict.to_string(),
+        "scanFindings": scan_result.findings.len(),
+        "scanReport": guard::format_scan_report(&scan_result),
+    }))
+}
+
+#[tauri::command]
+pub fn skills_hub_list(
+    state: State<'_, AppState>,
+    cwd: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let lock = crate::core::skills::hub::dirs::HubLockFile::new(paths.lock_file);
+    let hub_installed: std::collections::HashMap<String, _> = lock
+        .list_installed()
+        .into_iter()
+        .collect();
+
+    // Reuse SkillsManager to get all loaded skills (same as list_skills)
+    let cwd_path = cwd
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let outcome = state.skills_manager.skills_for_cwd(&cwd_path, false);
+
+    let items: Vec<serde_json::Value> = outcome.skills.iter().map(|s| {
+        let hub_entry = hub_installed.get(&s.name);
+        let source_type = if hub_entry.is_some() {
+            "hub"
+        } else if s.scope == crate::core::skills::SkillScope::System {
+            "builtin"
+        } else {
+            "local"
+        };
+        let mut item = serde_json::json!({
+            "name": s.name,
+            "description": s.description,
+            "scope": s.scope,
+            "path": s.path_to_skills_md,
+            "sourceType": source_type,
+            "enabled": outcome.is_skill_enabled(s),
+        });
+        if let Some(entry) = hub_entry {
+            item["hubSource"] = serde_json::json!(entry.source);
+            item["hubIdentifier"] = serde_json::json!(entry.identifier);
+            item["trustLevel"] = serde_json::json!(entry.trust_level);
+            item["scanVerdict"] = serde_json::json!(entry.scan_verdict);
+            item["installedAt"] = serde_json::json!(entry.installed_at);
+        }
+        item
+    }).collect();
+    Ok(items)
+}
+
+#[tauri::command]
+pub fn skills_hub_uninstall(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let result = crate::core::skills::hub::dirs::uninstall_skill(&paths, &name)?;
+    state.skills_manager.clear_cache();
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn skills_hub_audit(name: String) -> Result<serde_json::Value, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let lock = crate::core::skills::hub::dirs::HubLockFile::new(paths.lock_file.clone());
+    let entry = lock.get_installed(&name)
+        .ok_or_else(|| format!("'{name}' is not a hub-installed skill"))?;
+    let skill_path = paths.skills_dir.join(&entry.install_path);
+    if !skill_path.exists() {
+        return Err(format!("Skill path missing: {}", entry.install_path));
+    }
+    let result = crate::core::skills::hub::guard::scan_skill(&skill_path, &entry.identifier);
+    let report = crate::core::skills::hub::guard::format_scan_report(&result);
+    Ok(serde_json::json!({
+        "scanResult": result,
+        "report": report,
+    }))
+}
+
+
+#[tauri::command]
+pub async fn skills_hub_check_updates() -> Result<Vec<serde_json::Value>, String> {
+    use crate::core::skills::hub::{dirs, sources, HubPaths};
+
+    let paths = HubPaths::from_default();
+    let lock = dirs::HubLockFile::new(paths.lock_file.clone());
+    let installed = lock.list_installed();
+    if installed.is_empty() { return Ok(vec![]); }
+
+    let srcs = sources::create_source_router(&paths);
+    let mut results = Vec::new();
+
+    for (name, entry) in &installed {
+        let mut status = "unavailable";
+        for src in &srcs {
+            if let Some(bundle) = src.fetch(&entry.identifier).await {
+                let latest_hash = {
+                    use sha2::{Sha256, Digest};
+                    let mut h = Sha256::new();
+                    for key in bundle.files.keys().collect::<std::collections::BTreeSet<_>>() {
+                        h.update(bundle.files[key].as_bytes());
+                    }
+                    format!("sha256:{}", &format!("{:x}", h.finalize())[..16])
+                };
+                status = if entry.content_hash == latest_hash { "up_to_date" } else { "update_available" };
+                break;
+            }
+        }
+        results.push(serde_json::json!({
+            "name": name,
+            "identifier": entry.identifier,
+            "source": entry.source,
+            "status": status,
+        }));
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn skills_hub_taps_list() -> Result<Vec<serde_json::Value>, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let mgr = crate::core::skills::hub::dirs::TapsManager::new(paths.taps_file);
+    Ok(mgr.load().into_iter().map(|t| serde_json::json!({"repo": t.repo, "path": t.path})).collect())
+}
+
+#[tauri::command]
+pub fn skills_hub_taps_add(repo: String, path: Option<String>) -> Result<bool, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let _ = crate::core::skills::hub::dirs::ensure_hub_dirs(&paths);
+    let mgr = crate::core::skills::hub::dirs::TapsManager::new(paths.taps_file);
+    mgr.add(&repo, path.as_deref().unwrap_or("skills/")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn skills_hub_taps_remove(repo: String) -> Result<bool, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let mgr = crate::core::skills::hub::dirs::TapsManager::new(paths.taps_file);
+    mgr.remove(&repo).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn skills_hub_snapshot_export() -> Result<serde_json::Value, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let lock = crate::core::skills::hub::dirs::HubLockFile::new(paths.lock_file.clone());
+    let taps_mgr = crate::core::skills::hub::dirs::TapsManager::new(paths.taps_file);
+    let installed = lock.list_installed();
+    let taps = taps_mgr.load();
+
+    Ok(serde_json::json!({
+        "exportedAt": chrono::Utc::now().to_rfc3339(),
+        "skills": installed.iter().map(|(name, e)| serde_json::json!({
+            "name": name, "source": e.source, "identifier": e.identifier,
+        })).collect::<Vec<_>>(),
+        "taps": taps.iter().map(|t| serde_json::json!({"repo": t.repo, "path": t.path})).collect::<Vec<_>>(),
+    }))
+}
+
+#[tauri::command]
+pub async fn skills_hub_snapshot_import(snapshot: serde_json::Value, force: Option<bool>) -> Result<String, String> {
+    let paths = crate::core::skills::hub::HubPaths::from_default();
+    let _ = crate::core::skills::hub::dirs::ensure_hub_dirs(&paths);
+
+    // Restore taps
+    if let Some(taps) = snapshot.get("taps").and_then(|v| v.as_array()) {
+        let mgr = crate::core::skills::hub::dirs::TapsManager::new(paths.taps_file.clone());
+        for tap in taps {
+            if let Some(repo) = tap.get("repo").and_then(|v| v.as_str()) {
+                let path = tap.get("path").and_then(|v| v.as_str()).unwrap_or("skills/");
+                let _ = mgr.add(repo, path);
+            }
+        }
+    }
+
+    // Install skills
+    let mut count = 0;
+    if let Some(skills) = snapshot.get("skills").and_then(|v| v.as_array()) {
+        let srcs = crate::core::skills::hub::sources::create_source_router(&paths);
+        for skill in skills {
+            let identifier = match skill.get("identifier").and_then(|v| v.as_str()) {
+                Some(id) => id,
+                None => continue,
+            };
+            // Try to install
+            let mut bundle = None;
+            for src in &srcs {
+                if let Some(b) = src.fetch(identifier).await {
+                    bundle = Some(b);
+                    break;
+                }
+            }
+            if let Some(bundle) = bundle {
+                let q = match crate::core::skills::hub::dirs::quarantine_bundle(&paths, &bundle) {
+                    Ok(q) => q,
+                    Err(_) => continue,
+                };
+                let scan = crate::core::skills::hub::guard::scan_skill(&q, &bundle.identifier);
+                let (allowed, _) = crate::core::skills::hub::guard::should_allow_install(&scan, force.unwrap_or(false));
+                if allowed != Some(false) {
+                    if crate::core::skills::hub::dirs::install_from_quarantine(&paths, &q, &bundle.name, "", &bundle, &scan).is_ok() {
+                        count += 1;
+                    }
+                } else {
+                    let _ = std::fs::remove_dir_all(&q);
+                }
+            }
+        }
+    }
+    Ok(format!("Imported {count} skill(s)"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
