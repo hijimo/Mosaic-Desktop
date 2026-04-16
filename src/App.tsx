@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { theme } from '@/styles/theme';
 import { MainLayout } from '@/layouts/MainLayout';
 import { IndexPage } from '@/pages/index';
+import { SkillsHubPage } from '@/pages/skills-hub';
 import { useCodexEvent } from '@/hooks/useCodexEvent';
 import '@/styles/global.css';
 
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <IndexPage /> },
       { path: 'thread/:threadId', element: <IndexPage /> },
+      { path: 'skills-hub', element: <SkillsHubPage /> },
     ],
   },
 ]);

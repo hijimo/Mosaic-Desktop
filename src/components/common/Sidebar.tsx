@@ -9,6 +9,7 @@ import {
 import { RecentChats } from './RecentChats';
 import { useThread } from '@/hooks/useThread';
 import { useThreadStore } from '@/stores/threadStore';
+import { useNavigate } from 'react-router-dom';
 
 interface NavItem {
   icon: React.ReactNode;
@@ -26,11 +27,14 @@ const NAV_ITEMS: NavItem[] = [
 export function Sidebar(): React.ReactElement {
   const { createThread } = useThread();
   const setActiveThread = useThreadStore((s) => s.setActiveThread);
+  const navigate = useNavigate();
 
   const handleNav = (key: string) => {
     if (key === 'new-chat') {
       setActiveThread(null);
       createThread();
+    } else if (key === 'skills') {
+      navigate('/skills-hub');
     }
   };
 
