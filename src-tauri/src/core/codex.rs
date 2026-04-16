@@ -46,6 +46,8 @@ pub struct CodexHandle {
     pub state_db: Option<crate::core::state_db::StateDb>,
     /// Shared flag for direct interrupt from submit_op.
     pub interrupted: Arc<std::sync::atomic::AtomicBool>,
+    /// Notify signal to wake up the streaming loop immediately on interrupt.
+    pub interrupt_notify: Arc<tokio::sync::Notify>,
 }
 
 /// Core engine that processes the SQ/EQ loop.
@@ -84,6 +86,8 @@ pub struct Codex {
     thread_named: std::sync::atomic::AtomicBool,
     /// Flag set by external interrupt to abort the active turn's streaming loop.
     interrupted: Arc<std::sync::atomic::AtomicBool>,
+    /// Notify signal to wake up the streaming loop immediately on interrupt.
+    interrupt_notify: Arc<tokio::sync::Notify>,
 }
 
 use super::initial_history::InitialHistory;
@@ -183,6 +187,7 @@ impl Codex {
             shared_mcp_manager,
             thread_named: std::sync::atomic::AtomicBool::new(false),
             interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interrupt_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -244,6 +249,7 @@ impl Codex {
         let turn_state_ref = Arc::clone(&codex.shared_turn_state);
         let mcp_manager_ref = codex.shared_mcp_manager.clone();
         let interrupted_ref = Arc::clone(&codex.interrupted);
+        let interrupt_notify_ref = Arc::clone(&codex.interrupt_notify);
 
         tokio::spawn(async move {
             if let Err(e) = codex.run_with_history(initial_history).await {
@@ -268,6 +274,7 @@ impl Codex {
             features: features_ref,
             state_db: None,
             interrupted: interrupted_ref,
+            interrupt_notify: interrupt_notify_ref,
         })
     }
 
@@ -474,6 +481,7 @@ impl Codex {
         match op {
             Op::Interrupt => {
                 self.interrupted.store(true, std::sync::atomic::Ordering::Release);
+                self.interrupt_notify.notify_waiters();
                 let session_guard = self.session.lock().await;
                 if let Some(s) = session_guard.as_ref() {
                     s.interrupt().await;
@@ -1297,7 +1305,24 @@ impl Codex {
                         if self.interrupted.load(std::sync::atomic::Ordering::Acquire) {
                             break;
                         }
-                        let Some(event_result) = stream.next().await else { break };
+                        // Pin the notified future BEFORE entering select! so it
+                        // registers as a waiter. Without this, a notify_waiters()
+                        // call between the flag check above and the select! would
+                        // be lost.
+                        let notified = self.interrupt_notify.notified();
+                        tokio::pin!(notified);
+                        let event_result = tokio::select! {
+                            biased;
+                            _ = &mut notified => {
+                                break;
+                            }
+                            next = stream.next() => {
+                                match next {
+                                    Some(r) => r,
+                                    None => break,
+                                }
+                            }
+                        };
                         match event_result {
                             Err(e) => {
                                 self.emit(EventMsg::Error(crate::protocol::event::ErrorEvent {
@@ -1726,10 +1751,12 @@ impl Codex {
 
         // Notify hooks and complete the turn
         session.hooks().await.notify_turn_complete(turn_id);
-        session.complete_turn().await;
 
         let was_interrupted = self.interrupted.load(std::sync::atomic::Ordering::Acquire);
         if was_interrupted {
+            // interrupt() clears turn_context and MCP elicitations in addition
+            // to what complete_turn() does.
+            session.interrupt().await;
             // Persist any accumulated text that wasn't finalized via OutputItemDone
             if !accumulated_text.is_empty() {
                 session
@@ -1771,6 +1798,7 @@ impl Codex {
             ))
             .await;
         } else {
+            session.complete_turn().await;
             // Emit TurnComplete bracket event
             self.emit(EventMsg::TurnComplete(
                 crate::protocol::event::TurnCompleteEvent {

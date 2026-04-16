@@ -30,6 +30,8 @@ pub struct ThreadHandle {
     pub session: std::sync::Arc<tokio::sync::Mutex<Option<crate::core::session::Session>>>,
     /// Shared flag to abort the active turn's streaming loop.
     pub interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Notify signal to wake up the streaming loop immediately on interrupt.
+    pub interrupt_notify: std::sync::Arc<tokio::sync::Notify>,
 }
 
 /// Lightweight metadata for a thread, queryable without a running engine.
@@ -290,26 +292,23 @@ pub async fn submit_op(
     }
 
     // Extract what we need, then immediately drop the threads lock.
-    let (turn_state, sq_tx, thread_cwd, mcp_manager, session_ref, interrupted) = {
+    let (turn_state, sq_tx, thread_cwd, mcp_manager, interrupted, interrupt_notify) = {
         let threads = state.threads.lock().await;
         let handle = threads
             .get(&thread_id)
             .ok_or_else(|| format!("thread not found: {thread_id}"))?;
-        (handle.turn_state.clone(), handle.sq_tx.clone(), handle.cwd.clone(), handle.mcp_manager.clone(), handle.session.clone(), handle.interrupted.clone())
+        (handle.turn_state.clone(), handle.sq_tx.clone(), handle.cwd.clone(), handle.mcp_manager.clone(), handle.interrupted.clone(), handle.interrupt_notify.clone())
     };
     // All locks released.
 
     // Interrupt bypasses the submission queue: set the interrupted flag and
-    // call session.interrupt() directly. run_turn will detect the flag,
-    // persist accumulated text, and emit TurnAborted with the correct turn_id.
+    // notify the streaming loop. run_turn will detect the flag, persist
+    // accumulated text, and emit TurnAborted with the correct turn_id.
+    // NOTE: We must NOT acquire session.lock() here — run_turn holds
+    // that lock for its entire duration, so locking it would deadlock.
     if matches!(&op, Op::Interrupt) {
-        let session_guard = session_ref.lock().await;
-        if let Some(s) = session_guard.as_ref() {
-            if s.is_turn_active().await {
-                interrupted.store(true, std::sync::atomic::Ordering::Release);
-            }
-            s.interrupt().await;
-        }
+        interrupted.store(true, std::sync::atomic::Ordering::Release);
+        interrupt_notify.notify_waiters();
         return Ok(());
     }
 
@@ -501,6 +500,7 @@ pub async fn thread_start(
                     cwd: handle.cwd.clone(),
                     session: handle.session.clone(),
                     interrupted: handle.interrupted.clone(),
+                    interrupt_notify: handle.interrupt_notify.clone(),
                 },
     );
     Ok(thread_id)
@@ -835,6 +835,7 @@ pub async fn thread_resume(
                     cwd: handle.cwd.clone(),
                     session: handle.session.clone(),
                     interrupted: handle.interrupted.clone(),
+                    interrupt_notify: handle.interrupt_notify.clone(),
                 },
     );
 
@@ -979,6 +980,7 @@ pub async fn thread_fork(
                     cwd: handle.cwd.clone(),
                     session: handle.session.clone(),
                     interrupted: handle.interrupted.clone(),
+                    interrupt_notify: handle.interrupt_notify.clone(),
                 },
     );
     Ok(new_thread_id)
